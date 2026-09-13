@@ -7,7 +7,8 @@ const PATH = {
   rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
   battens: (m, id) => ({ ...m, battens: { ...m.battens, sectionId: id } }),
   purlin: (m, id) => ({ ...m, purlin: { ...m.purlin, sectionId: id } }),
-  wallBeam: (m, id) => ({ ...m, wallBeam: { ...m.wallBeam, sectionId: id } }),
+  wallPurlin: (m, id) => ({ ...m, wallPurlin: { ...m.wallPurlin, sectionId: id } }),
+  wallPosts: (m, id) => ({ ...m, wallPosts: { ...m.wallPosts, sectionId: id } }),
   posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
 };
 
@@ -15,7 +16,8 @@ const U_OF = {
   rafters: (r) => Math.max(...r.rafters.map((x) => x.U)),
   battens: (r) => r.battens.U,
   purlin: (r) => r.purlin.U,
-  wallBeam: (r) => r.wallBeam.U,
+  wallPurlin: (r) => r.wallPurlin.U,
+  wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
   posts: (r) => Math.max(...r.posts.map((x) => x.U)),
 };
 
@@ -26,7 +28,7 @@ const U_OF = {
 export function pickSection(model, key, target = 0.95) {
   const current = section(model[key].sectionId);
   const candidates = ladder(current.material).filter((s) =>
-    key === 'posts' ? s.h === s.b || s.h / s.b <= 2 : true
+    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2 : true
   );
   const tried = [];
   for (const cand of candidates) {
@@ -57,7 +59,7 @@ export function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
 export function pickAll(model, target = 0.9) {
   let m = model;
   const log = [];
-  for (const key of ['battens', 'rafters', 'purlin', 'wallBeam', 'posts']) {
+  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts']) {
     const r = pickSection(m, key, target);
     if (r) {
       m = PATH[key](m, r.id);

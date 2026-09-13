@@ -168,3 +168,36 @@ export function worstOf(checks) {
   const worst = list.find((c) => c.U === U) ?? null;
   return { checks: list, U, worst };
 }
+
+/* ───────────── КРЕПЛЕНИЕ К ГАЗОБЕТОННОЙ СТЕНЕ ───────────── */
+
+/**
+ * Расчётное сопротивление сжатию кладки из ячеистобетонных блоков на клею, МПа.
+ * Ориентир по СП 15.13330; уточняется по данным производителя блоков.
+ */
+export const AERATED_R = { 'B2.0': 0.85, 'B2.5': 1.0, 'B3.5': 1.3, 'B5.0': 1.7 };
+
+/** Смятие газоблока под шайбой сквозной шпильки (растяжение от стены). */
+export function boltPlateBearing(N, plateSize, boltD, blockClass) {
+  const R = AERATED_R[blockClass] ?? 1.0;
+  const area = plateSize * plateSize - (Math.PI * boltD * boltD) / 4;
+  return chk('Смятие газоблока под шайбой', Math.abs(N) / area, R * 1.2, 'МПа',
+    'σ = N/A_шайбы ≤ 1,2·R_кладки',
+    `шайба ${plateSize}×${plateSize} мм, блок ${blockClass} → R = ${R} МПа`);
+}
+
+/** Смятие газоблока стенкой отверстия от поперечной силы на шпильку. */
+export function boltHoleBearing(V, boltD, wallThickness, blockClass) {
+  const R = AERATED_R[blockClass] ?? 1.0;
+  return chk('Смятие газоблока в отверстии', Math.abs(V) / (boltD * wallThickness), R * 1.2, 'МПа',
+    'σ = Q/(d·t_стены) ≤ 1,2·R_кладки',
+    `М${boltD} через стену ${wallThickness} мм`);
+}
+
+/** Срез шпильки. R_bs = 0,4·R_bun (СП 16, табл. Д.5): класс 5.8 → 200 МПа, 8.8 → 320 МПа. */
+export function boltShear(V, boltD, grade = '5.8', planes = 1) {
+  const Rbs = { '4.8': 160, '5.8': 200, '8.8': 320 }[grade] ?? 200;
+  const As = { 10: 58, 12: 84.3, 16: 157, 20: 245, 24: 353 }[boltD] ?? (Math.PI * boltD * boltD) / 4 * 0.78;
+  return chk('Срез шпильки', Math.abs(V) / (As * planes), Rbs, 'МПа',
+    'τ = Q/A_ш ≤ R_bs', `М${boltD} класса ${grade}, A_нетто = ${As} мм²`);
+}

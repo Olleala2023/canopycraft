@@ -137,10 +137,10 @@ export function section(id) {
   return s;
 }
 
-/** Сечения одного материала, отсортированные по несущей способности (Wx). */
+/** Сечения одного материала, от самого дешёвого (по расходу материала) к дорогому. */
 export function ladder(material, opts = {}) {
   const { minH = 0, maxH = 1e9 } = opts;
   return SECTIONS
     .filter((s) => s.material === material && s.h >= minH && s.h <= maxH)
-    .sort((a, b) => a.props.Wx - b.props.Wx || a.props.A - b.props.A);
+    .sort((a, b) => a.props.A - b.props.A || a.props.Wx - b.props.Wx);
 }

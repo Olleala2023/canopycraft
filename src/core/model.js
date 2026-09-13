@@ -1,19 +1,28 @@
 /** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
 
+/**
+ * Схема опирания:
+ *   ─ у дома: ряд стальных столбов, притянутых к газоблоку сквозными шпильками,
+ *     сверху на них лежит обвязочная доска (её часто называют мауэрлатом, но
+ *     мауэрлат лежит на кладке — здесь это прогон по столбам у стены);
+ *   ─ снаружи: ряд отдельно стоящих столбов и прогон по ним;
+ *   ─ стропила опираются на оба прогона, за наружный уходят консолью.
+ */
 export function defaultModel() {
   const B = 6000, L = 4000, a = 800;
-  const nRafters = 11, nPosts = 4;
+  const nRafters = 11, nPosts = 4, nWallPosts = 5;
   return {
     geom: {
-      B,              // ширина навеса вдоль стены
-      L,              // вылет от стены до оси столбов
-      a,              // свес за столбы
-      alpha: 8,       // уклон, °
-      postHeight: 2500, // от верха фундамента до низа прогона
-      driftH: 1200,   // перепад высот кровля дома / навес
+      B,                // ширина навеса вдоль стены
+      L,                // от оси стеновых столбов до оси наружных
+      a,                // свес за наружные столбы
+      alpha: 8,         // уклон, °
+      postHeight: 2500, // от верха фундамента до низа наружного прогона
+      driftH: 1200,     // перепад высот кровля дома / навес
     },
     site: {
-      snowRegion: 'IV',
+      // Воронеж: по картам прил. Е СП 20.13330.2016 — снег III, ветер II
+      snowRegion: 'III',
       windRegion: 'II',
       terrain: 'B',
       drift: true,
@@ -31,13 +40,27 @@ export function defaultModel() {
       mu: 2.0,
     },
     purlin: { sectionId: 's80x140x4' },
-    wallBeam: { sectionId: 't50x150', anchorSpacing: 900 },
+    /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
+    wallPosts: {
+      xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
+      sectionId: 's60x60x3',
+      mu: 1.0,            // раскреплён стеной по всей высоте
+      boltCount: 3,       // шпилек на столб
+      boltDiameter: 16,   // М16
+      boltGrade: '5.8',
+      plateSize: 120,     // квадратная шайба-пластина изнутри, мм
+      blockClass: 'B2.5', // класс газоблока по прочности на сжатие
+      wallThickness: 300,
+    },
+    /** Обвязочная доска поверх стеновых столбов — по ней идут стропила. */
+    wallPurlin: { sectionId: 't50x200' },
     battens: { sectionId: 't50x50', spacing: 600 },
     opts: {
       timber: { grade: 2, serviceClass: 3 },
       steel: { grade: 'C245', gammaC: 1.0 },
-      bearingLength: 100, // площадка опирания стропила, мм
+      bearingLength: 100,
       postEccentricity: 50,
+      stockLength: 6000, // стандартная длина доски и трубы в продаже
     },
   };
 }
@@ -53,7 +76,6 @@ export function tributaries(xs, B) {
   return s.map((x, i) => {
     const left = i === 0 ? 0 : (x - s[i - 1]) / 2;
     const right = i === s.length - 1 ? 0 : (s[i + 1] - x) / 2;
-    // краевые стропила дополнительно несут свес кровли до края навеса
     const edgeLeft = i === 0 ? Math.max(0, x - 0) : 0;
     const edgeRight = i === s.length - 1 ? Math.max(0, B - x) : 0;
     return left + right + edgeLeft + edgeRight;

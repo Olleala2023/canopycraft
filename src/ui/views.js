@@ -42,7 +42,10 @@ export function drawPlan(res, sel) {
 
   }
   s.push(`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(g.B)}" y2="${Y(0)}" stroke="var(--ink)" stroke-width="5"/>`);
-  s.push(`<text x="${X(0)}" y="${Y(0) - 12}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · брус на анкерах ø по расчёту, шаг ${m.wallBeam.anchorSpacing} мм</text>`);
+  s.push(`<text x="${X(0)}" y="${Y(0) - 12}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · газоблок ${m.wallPosts.wallThickness} мм, столбы на сквозных шпильках М${m.wallPosts.boltDiameter}</text>`);
+  s.push(`<g class="pickable" data-pick="wallPurlin"><rect x="${X(0)}" y="${Y(0)}" width="${W}" height="12" fill="transparent"/>
+    <line x1="${X(0)}" y1="${Y(0) + 5}" x2="${X(g.B)}" y2="${Y(0) + 5}" stroke="${uColor(res.wallPurlin.U)}" stroke-width="5"/>
+    <title>Обвязка у стены ${res.wallPurlin.sec.label} · U ${f2(res.wallPurlin.U)}</title></g>`);
 
   // стропила
   const rsec = res.rafters[0]?.sec;
@@ -74,6 +77,18 @@ export function drawPlan(res, sel) {
   if (sel.type === 'post') {
     const px = X(res.posts[sel.index]?.x ?? 0);
     s.push(`<circle cx="${px}" cy="${Y(g.L)}" r="13" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+  }
+
+  res.wallPosts.forEach((p, i) => {
+    const px = X(p.x), py = Y(0) + 5, sz = 10;
+    s.push(`<g class="pickable draggable" data-pick="wallPost" data-index="${i}">
+      <rect x="${px - 10}" y="${py - 10}" width="20" height="20" fill="transparent"/>
+      <rect x="${px - sz / 2}" y="${py - sz / 2}" width="${sz}" height="${sz}" fill="var(--surface)" stroke="${uColor(p.U)}" stroke-width="2.6"/>
+      <title>Столб у стены ${i + 1} · ${p.sec.label} · N ${f2(p.N / 1000)} кН · U ${f2(p.U)}</title></g>`);
+  });
+  if (sel.type === 'wallPost') {
+    const px = X(res.wallPosts[sel.index]?.x ?? 0);
+    s.push(`<circle cx="${px}" cy="${Y(0) + 5}" r="13" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
   }
 
   // обрешётка — тонкими штрихами
@@ -136,6 +151,16 @@ export function drawSection(res) {
   // стропило
   const rU = Math.max(...res.rafters.map((r) => r.U));
   s.push(`<line x1="${X(0)}" y1="${Y(g.postHeight + rise)}" x2="${X(g.L + g.a)}" y2="${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" stroke="${uColor(rU)}" stroke-width="${Math.max(3, res.rafters[0].sec.h * sc)}" stroke-linecap="butt"/>`);
+  // стеновой столб и сквозные шпильки
+  const wps = res.wallPosts[0].sec;
+  s.push(`<rect x="${X(0) - (wps.b * sc) / 2}" y="${Y(g.postHeight + rise)}" width="${Math.max(4, wps.b * sc)}" height="${(g.postHeight + rise) * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9"/>`);
+  const nb = m.wallPosts.boltCount;
+  for (let i = 0; i < nb; i++) {
+    const hy = ((g.postHeight + rise) * (i + 0.6)) / (nb + 0.2);
+    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(50)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
+    s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
+  }
+  s.push(`<text x="${X(80)}" y="${Y((g.postHeight + rise) * 0.5) - 12}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} насквозь через газоблок ${m.wallPosts.wallThickness} мм</text>`);
   // столб
   s.push(`<rect x="${X(g.L) - (res.posts[0].sec.b * sc) / 2}" y="${Y(g.postHeight)}" width="${Math.max(4, res.posts[0].sec.b * sc)}" height="${g.postHeight * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9"/>`);
   // фундамент
@@ -202,7 +227,11 @@ export function pickElement(res, sel) {
     return r && { ...r, title: `СТРОПИЛО ${(sel.index ?? 0) + 1}`, kind: 'rafter' };
   }
   if (sel.type === 'purlin') return { ...res.purlin, title: 'ПРОГОН', kind: 'purlin' };
-  if (sel.type === 'wallBeam') return { ...res.wallBeam, title: 'БРУС У СТЕНЫ', kind: 'wallBeam' };
+  if (sel.type === 'wallPurlin') return { ...res.wallPurlin, title: 'ОБВЯЗКА У СТЕНЫ', kind: 'wallPurlin' };
+  if (sel.type === 'wallPost') {
+    const p = res.wallPosts[sel.index] ?? res.wallPosts[0];
+    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: null };
+  }
   if (sel.type === 'battens') return { ...res.battens, title: 'ОБРЕШЁТКА', res: { uls: res.battens.res.uls, sls: res.battens.res.sls }, kind: 'battens' };
   if (sel.type === 'post') {
     const p = res.posts[sel.index] ?? res.posts[0];

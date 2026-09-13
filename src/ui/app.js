@@ -6,7 +6,7 @@ import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { drawPlan, drawSection, drawDiagrams, pickElement, uColor, f2 } from './views.js';
 
 const $ = (id) => document.getElementById(id);
-const STORE_KEY = 'canopycraft.model.v1';
+const STORE_KEY = 'canopycraft.model.v2';
 
 const state = {
   model: load() ?? defaultModel(),
@@ -21,7 +21,7 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return null;
     const m = JSON.parse(raw);
-    return m && m.geom ? m : null;
+    return m && m.geom && m.wallPosts && m.wallPurlin ? m : null;
   } catch { return null; }
 }
 function save() {
@@ -55,15 +55,34 @@ const CONTROLS = [
   { k: 'rafters.sectionId', label: 'Сечение стропила', type: 'select', options: anyOpts, pick: 'rafters' },
   { k: 'battens.sectionId', label: 'Обрешётка', type: 'select', options: anyOpts, pick: 'battens' },
   { k: 'battens.spacing', label: 'Шаг обрешётки', type: 'range', min: 200, max: 1200, step: 50, unit: 'мм' },
-  { k: 'purlin.sectionId', label: 'Прогон по столбам', type: 'select', options: anyOpts, pick: 'purlin' },
-  { k: 'wallBeam.sectionId', label: 'Брус у стены', type: 'select', options: anyOpts, pick: 'wallBeam' },
-  { k: 'wallBeam.anchorSpacing', label: 'Шаг анкеров в стену', type: 'range', min: 300, max: 1500, step: 50, unit: 'мм' },
-  { k: '#postCount', label: 'Столбов', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
-  { k: 'posts.sectionId', label: 'Сечение столба', type: 'select', options: steelOpts, pick: 'posts' },
-  { k: 'posts.mu', label: 'μ расчётной длины столба', type: 'select', options: () => [
+  { k: 'purlin.sectionId', label: 'Прогон наружный', type: 'select', options: anyOpts, pick: 'purlin' },
+  { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
+  { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
+  { k: 'posts.mu', label: 'μ наружного столба', type: 'select', options: () => [
       { id: '2', label: '2,0 — защемлён внизу, свободен вверху' },
       { id: '1', label: '1,0 — есть связи в обе стороны' },
       { id: '0.7', label: '0,7 — защемление + шарнир' }], numeric: true },
+
+  { group: 'Крепление к дому' },
+  { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
+  { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
+  { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
+  { k: 'wallPosts.mu', label: 'μ стенового столба', type: 'select', numeric: true, options: () => [
+      { id: '1', label: '1,0 — раскреплён стеной' },
+      { id: '0.7', label: '0,7 — жёсткая заделка внизу' },
+      { id: '2', label: '2,0 — крепление к стене не учитывать' }] },
+  { k: 'wallPosts.boltCount', label: 'Шпилек на столб', type: 'range', min: 2, max: 6, step: 1, unit: 'шт' },
+  { k: 'wallPosts.boltDiameter', label: 'Диаметр шпильки', type: 'select', numeric: true, options: () => [
+      { id: '12', label: 'М12' }, { id: '16', label: 'М16' }, { id: '20', label: 'М20' }, { id: '24', label: 'М24' }] },
+  { k: 'wallPosts.boltGrade', label: 'Класс прочности шпильки', type: 'select', options: () => [
+      { id: '4.8', label: '4.8' }, { id: '5.8', label: '5.8' }, { id: '8.8', label: '8.8' }] },
+  { k: 'wallPosts.plateSize', label: 'Шайба-пластина изнутри', type: 'range', min: 60, max: 250, step: 10, unit: 'мм' },
+  { k: 'wallPosts.blockClass', label: 'Класс газоблока', type: 'select', options: () => [
+      { id: 'B2.0', label: 'B2,0 (D400) — R 0,85 МПа' },
+      { id: 'B2.5', label: 'B2,5 (D500) — R 1,0 МПа' },
+      { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
+      { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
+  { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
 
   { group: 'Площадка и кровля' },
   { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
@@ -78,6 +97,8 @@ const CONTROLS = [
     options: () => [{ id: '1', label: '1 сорт' }, { id: '2', label: '2 сорт' }, { id: '3', label: '3 сорт' }] },
   { k: 'opts.timber.serviceClass', label: 'Условия эксплуатации', type: 'select', numeric: true,
     options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
+  { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
+    options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
   { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
     options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
 ];
@@ -93,11 +114,13 @@ function setPath(o, p, v) {
 function readVirtual(k) {
   if (k === '#rafterCount') return state.model.rafters.xs.length;
   if (k === '#postCount') return state.model.posts.xs.length;
+  if (k === '#wallPostCount') return state.model.wallPosts.xs.length;
   return getPath(state.model, k);
 }
 function writeVirtual(k, v) {
   if (k === '#rafterCount') { state.model.rafters.xs = spread(state.model.geom.B, v); return; }
   if (k === '#postCount') { state.model.posts.xs = spread(state.model.geom.B, v); return; }
+  if (k === '#wallPostCount') { state.model.wallPosts.xs = spread(state.model.geom.B, v); return; }
   setPath(state.model, k, v);
 }
 
@@ -133,6 +156,7 @@ function buildParams() {
       if (c.k === 'geom.B') {
         state.model.rafters.xs = spread(state.model.geom.B, state.model.rafters.xs.length);
         state.model.posts.xs = spread(state.model.geom.B, state.model.posts.xs.length);
+        state.model.wallPosts.xs = spread(state.model.geom.B, state.model.wallPosts.xs.length);
       }
       render();
     });
@@ -178,7 +202,7 @@ function syncParams() {
     if (b) {
       let extra = '';
       if (c.k === '#rafterCount') extra = ` · шаг ${Math.round(state.model.geom.B / (v - 1))}`;
-      if (c.k === '#postCount') extra = ` · пролёт ${Math.round(state.model.geom.B / (v - 1))}`;
+      if (c.k === '#postCount' || c.k === '#wallPostCount') extra = ` · пролёт ${Math.round(state.model.geom.B / (v - 1))}`;
       b.textContent = `${v} ${c.unit ?? ''}${extra}`;
     }
   }
@@ -216,20 +240,22 @@ function renderInspector(res) {
     for (const s of el.spans) kv.push([`Прогиб, ${s.kind}`, `${f2(s.f)} мм / ${f2(s.limitLength / 200)}`]);
     kv.push(['Реакция на стену', `${f2(el.reactions.wall / 1000)} кН`]);
     kv.push(['Реакция на прогон', `${f2(el.reactions.purlin / 1000)} кН`]);
-  } else if (el.kind === 'post') {
+  } else if (el.kind === 'post' || el.kind === 'wallPost') {
     kv.push(['N сжатие', `${f2(el.N / 1000)} кН`]);
     kv.push(['M', `${f2(el.M / 1e6)} кН·м`]);
     kv.push(['Отрыв', `${f2(Math.max(0, el.Nup) / 1000)} кН`]);
     kv.push(['Расчётная длина', `${Math.round(el.lef)} мм`]);
+    if (el.bolts) {
+      kv.push(['Горизонт. распор на столб', `${f2(el.Hpost / 1000)} кН`]);
+      kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
+      kv.push(['На шпильку: растяжение', `${f2(el.bolts.Nbolt / 1000)} кН`]);
+      kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
+    }
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
     const worstSpan = el.spans?.reduce((a, b) => (a.f > b.f ? a : b), { f: 0, limitLength: 1 });
     if (worstSpan) kv.push(['Прогиб', `${f2(worstSpan.f)} мм`]);
-  }
-  if (el.kind === 'wallBeam') {
-    kv.push(['Усилие на анкер', `${f2(res.wallBeam.anchorForce / 1000)} кН`]);
-    kv.push(['Отрыв на анкер', `${f2(res.wallBeam.anchorUplift / 1000)} кН`]);
   }
   rows.push(kv.map(([a, b]) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`).join(''));
   host.innerHTML = rows.join('');
@@ -239,7 +265,19 @@ const fmtVal = (c) => `${f2(c.value)}${c.unit ? ' ' + c.unit : ''} / ${f2(c.limi
 
 /* ─────────────────── сводка и спецификация ─────────────────── */
 
-const SEL_FOR = { battens: { type: 'battens' }, rafters: { type: 'rafter', index: 0 }, purlin: { type: 'purlin' }, wallBeam: { type: 'wallBeam' }, posts: { type: 'post', index: 0 } };
+const SEL_FOR = {
+  battens: { type: 'battens' }, rafters: { type: 'rafter', index: 0 },
+  purlin: { type: 'purlin' }, wallPurlin: { type: 'wallPurlin' },
+  posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
+};
+const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
+function selectRow(res, key) {
+  const row = ROW_OF[key];
+  if (!row) return { ...SEL_FOR[key] };
+  const list = res[row[0]];
+  const i = list.reduce((bi, e, idx) => (e.U > list[bi].U ? idx : bi), 0);
+  return { type: row[1], index: i };
+}
 
 function renderSummary(res) {
   $('summary').innerHTML = res.summary.map((s) => `
@@ -251,14 +289,7 @@ function renderSummary(res) {
     </div>`).join('');
   $('summary').querySelectorAll('[data-sel]').forEach((c) =>
     c.addEventListener('click', () => {
-      const key = c.getAttribute('data-sel');
-      if (key === 'rafters') {
-        const i = res.rafters.reduce((best, r, idx) => (r.U > res.rafters[best].U ? idx : best), 0);
-        state.sel = { type: 'rafter', index: i };
-      } else if (key === 'posts') {
-        const i = res.posts.reduce((best, p, idx) => (p.U > res.posts[best].U ? idx : best), 0);
-        state.sel = { type: 'post', index: i };
-      } else state.sel = { ...SEL_FOR[key] };
+      state.sel = selectRow(res, c.getAttribute('data-sel'));
       render();
     }));
 }
@@ -267,14 +298,16 @@ function renderBom(res) {
   const b = billOfMaterials(res);
   const rows = b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.material}</td>
     <td class="n">${i.count}</td><td class="n">${i.length}</td><td class="n">${i.totalLength.toFixed(1)}</td>
-    <td class="n">${i.volume ? i.volume.toFixed(3) + ' м³' : i.mass.toFixed(0) + ' кг'}</td></tr>`).join('');
-  $('bom').innerHTML = `<div class="pane-title">Спецификация</div>
-    <div class="tbl"><table><tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Объём / масса</th></tr>
+    <td class="n">${i.stockPieces ?? '—'}</td><td class="n">${i.volume ? i.volume.toFixed(3) + ' м³' : i.mass.toFixed(0) + ' кг'}</td></tr>`).join('');
+  const fast = b.fasteners.map((f) => `<div class="kv"><span>${f.name} — ${f.count} шт</span><span>${f.note}</span></div>`).join('');
+  $('bom').innerHTML = `<div class="pane-title">Спецификация · закупка хлыстами по ${(b.stock / 1000).toFixed(0)} м</div>
+    <div class="tbl"><table>
+    <tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Купить, хлыстов</th><th>Объём / масса</th></tr>
     ${rows}
-    <tr><td colspan="6"><b>Итого</b></td><td class="n"><b>${b.timberVolume.toFixed(3)} м³ · ${b.steelMass.toFixed(0)} кг</b></td></tr></table></div>
-    <div class="kv" style="margin-top:8px"><span>Отрыв ветром на столб</span><span>${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>
-    <div class="kv"><span>Вертикальная нагрузка на столб</span><span>${f2(res.foundation.maxDown / 1000)} кН</span></div>
-    <div class="kv"><span>Анкер в стену</span><span>вниз ${f2(res.wallBeam.anchorForce / 1000)} кН · отрыв ${f2(res.wallBeam.anchorUplift / 1000)} кН, шаг ${res.model.wallBeam.anchorSpacing} мм</span></div>`;
+    <tr><td colspan="7"><b>Итого</b></td><td class="n"><b>${b.timberVolume.toFixed(3)} м³ · ${b.steelMass.toFixed(0)} кг</b></td></tr></table></div>
+    ${fast}
+    <div class="kv"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
+    <div class="kv"><span>Наружный столб: вниз / отрыв</span><span>${f2(res.foundation.maxDown / 1000)} кН / ${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>`;
 }
 
 /* ─────────────────── сцена и перетаскивание ─────────────────── */
@@ -356,13 +389,16 @@ function buildReport(res) {
     checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
   const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
   const worstPost = res.posts.reduce((a, c) => (a.U > c.U ? a : c));
+  const worstWallPost = res.wallPosts.reduce((a, c) => (a.U > c.U ? a : c));
+  const wp = m.wallPosts;
   $('report').innerHTML = `
     <h1>Расчёт навеса, пристроенного к дому</h1>
     <p>Дата: ${new Date().toLocaleDateString('ru-RU')}. Нормы: СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017.</p>
     <h2>1. Исходные данные</h2>
     <table>
       <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
-      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм, μ = ${m.posts.mu}</td></tr>
+      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.mu}, стеновых ${wp.mu}</td></tr>
+      <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
       <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
@@ -381,23 +417,32 @@ function buildReport(res) {
     ${checkRows(`Стропило ${worstRafter.sec.label} (самое нагруженное)`, worstRafter.checks)}
     ${checkRows(`Обрешётка ${res.battens.sec.label}`, res.battens.checks)}
     ${checkRows(`Прогон ${res.purlin.sec.label}`, res.purlin.checks)}
-    ${checkRows(`Брус у стены ${res.wallBeam.sec.label}`, res.wallBeam.checks)}
-    ${checkRows(`Столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
+    ${checkRows(`Обвязка у стены ${res.wallPurlin.sec.label}`, res.wallPurlin.checks)}
+    ${checkRows(`Наружный столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
+    ${checkRows(`Стеновой столб ${worstWallPost.sec.label} и его крепление (самый нагруженный)`, worstWallPost.checks)}
     <h2>4. Узлы и фундамент (оценочно)</h2>
     <table>
-      <tr><td>Анкер в стену</td><td>вниз ${f2(res.wallBeam.anchorForce / 1000)} кН, отрыв ${f2(res.wallBeam.anchorUplift / 1000)} кН, шаг ${m.wallBeam.anchorSpacing} мм</td></tr>
-      <tr><td>Нагрузка на столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
+      <tr><td>Горизонтальный распор на стеновой ряд</td><td>${f2(res.thrust.total / 1000)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
+      <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
+      <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
       <tr><td>Фундамент против отрыва</td><td>масса ≥ ${f2(res.foundation.requiredMass)} кН, куб бетона ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
     </table>
     <h2>5. Спецификация</h2>
-    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Итого</th></tr>
-      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : i.mass.toFixed(0) + ' кг'}</td></tr>`).join('')}
-      <tr><td colspan="4"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³ сосны, ${b.steelMass.toFixed(0)} кг стали</b></td></tr></table>
+    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Хлыстов по ${(b.stock / 1000).toFixed(0)} м</th><th>Итого</th></tr>
+      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : i.mass.toFixed(0) + ' кг'}</td></tr>`).join('')}
+      <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³ сосны, ${b.steelMass.toFixed(0)} кг стали</b></td></tr></table>
+    <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
     <h2>6. Ограничения</h2>
-    <p>Расчёт не охватывает: сварные и болтовые соединения, расчёт основания по грунту, ветровые связи,
-    огнестойкость, температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие
-    столбов проверено с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).
-    Результат — инженерная оценка, а не проект, прошедший экспертизу.</p>`;
+    <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
+    температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
+    с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
+    <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
+    (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
+    на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
+    между шпильками учтена коэффициентом 1,5 на верхнюю. Принято также, что плоскость кровли
+    (обрешётка и крепление стропил к обвязке) передаёт горизонтальный распор на раскреплённый стеновой ряд;
+    иначе наружные столбы нужно раскреплять раскосами.</p>
+    <p>Результат — инженерная оценка, а не проект, прошедший экспертизу.</p>`;
 }
 
 /* ─────────────────── рендер ─────────────────── */
@@ -452,12 +497,7 @@ $('btn-json').addEventListener('click', async () => {
 $('btn-reset').addEventListener('click', () => { state.model = defaultModel(); state.sel = { type: 'rafter', index: 0 }; render('Сброшено к значениям по умолчанию'); });
 
 function selectWorst(res) {
-  const worst = res.summary.reduce((a, b) => (a.U > b.U ? a : b));
-  if (worst.key === 'rafters') {
-    state.sel = { type: 'rafter', index: res.rafters.reduce((bi, r, i) => (r.U > res.rafters[bi].U ? i : bi), 0) };
-  } else if (worst.key === 'posts') {
-    state.sel = { type: 'post', index: res.posts.reduce((bi, p, i) => (p.U > res.posts[bi].U ? i : bi), 0) };
-  } else state.sel = { ...SEL_FOR[worst.key] };
+  state.sel = selectRow(res, res.summary.reduce((a, b) => (a.U > b.U ? a : b)).key);
 }
 
 buildParams();

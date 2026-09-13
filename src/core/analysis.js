@@ -14,6 +14,7 @@ import {
   timberBending, timberShear, timberCombined, timberLateral, timberBearing,
   steelBending, steelShear, steelStability, steelBeamColumn, steelSlenderness,
   steelLocalBuckling, deflectionCheck, worstOf,
+  boltPlateBearing, boltHoleBearing, boltShear,
 } from './checks.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -81,10 +82,10 @@ function analyseRafter(model, x, trib, ctx) {
     if (Math.abs(r.M[iSup]) > Math.abs(Mcant)) Mcant = r.M[iSup];
   }
 
-  // осевое сжатие вдоль стропила (скатная составляющая), максимум у нижней опоры
-  const qVertMax = (GAMMA_F.roofing * lineRoofN + gammaDead * (lineBattenN + lineSelfN)) +
-    (ctx.snow.at(0) * trib) / 1000;
-  const N = qVertMax * Ls * sa;
+  // осевое сжатие вдоль стропила: вертикальная нагрузка × sin α, накапливается
+  // к нижней опоре (внешние реакции при этом вертикальные — распора нет)
+  const totalPerp = res['ULS-1'].reactions.reduce((sum, r) => sum + r.R, 0);
+  const N = totalPerp * (sa / ca);
 
   const spans = deflectionSpans(res.SLS, Ls, supports).spans;
   const cantLen = Ls - xSup;
@@ -202,34 +203,64 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
 
 /* ───────────────────────── СТОЛБЫ ───────────────────────── */
 
-function analysePosts(model, purlin, ctx) {
-  const sec = section(model.posts.sectionId);
+/**
+ * Ряд столбов под прогоном.
+ * @param {object} cfg model.posts или model.wallPosts
+ * @param {object} purlin результат расчёта прогона, лежащего на этом ряду
+ * @param {{braced:boolean, thrust:number, alongWall:number}} extra
+ *   braced — столб раскреплён стеной (сквозные шпильки);
+ *   thrust — суммарный горизонтальный распор от ската и ветра на весь ряд, Н;
+ *   alongWall — ветровая сила вдоль стены на весь ряд, Н.
+ */
+function analysePostRow(model, cfg, purlin, ctx, extra) {
+  const sec = section(cfg.sectionId);
   const mat = propsFor(sec, model.opts);
   const H = model.geom.postHeight;
-  const lef = model.posts.mu * H;
-  const fascia = sec.h + 200; // высота наветренной кромки навеса, мм
+  const lef = cfg.mu * H;
+  const fascia = sec.h + 200;
+  const n = purlin.reactions.length;
 
   return purlin.reactions.map((r, i) => {
     const N = Math.max(0, r.R) + sec.weight * H * GAMMA_F.steel;
-    const trib = i === 0 || i === purlin.reactions.length - 1
-      ? model.geom.B / (2 * Math.max(1, purlin.reactions.length - 1))
-      : model.geom.B / Math.max(1, purlin.reactions.length - 1);
-    // изгиб: боковой ветер на фризовую кромку + эксцентриситет опирания прогона
-    const Hwind = (ctx.wind.lateral * fascia * trib) / 1e6 * 1000; // Н
-    const Mwind = Hwind * H;
+    const trib = i === 0 || i === n - 1 ? model.geom.B / (2 * Math.max(1, n - 1)) : model.geom.B / Math.max(1, n - 1);
+    const Hpost = (extra.thrust ?? 0) / n;
     const Mecc = N * model.opts.postEccentricity;
-    const M = Mwind + Mecc;
+    let M;
+    if (extra.braced) {
+      // распор передаётся на стену шпильками; изгиб — местный, между точками крепления
+      const sBolt = H / Math.max(1, cfg.boltCount);
+      M = Mecc + (Hpost * sBolt) / 8;
+    } else {
+      const Hwind = (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
+      M = Mecc + (Hwind + Hpost) * H;
+    }
     const Nup = -(purlin.uplift[i]?.R ?? 0);
 
     const stab = steelStability(N, sec.props, mat, lef, 'y');
-    const bc = steelBeamColumn(N, M, sec.props, mat, lef, 'x');
     const checks = [
       stab,
-      bc,
+      steelBeamColumn(N, M, sec.props, mat, lef, 'x'),
       steelSlenderness(stab.lambda, stab.U),
       steelLocalBuckling(sec, mat, stab.lb),
     ];
-    return { x: r.x, N, M, Nup, sec, mat, lef, ...worstOf(checks) };
+
+    let bolts = null;
+    if (extra.braced) {
+      // отрыв от стены: горизонтальный распор растягивает шпильки,
+      // верхняя нагружена сильнее — принят коэффициент неравномерности 1,5
+      const nb = Math.max(1, cfg.boltCount);
+      const Nbolt = (Hpost * 1.5) / nb;
+      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / nb;
+      const bChecks = [
+        boltPlateBearing(Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
+        boltHoleBearing(Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
+        boltShear(Vbolt, cfg.boltDiameter, cfg.boltGrade),
+      ];
+      bolts = { Nbolt, Vbolt, count: nb, ...worstOf(bChecks) };
+      checks.push(...bChecks);
+    }
+
+    return { x: r.x, N, M, Nup, Hpost, sec, mat, lef, bolts, braced: !!extra.braced, ...worstOf(checks) };
   });
 }
 
@@ -249,77 +280,100 @@ export function analyse(model) {
   const rafters = xs.map((x, i) => {
     const key = Math.round(tribs[i] * 10);
     if (!cache.has(key)) cache.set(key, analyseRafter(model, 0, tribs[i], ctx));
-    const base = cache.get(key);
-    return { ...base, x, index: i };
+    return { ...cache.get(key), x, index: i };
   });
 
   const pick = (key) => rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
-  const posts = [...model.posts.xs].sort((a, b) => a - b);
-  const purlin = analyseLineBeam(model, model.purlin.sectionId, posts,
+
+  const outerXs = [...model.posts.xs].sort((a, b) => a - b);
+  const purlin = analyseLineBeam(model, model.purlin.sectionId, outerXs,
     { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') }, 'Прогон по столбам');
 
-  const anchors = [];
-  for (let x = 0; x <= geom.B + 1; x += model.wallBeam.anchorSpacing) anchors.push(Math.min(x, geom.B));
-  const wallBeam = analyseLineBeam(model, model.wallBeam.sectionId, anchors,
-    { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') }, 'Брус у стены');
-  wallBeam.anchorForce = Math.max(...wallBeam.reactions.map((r) => r.R));
-  wallBeam.anchorUplift = Math.max(0, ...wallBeam.uplift.map((r) => -r.R));
+  const wallXs = [...model.wallPosts.xs].sort((a, b) => a - b);
+  const wallPurlin = analyseLineBeam(model, model.wallPurlin.sectionId, wallXs,
+    { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') }, 'Обвязка у стены');
+
+  // ── горизонтальные силы, которые должен принять стеновой ряд.
+  // Сила тяжести распора не даёт: опоры вертикальные, ΣH = 0. Горизонталь — только ветер:
+  // горизонтальная проекция давления по нормали к скату плюс напор на наружную кромку.
+  const al = deg(geom.alpha);
+  const roofArea = (geom.B * (geom.L + geom.a)) / 1e6; // м²
+  const fasciaH = section(model.rafters.sectionId).h + 200;
+  const thrustRoof = wind.up * roofArea * Math.sin(al) * 1000;
+  const thrustFascia = wind.lateral * ((fasciaH * geom.B) / 1e6) * 1000;
+  const thrust = thrustRoof + thrustFascia;
+  const alongWall = wind.lateral * ((fasciaH * geom.L) / 1e6) * 1000;
+
+  const posts = analysePostRow(model, model.posts, purlin, ctx, { braced: false, thrust: 0, alongWall: 0 });
+  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { braced: true, thrust, alongWall });
 
   const battens = analyseBattens(model, ctx);
-  const postList = analysePosts(model, purlin, ctx);
 
-  // фундамент — оценочно
-  const maxUplift = Math.max(0, ...postList.map((p) => p.Nup));
+  const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
     uplift: maxUplift,
-    requiredMass: maxUplift / 0.9 / 1000, // кН
-    cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000, // мм, ρ_бетона 24 кН/м³
-    maxDown: Math.max(...postList.map((p) => p.N)),
+    requiredMass: maxUplift / 0.9 / 1000,
+    cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000,
+    maxDown: Math.max(...posts.map((p) => p.N)),
   };
 
+  const rowWorst = (list) => list.reduce((a, b) => (a.U > b.U ? a : b));
   const all = [
     { key: 'battens', label: 'Обрешётка', U: battens.U, worst: battens.worst },
-    { key: 'rafters', label: 'Стропила', U: Math.max(...rafters.map((r) => r.U)), worst: rafters.reduce((a, b) => (a.U > b.U ? a : b)).worst },
-    { key: 'purlin', label: 'Прогон', U: purlin.U, worst: purlin.worst },
-    { key: 'wallBeam', label: 'Брус у стены', U: wallBeam.U, worst: wallBeam.worst },
-    { key: 'posts', label: 'Столбы', U: Math.max(...postList.map((p) => p.U)), worst: postList.reduce((a, b) => (a.U > b.U ? a : b)).worst },
+    { key: 'rafters', label: 'Стропила', U: Math.max(...rafters.map((r) => r.U)), worst: rowWorst(rafters).worst },
+    { key: 'purlin', label: 'Прогон наружный', U: purlin.U, worst: purlin.worst },
+    { key: 'posts', label: 'Столбы наружные', U: Math.max(...posts.map((p) => p.U)), worst: rowWorst(posts).worst },
+    { key: 'wallPurlin', label: 'Обвязка у стены', U: wallPurlin.U, worst: wallPurlin.worst },
+    { key: 'wallPosts', label: 'Столбы у стены', U: Math.max(...wallPosts.map((p) => p.U)), worst: rowWorst(wallPosts).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallBeam, posts: postList, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, foundation,
+    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall },
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
   };
 }
 
-/** Спецификация материалов. */
+/** Спецификация материалов: штуки, погонаж, объём/масса и сколько купить хлыстов. */
 export function billOfMaterials(result) {
   const m = result.model;
+  const stock = m.opts.stockLength ?? 6000;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
-    const total = (lengthMm * count) / 1000;
     const isT = sec.material === 'timber';
+    const perStock = Math.max(1, Math.floor(stock / lengthMm));
     items.push({
       name,
       section: sec.label,
       material: isT ? 'сосна' : 'сталь',
       count,
-      length: lengthMm,
-      totalLength: total,
+      length: Math.round(lengthMm),
+      totalLength: (lengthMm * count) / 1000,
+      stockPieces: lengthMm > stock ? null : Math.ceil(count / perStock),
       volume: isT ? (sec.props.A * lengthMm * count) / 1e9 : null,
       mass: !isT ? sec.props.A * lengthMm * count * 7.85e-6 : null,
     });
   };
   const ca = Math.cos(deg(m.geom.alpha));
-  add('Стропила', section(m.rafters.sectionId), Math.round((m.geom.L + m.geom.a) / ca), m.rafters.xs.length);
+  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + 100, m.rafters.xs.length);
   const nBatten = Math.floor((m.geom.L + m.geom.a) / ca / m.battens.spacing) + 1;
   add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
-  add('Прогон', section(m.purlin.sectionId), m.geom.B, 1);
-  add('Брус у стены', section(m.wallBeam.sectionId), m.geom.B, 1);
-  add('Столбы', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
+  add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);
+  add('Прогон наружный', section(m.purlin.sectionId), m.geom.B, 1);
+  add('Столбы наружные', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
+  add('Столбы у стены', section(m.wallPosts.sectionId), m.geom.postHeight + 300, m.wallPosts.xs.length);
+
+  const wp = m.wallPosts;
+  const fasteners = [{
+    name: `Шпилька М${wp.boltDiameter} класса ${wp.boltGrade}`,
+    count: wp.boltCount * wp.xs.length,
+    note: `длина ≥ ${wp.wallThickness + 120} мм, с шайбой-пластиной ${wp.plateSize}×${wp.plateSize} мм изнутри`,
+  }];
 
   const timberVolume = items.filter((i) => i.volume).reduce((s, i) => s + i.volume, 0);
   const steelMass = items.filter((i) => i.mass).reduce((s, i) => s + i.mass, 0);
-  return { items, timberVolume, steelMass };
+  const steelLength = items.filter((i) => i.mass).reduce((s, i) => s + i.totalLength, 0);
+  return { items, fasteners, timberVolume, steelMass, steelLength, stock };
 }
