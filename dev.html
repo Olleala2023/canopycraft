@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanopyCraft</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="src/ui/styles.css">
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div class="brand">CanopyCraft<small>расчёт навеса у дома</small></div>
+    <div class="tabs" role="group" aria-label="Вид">
+      <button id="tab-plan" aria-pressed="true">План</button>
+      <button id="tab-section" aria-pressed="false">Разрез</button>
+      <button id="tab-diagrams" aria-pressed="false">Эпюры</button>
+    </div>
+    <span class="grow"></span>
+    <span class="verdict-pill" id="verdict-pill">—</span>
+    <button class="btn" id="btn-pick-all">Подобрать всё</button>
+    <button class="btn" id="btn-report">Отчёт</button>
+    <button class="btn" id="btn-json">Копировать JSON</button>
+    <button class="btn" id="btn-reset">Сбросить</button>
+  </div>
+
+  <div class="panes">
+    <aside class="pane" id="params"></aside>
+    <section class="pane stage">
+      <div class="canvas" id="canvas"></div>
+      <div class="legend">
+        <span><i style="background:var(--u-low)"></i>U &lt; 0,5 запас</span>
+        <span><i style="background:var(--u-ok)"></i>0,5–0,85 норма</span>
+        <span><i style="background:var(--u-warn)"></i>0,85–1,0 предел</span>
+        <span><i style="background:var(--u-bad)"></i>U &gt; 1,0 не проходит</span>
+      </div>
+      <div class="hint" id="hint"></div>
+    </section>
+    <aside class="pane" id="inspector"></aside>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div class="bom" id="bom"></div>
+
+  <div class="foot">
+    <span>Инженерная оценка для частного строительства по СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017. Не заменяет проект, прошедший экспертизу.</span>
+    <span class="mono">v0.2</span>
+  </div>
+
+  <div id="report"></div>
+</div>
+<script type="module" src="src/ui/app.js"></script>
+</body>
+</html>
