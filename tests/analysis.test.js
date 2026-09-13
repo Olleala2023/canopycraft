@@ -4,7 +4,7 @@ import { defaultModel, spread, tributaries } from '../src/core/model.js';
 import { analyse, billOfMaterials } from '../src/core/analysis.js';
 import { snowDrift, snowMu, snowProfile } from '../src/core/loads.js';
 import { phiBuckling } from '../src/core/checks.js';
-import { rhsProps } from '../src/core/sections.js';
+import { rhsProps, section as sectionById } from '../src/core/sections.js';
 
 test('грузовые ширины покрывают всю ширину навеса', () => {
   const xs = spread(6000, 9);
@@ -119,4 +119,33 @@ test('спецификация считает хлысты стандартно�
   assert.equal(battens.stockPieces, battens.count); // 6 м ровно
   assert.ok(b.fasteners[0].count === r.model.wallPosts.boltCount * r.model.wallPosts.xs.length);
   assert.ok(b.steelLength > 0);
+});
+
+test('погонные массы сечений совпадают с сортаментом', () => {
+  const cases = [['s100x100x3', 8.9], ['s60x60x3', 5.2], ['s80x140x4', 13.1], ['t50x200', 5.0]];
+  for (const [id, ref] of cases) {
+    const m = sectionById(id).massPerM;
+    assert.ok(Math.abs(m - ref) / ref < 0.03, `${id}: ${m.toFixed(2)} против ${ref} кг/м`);
+  }
+});
+
+test('массы сходятся: сумма групп = итогу, дерево = объём × плотность', () => {
+  const b = billOfMaterials(analyse(defaultModel()));
+  const w = b.weights;
+  const bySum = w.groups.reduce((a, g) => a + g.mass, 0);
+  assert.ok(Math.abs(bySum - w.total) < 0.5, `${bySum.toFixed(1)} ≠ ${w.total.toFixed(1)}`);
+  assert.ok(Math.abs(w.timber.mass - w.timber.volume * 500) < 0.5, 'm = V·ρ');
+  assert.ok(w.perSqm > 10 && w.perSqm < 100, `${w.perSqm.toFixed(1)} кг/м² — вне разумного диапазона`);
+  assert.ok(w.deadShareWall < w.deadShareField, 'у стены снега больше, доля собственного веса меньше');
+});
+
+test('тяжёлая кровля увеличивает и массу, и загрузку стропил', () => {
+  const m = defaultModel();
+  const light = analyse({ ...m, roofing: 'pc8' });
+  const heavy = analyse({ ...m, roofing: 'soft' });
+  const wl = billOfMaterials(light).weights, wh = billOfMaterials(heavy).weights;
+  assert.ok(wh.roofing.mass > wl.roofing.mass * 5, 'мягкая черепица тяжелее поликарбоната');
+  assert.ok(wh.total > wl.total);
+  const U = (r) => Math.max(...r.rafters.map((x) => x.U));
+  assert.ok(U(heavy) > U(light), 'вес кровли участвует в расчёте, а не только в смете');
 });

@@ -336,14 +336,28 @@ export function analyse(model) {
   };
 }
 
-/** Спецификация материалов: штуки, погонаж, объём/масса и сколько купить хлыстов. */
+/**
+ * Спецификация и массы.
+ *
+ * Формулы:
+ *   дерево   V = b·h·L·n,            m = V·ρ,   ρ = 500 кг/м³
+ *   сталь    m = A·L·n·ρ,            ρ = 7850 кг/м³  (то же, что A[см²]·0,785 кг/м)
+ *   кровля   m = g·S/g₀,             g — кН/м² по скату, S — площадь ската
+ *   шпилька  m = π/4·d²·L·ρ_ст,      пластина m = a²·t·ρ_ст
+ *
+ * Собственный вес всех этих элементов уже входит в расчёт нагрузок:
+ * стропила и прогоны — погонным весом сечения, обрешётка — весом на 1 м²,
+ * столбы — весом ствола в осевой силе.
+ */
 export function billOfMaterials(result) {
   const m = result.model;
   const stock = m.opts.stockLength ?? 6000;
+  const G0 = 9.80665;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
     const isT = sec.material === 'timber';
     const perStock = Math.max(1, Math.floor(stock / lengthMm));
+    const volume = (sec.props.A * lengthMm * count) / 1e9; // м³
     items.push({
       name,
       section: sec.label,
@@ -352,8 +366,8 @@ export function billOfMaterials(result) {
       length: Math.round(lengthMm),
       totalLength: (lengthMm * count) / 1000,
       stockPieces: lengthMm > stock ? null : Math.ceil(count / perStock),
-      volume: isT ? (sec.props.A * lengthMm * count) / 1e9 : null,
-      mass: !isT ? sec.props.A * lengthMm * count * 7.85e-6 : null,
+      volume: isT ? volume : null,
+      mass: (sec.massPerM * lengthMm * count) / 1000,
     });
   };
   const ca = Math.cos(deg(m.geom.alpha));
@@ -365,15 +379,63 @@ export function billOfMaterials(result) {
   add('Столбы наружные', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
   add('Столбы у стены', section(m.wallPosts.sectionId), m.geom.postHeight + 300, m.wallPosts.xs.length);
 
-  const wp = m.wallPosts;
-  const fasteners = [{
-    name: `Шпилька М${wp.boltDiameter} класса ${wp.boltGrade}`,
-    count: wp.boltCount * wp.xs.length,
-    note: `длина ≥ ${wp.wallThickness + 120} мм, с шайбой-пластиной ${wp.plateSize}×${wp.plateSize} мм изнутри`,
-  }];
+  // кровля
+  const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату
+  const roofMass = (result.dead.roof * roofArea * 1000) / G0;
 
-  const timberVolume = items.filter((i) => i.volume).reduce((s, i) => s + i.volume, 0);
-  const steelMass = items.filter((i) => i.mass).reduce((s, i) => s + i.mass, 0);
-  const steelLength = items.filter((i) => i.mass).reduce((s, i) => s + i.totalLength, 0);
-  return { items, fasteners, timberVolume, steelMass, steelLength, stock };
+  // метизы
+  const wp = m.wallPosts;
+  const boltLen = wp.wallThickness + 120;
+  const boltCount = wp.boltCount * wp.xs.length;
+  const boltMass = (Math.PI / 4) * wp.boltDiameter ** 2 * boltLen * boltCount * 7.85e-6;
+  const plateMass = wp.plateSize ** 2 * 8 * boltCount * 7.85e-6;
+  const fasteners = [
+    { name: `Шпилька М${wp.boltDiameter} класса ${wp.boltGrade}`, count: boltCount,
+      note: `длина ≥ ${boltLen} мм`, mass: boltMass },
+    { name: `Пластина-шайба ${wp.plateSize}×${wp.plateSize}×8 мм`, count: boltCount,
+      note: 'с внутренней стороны стены, под гайку с шайбой', mass: plateMass },
+  ];
+
+  const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
+  const byName = (n) => items.find((i) => i.name === n)?.mass ?? 0;
+  // всё, что висит над головой (без столбов) — это и есть постоянная нагрузка на кровлю
+  const roofPartMass = byName('Стропила') + byName('Обрешётка') + byName('Обвязка у стены')
+    + byName('Прогон наружный') + roofMass;
+  const timberVolume = items.reduce((a, i) => a + (i.volume ?? 0), 0);
+  const timberMass = sum((i) => i.material === 'сосна');
+  const steelMass = sum((i) => i.material === 'сталь');
+  const steelLength = items.filter((i) => i.material === 'сталь').reduce((a, i) => a + i.totalLength, 0);
+  const fastenerMass = fasteners.reduce((a, f) => a + f.mass, 0);
+  const total = timberMass + steelMass + roofMass + fastenerMass;
+  const planArea = (m.geom.B * (m.geom.L + m.geom.a)) / 1e6; // м² в плане
+
+  const groups = [
+    { name: 'Кровельное покрытие', mass: roofMass, note: ROOFING[m.roofing].label },
+    { name: 'Обрешётка', mass: byName('Обрешётка'), note: 'сосна' },
+    { name: 'Стропила', mass: byName('Стропила'), note: 'сосна' },
+    { name: 'Прогоны и обвязка', mass: byName('Прогон наружный') + byName('Обвязка у стены'), note: 'сталь + сосна' },
+    { name: 'Столбы', mass: byName('Столбы наружные') + byName('Столбы у стены'), note: 'сталь' },
+    { name: 'Метизы', mass: boltMass + plateMass, note: 'шпильки и пластины' },
+  ];
+
+  const weights = {
+    timber: { volume: timberVolume, mass: timberMass, density: 500 },
+    steel: { mass: steelMass, length: steelLength, density: 7850 },
+    roofing: { area: roofArea, mass: roofMass, label: ROOFING[m.roofing].label },
+    fasteners: { mass: fastenerMass, count: boltCount * 2 },
+    total,
+    perSqm: total / planArea,
+    planArea,
+    /** нагрузка от собственного веса всей кровельной части, кПа по скату */
+    deadPressure: (roofPartMass * G0) / roofArea / 1000,
+    /** доля собственного веса в полной нагрузке у стены и в поле */
+    deadShareWall: null,
+    deadShareField: null,
+    groups,
+  };
+  const dp = weights.deadPressure;
+  weights.deadShareWall = dp / (dp + result.snow.at(0));
+  weights.deadShareField = dp / (dp + result.snow.at(m.geom.L + m.geom.a));
+
+  return { items, fasteners, weights, timberVolume, timberMass, steelMass, steelLength, stock, total };
 }

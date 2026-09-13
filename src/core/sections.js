@@ -93,12 +93,24 @@ const TIMBER_SIZES = [
   [225, 50], [250, 50], [250, 60], [250, 75], [250, 100],
 ];
 
-/** @typedef {{id:string,label:string,material:'timber'|'steel',h:number,b:number,t?:number,props:object,weight:number}} Section */
+/** @typedef {{id:string,label:string,material:'timber'|'steel',h:number,b:number,t?:number,props:object,weight:number,massPerM:number}} Section */
 
-/** Погонный вес, кН/м. ρ_дерево = 5 кН/м³, ρ_сталь = 78,5 кН/м³. */
+/**
+ * Плотность материалов, кг/м³.
+ * Сосна при эксплуатационной влажности 12–20 % — 500; свежераспиленная
+ * доска весит до 700–800 кг/м³, это стоит помнить при подъёме вручную.
+ * Сталь — 7850.
+ */
+export const DENSITY = { timber: 500, steel: 7850 };
+const G = 9.80665; // м/с²
+
+/** Погонная масса сечения, кг/м:  m = A·ρ,  A в м². */
+function massPerMetre(A, material) {
+  return A * 1e-6 * DENSITY[material];
+}
+/** Погонный вес, кН/м:  q = m·g. */
 function selfWeight(A, material) {
-  const rho = material === 'timber' ? 5.0e-9 : 78.5e-9; // кН/мм³
-  return A * rho * 1000; // кН/м
+  return (massPerMetre(A, material) * G) / 1000;
 }
 
 /** @type {Section[]} */
@@ -113,6 +125,7 @@ for (const [h, b] of TIMBER_SIZES) {
     h, b,
     props,
     weight: selfWeight(props.A, 'timber'),
+    massPerM: massPerMetre(props.A, 'timber'),
   });
 }
 for (const [h, b, ts] of STEEL_SIZES) {
@@ -125,6 +138,7 @@ for (const [h, b, ts] of STEEL_SIZES) {
       h, b, t,
       props,
       weight: selfWeight(props.A, 'steel'),
+      massPerM: massPerMetre(props.A, 'steel'),
     });
   }
 }
