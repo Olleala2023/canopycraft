@@ -54,7 +54,7 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
 .verdict-pill{font-family:"IBM Plex Mono",monospace; font-size:12px; padding:4px 10px; border:1px solid; white-space:nowrap}
 
 /* ── три колонки ── */
-.panes{display:grid; grid-template-columns:236px minmax(0,1fr) 260px; gap:0;
+.panes{display:grid; grid-template-columns:236px minmax(0,1fr) 260px; gap:0; align-items:start;
   border:1px solid var(--rule-2); background:var(--surface)}
 .pane{padding:13px; min-width:0; overflow-wrap:anywhere}
 .pane + .pane{border-left:1px solid var(--rule)}
@@ -78,11 +78,12 @@ select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3p
   background:var(--surface); border:1px solid var(--rule-2); padding:3px 5px; z-index:2}
 .zoombar .btn{padding:0 9px; font-size:14px; line-height:1.5}
 .zoomval{font-size:11px; color:var(--ink-3); min-width:46px; text-align:right}
-.canvas{flex:1; padding:10px; background:
+.canvas{flex:0 0 auto; padding:10px; background:
   linear-gradient(var(--grid) 1px, transparent 1px) 0 0/20px 20px,
   linear-gradient(90deg,var(--grid) 1px, transparent 1px) 0 0/20px 20px, var(--surface-2)}
-.canvas svg{display:block; width:100%; height:auto; touch-action:none}
-.canvas{cursor:grab; touch-action:none; overflow:hidden}
+/* SVG занимает весь контейнер: клеточное поле и есть рабочая зона чертежа */
+.canvas svg{display:block; width:100%; height:100%; touch-action:none}
+.canvas{cursor:grab; touch-action:none; overflow:hidden; height:min(72vh, 620px); min-height:380px}
 .canvas:active{cursor:grabbing}
 g.pickable, g.draggable{cursor:pointer}
 .hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
