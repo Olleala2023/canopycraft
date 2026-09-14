@@ -59,12 +59,14 @@ function elementStiffness(Le, EI, GAs) {
  * @param {number} o.GAs сдвиговая жёсткость, Н (0 — не учитывать сдвиг)
  * @param {(x:number)=>number} [o.q] распределённая нагрузка, Н/мм, вниз
  * @param {{x:number,P:number}[]} [o.point] сосредоточенные силы, Н, вниз
+ * @param {{x:number,M:number}[]} [o.moments] сосредоточенные моменты, Н·мм
  * @param {number} [o.nEl] минимальное число конечных элементов
  */
 export function solveBeam(o) {
   const { length, EI, GAs = 0 } = o;
   const q = o.q ?? (() => 0);
   const point = o.point ?? [];
+  const moments = o.moments ?? [];
   const nEl = o.nEl ?? 120;
 
   // --- сетка: равномерная плюс узлы в опорах и под силами
@@ -72,6 +74,7 @@ export function solveBeam(o) {
   for (let i = 1; i < nEl; i++) set.add((length * i) / nEl);
   for (const s of o.supports) set.add(Math.min(length, Math.max(0, s)));
   for (const p of point) set.add(Math.min(length, Math.max(0, p.x)));
+  for (const p of moments) set.add(Math.min(length, Math.max(0, p.x)));
   const X = [...set].sort((a, b) => a - b).filter((v, i, a) => i === 0 || v - a[i - 1] > 1e-6);
   const nn = X.length;
   const ndof = 2 * nn;
@@ -110,6 +113,13 @@ export function solveBeam(o) {
   }
 
   // --- закрепления: v = 0
+  for (const p of moments) {
+    let n = 0;
+    for (let i = 0; i < nn; i++) if (Math.abs(X[i] - p.x) < Math.abs(X[n] - p.x)) n = i;
+    F[2 * n + 1] += p.M;
+    Fload[2 * n + 1] += p.M;
+  }
+
   const fixed = [];
   for (const s of o.supports) {
     let n = 0;
@@ -161,6 +171,7 @@ export function solveBeam(o) {
     let m = -(x * I0 - I1);
     for (const r of reactions) if (r.x <= x + 1e-9) { v += r.R; m += r.R * (x - r.x); }
     for (const p of point) if (p.x <= x + 1e-9) { v -= p.P; m -= p.P * (x - p.x); }
+    for (const p of moments) if (p.x <= x + 1e-9) m += p.M;
     V[i] = v;
     M[i] = m;
   }

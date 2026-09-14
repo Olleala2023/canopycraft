@@ -9,7 +9,7 @@ import { section } from './sections.js';
 import { propsFor } from './materials.js';
 import { ROOFING, snowProfile, windPressure, GAMMA_F } from './loads.js';
 import { solveBeam, deflectionSpans } from './beam.js';
-import { tributaries, levels } from './model.js';
+import { tributaries, levels, boltHeights } from './model.js';
 import {
   timberBending, timberShear, timberCombined, timberLateral, timberBearing,
   steelBending, steelShear, steelStability, steelBeamColumn, steelSlenderness,
@@ -215,26 +215,50 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
 function analysePostRow(model, cfg, purlin, ctx, extra) {
   const sec = section(cfg.sectionId);
   const mat = propsFor(sec, model.opts);
-  const H = model.geom.postHeight;
+  const lv = levels(model);
+  const H = extra.braced ? lv.wallPostTop : lv.postTop;
   const lef = cfg.mu * H;
   const fascia = sec.h + 200;
   const n = purlin.reactions.length;
+  const EI = mat.E * sec.props.Ix;
+  const GAs = mat.G * sec.props.As;
 
   return purlin.reactions.map((r, i) => {
     const N = Math.max(0, r.R) + sec.weight * H * GAMMA_F.steel;
     const trib = i === 0 || i === n - 1 ? model.geom.B / (2 * Math.max(1, n - 1)) : model.geom.B / Math.max(1, n - 1);
-    const Hpost = (extra.thrust ?? 0) / n;
+    const Hwind = extra.braced ? 0 : (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
+    const Hpost = (extra.thrust ?? 0) / n + Hwind;
     const Mecc = N * model.opts.postEccentricity;
-    let M;
-    if (extra.braced) {
-      // распор передаётся на стену шпильками; изгиб — местный, между точками крепления
-      const sBolt = H / Math.max(1, cfg.boltCount);
-      M = Mecc + (Hpost * sBolt) / 8;
-    } else {
-      const Hwind = (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
-      M = Mecc + (Hwind + Hpost) * H;
-    }
     const Nup = -(purlin.uplift[i]?.R ?? 0);
+
+    // эпюры по высоте столба: горизонтальная сила и момент от эксцентриситета
+    // приложены вверху, в уровне опирания прогона
+    let diagram, bolts = null;
+    if (extra.braced) {
+      // столб держат сквозные шпильки — балка на опорах в их отметках плюс база
+      const zs = boltHeights(H, Math.max(1, cfg.boltCount));
+      diagram = solveBeam({
+        length: H, supports: [0, ...zs], EI, GAs,
+        point: [{ x: H, P: Hpost }], moments: [{ x: H, M: Mecc }], nEl: 80,
+      });
+      const forces = diagram.reactions.slice(1).map((x) => Math.abs(x.R));
+      const Nbolt = Math.max(0, ...forces);
+      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / Math.max(1, cfg.boltCount);
+      bolts = { Nbolt, Vbolt, count: cfg.boltCount, heights: zs, forces };
+    } else {
+      // отдельно стоящий столб — консоль, защемлённая в фундаменте
+      const nS = 121, x = new Float64Array(nS), M = new Float64Array(nS), V = new Float64Array(nS), w = new Float64Array(nS);
+      for (let k = 0; k < nS; k++) {
+        const z = (H * k) / (nS - 1);
+        x[k] = z;
+        V[k] = Hpost;
+        M[k] = Mecc + Hpost * (H - z);
+        w[k] = (Hpost * z * z * (3 * H - z)) / 6 / EI + (Mecc * z * z) / 2 / EI;
+      }
+      diagram = { x, M, V, w, reactions: [{ x: 0, R: Hpost }], maxM: M[0], maxV: Hpost };
+    }
+    let M = 0;
+    for (let k = 0; k < diagram.M.length; k++) if (Math.abs(diagram.M[k]) > Math.abs(M)) M = diagram.M[k];
 
     const stab = steelStability(N, sec.props, mat, lef, 'y');
     const checks = [
@@ -243,24 +267,20 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
       steelSlenderness(stab.lambda, stab.U),
       steelLocalBuckling(sec, mat, stab.lb),
     ];
-
-    let bolts = null;
-    if (extra.braced) {
-      // отрыв от стены: горизонтальный распор растягивает шпильки,
-      // верхняя нагружена сильнее — принят коэффициент неравномерности 1,5
-      const nb = Math.max(1, cfg.boltCount);
-      const Nbolt = (Hpost * 1.5) / nb;
-      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / nb;
+    if (bolts) {
       const bChecks = [
-        boltPlateBearing(Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
-        boltHoleBearing(Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
-        boltShear(Vbolt, cfg.boltDiameter, cfg.boltGrade),
+        boltPlateBearing(bolts.Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
+        boltHoleBearing(bolts.Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
+        boltShear(bolts.Vbolt, cfg.boltDiameter, cfg.boltGrade),
       ];
-      bolts = { Nbolt, Vbolt, count: nb, ...worstOf(bChecks) };
+      Object.assign(bolts, worstOf(bChecks));
       checks.push(...bChecks);
     }
 
-    return { x: r.x, N, M, Nup, Hpost, sec, mat, lef, bolts, braced: !!extra.braced, ...worstOf(checks) };
+    return {
+      x: r.x, N, M, Nup, Hpost, sec, mat, lef, H, bolts, diagram,
+      braced: !!extra.braced, ...worstOf(checks),
+    };
   });
 }
 

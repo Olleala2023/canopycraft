@@ -1,5 +1,5 @@
 /** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
-import { levels } from '../core/model.js';
+import { levels, boltHeights } from '../core/model.js';
 import { section } from '../core/sections.js';
 
 export const uColor = (U) =>
@@ -185,8 +185,7 @@ export function drawSection(res) {
   s.push(`<rect x="${X(0)}" y="${Y(lv.rafterBottomWall)}" width="${Math.max(3, wbS.b * sc)}" height="${lv.wallPurlinH * sc}" fill="${uColor(res.wallPurlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
   s.push(`<rect x="${X(0)}" y="${Y(lv.wallPostTop)}" width="${Math.max(4, wpS.b * sc)}" height="${lv.wallPostTop * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
   const nb = m.wallPosts.boltCount;
-  for (let i = 0; i < nb; i++) {
-    const hy = (lv.wallPostTop * (i + 0.6)) / (nb + 0.2);
+  for (const hy of boltHeights(lv.wallPostTop, nb)) {
     s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(90)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
     s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
   }
@@ -229,22 +228,35 @@ function chart(title, xs, ys, W, H, x0, y0, color, unit, scaleY, flip = false) {
    <text x="${x0 + W}" y="${y0 - 5}" font-size="10" text-anchor="end" font-family="${mono}" fill="${color}">max ${(maxA * scaleY).toFixed(2).replace('.', ',')} ${unit}</text></g>`;
 }
 
+function emptyDiagrams(text) {
+  return {
+    svg: `<svg viewBox="0 0 600 90" role="img" aria-label="${esc(text)}">
+      <text x="300" y="46" font-size="13" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">${esc(text)}</text></svg>`,
+    meta: null,
+  };
+}
+
 export function drawDiagrams(res, sel) {
   const el = pickElement(res, sel);
-  if (!el || !el.res) return { svg: '<svg viewBox="0 0 100 40"></svg>', meta: null };
+  if (!el) return emptyDiagrams('Выберите элемент на плане или в сводке внизу');
+  if (!el.res) return emptyDiagrams(`Для элемента «${el.title.toLowerCase()}» эпюры не строятся`);
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
-  const W = 720, H = 84, pad = { l: 46, r: 26, t: 26 };
+  const vertical = el.kind === 'post' || el.kind === 'wallPost';
+  const W = 720, H = 84, pad = { l: 46, r: 26, t: 48 }; // сверху оставлено место под панель масштаба
   const vw = W + pad.l + pad.r, vh = 3 * (H + 34) + pad.t;
   const xs = Array.from(r.x);
   const s = [`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Эпюры">`];
-  s.push(chart(`ЭПЮРА M · ${el.title} · на растянутом волокне`, xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
-  s.push(chart('ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
-  s.push(chart('ПРОГИБ (нормативные нагрузки)', xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
+  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? ' · по высоте от базы' : ' · на растянутом волокне'}`,
+    xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
+  s.push(chart(vertical ? 'ПОПЕРЕЧНАЯ СИЛА' : 'ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
+  s.push(chart(vertical ? 'ГОРИЗОНТАЛЬНОЕ СМЕЩЕНИЕ' : 'ПРОГИБ (нормативные нагрузки)',
+    xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
   for (const sup of r.reactions) {
     const x = pad.l + (W * sup.x) / xs[xs.length - 1];
     s.push(`<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${vh - 8}" stroke="var(--ink-3)" stroke-dasharray="2 4" opacity=".7"/>`);
     s.push(`<text x="${x + 3}" y="${vh - 2}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${f2(sup.R / 1000)} кН</text>`);
+    if (vertical) s.push(`<text x="${x + 3}" y="${vh - 12}" font-size="8.5" font-family="${mono}" fill="var(--ink-3)">${Math.round(sup.x)}</text>`);
   }
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
@@ -260,12 +272,12 @@ export function pickElement(res, sel) {
   if (sel.type === 'wallPurlin') return { ...res.wallPurlin, title: 'ОБВЯЗКА У СТЕНЫ', kind: 'wallPurlin' };
   if (sel.type === 'wallPost') {
     const p = res.wallPosts[sel.index] ?? res.wallPosts[0];
-    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: null };
+    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: { uls: p.diagram, sls: p.diagram } };
   }
   if (sel.type === 'battens') return { ...res.battens, title: 'ОБРЕШЁТКА', res: { uls: res.battens.res.uls, sls: res.battens.res.sls }, kind: 'battens' };
   if (sel.type === 'post') {
     const p = res.posts[sel.index] ?? res.posts[0];
-    return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: null };
+    return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
   return null;
 }
