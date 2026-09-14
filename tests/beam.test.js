@@ -52,3 +52,14 @@ test('сдвиговые деформации увеличивают проги�
   // сравнение с формулой (50) СП 64: f = f₀·[1 + c·(h/l)²], c = 15,4 (E/G = 20)
   close(f1 / f0, 1 + 15.4 * (h / L) ** 2, 0.1, 'соответствие формуле (50) СП 64');
 });
+
+test('сосредоточенный момент на конце балки', () => {
+  const L = 4000, M0 = 2.5e6, EI = 206000 * 4.36e6;
+  const r = solveBeam({ length: L, supports: [0, L], EI, moments: [{ x: 0, M: M0 }] });
+  close(r.M[0], M0, 5e-3, 'M на нагруженном конце');
+  assert.ok(Math.abs(r.M[r.M.length - 1]) < 1e-6 * M0, `M на дальней опоре: ${r.M[r.M.length - 1]}`);
+  const mid = r.M[Math.round((r.M.length - 1) / 2)];
+  close(mid, M0 / 2, 1e-2, 'момент убывает линейно');
+  close(r.reactions[0].R, -M0 / L, 5e-3, 'реакция −M/L');
+  assert.ok(Math.abs(r.reactions[0].R + r.reactions[1].R) < 1e-6 * (M0 / L), 'сумма вертикальных реакций нулевая');
+});

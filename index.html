@@ -662,12 +662,14 @@ function elementStiffness(Le, EI, GAs) {
  * @param {number} o.GAs сдвиговая жёсткость, Н (0 — не учитывать сдвиг)
  * @param {(x:number)=>number} [o.q] распределённая нагрузка, Н/мм, вниз
  * @param {{x:number,P:number}[]} [o.point] сосредоточенные силы, Н, вниз
+ * @param {{x:number,M:number}[]} [o.moments] сосредоточенные моменты, Н·мм
  * @param {number} [o.nEl] минимальное число конечных элементов
  */
 function solveBeam(o) {
   const { length, EI, GAs = 0 } = o;
   const q = o.q ?? (() => 0);
   const point = o.point ?? [];
+  const moments = o.moments ?? [];
   const nEl = o.nEl ?? 120;
 
   // --- сетка: равномерная плюс узлы в опорах и под силами
@@ -675,6 +677,7 @@ function solveBeam(o) {
   for (let i = 1; i < nEl; i++) set.add((length * i) / nEl);
   for (const s of o.supports) set.add(Math.min(length, Math.max(0, s)));
   for (const p of point) set.add(Math.min(length, Math.max(0, p.x)));
+  for (const p of moments) set.add(Math.min(length, Math.max(0, p.x)));
   const X = [...set].sort((a, b) => a - b).filter((v, i, a) => i === 0 || v - a[i - 1] > 1e-6);
   const nn = X.length;
   const ndof = 2 * nn;
@@ -713,6 +716,13 @@ function solveBeam(o) {
   }
 
   // --- закрепления: v = 0
+  for (const p of moments) {
+    let n = 0;
+    for (let i = 0; i < nn; i++) if (Math.abs(X[i] - p.x) < Math.abs(X[n] - p.x)) n = i;
+    F[2 * n + 1] += p.M;
+    Fload[2 * n + 1] += p.M;
+  }
+
   const fixed = [];
   for (const s of o.supports) {
     let n = 0;
@@ -764,6 +774,7 @@ function solveBeam(o) {
     let m = -(x * I0 - I1);
     for (const r of reactions) if (r.x <= x + 1e-9) { v += r.R; m += r.R * (x - r.x); }
     for (const p of point) if (p.x <= x + 1e-9) { v -= p.P; m -= p.P * (x - p.x); }
+    for (const p of moments) if (p.x <= x + 1e-9) m += p.M;
     V[i] = v;
     M[i] = m;
   }
@@ -1154,6 +1165,16 @@ function levels(m) {
   };
 }
 
+/**
+ * Отметки сквозных шпилек по высоте стенового столба, мм от базы.
+ * Крайние отступают от концов, чтобы не рвать газоблок у края.
+ */
+function boltHeights(H, n) {
+  if (n <= 1) return [H * 0.55];
+  const lo = H * 0.12, hi = H * 0.92;
+  return Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
+}
+
 /* ── src/core/share.js ── */
 /**
  * Упаковка модели в ссылку.
@@ -1433,26 +1454,50 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
 function analysePostRow(model, cfg, purlin, ctx, extra) {
   const sec = section(cfg.sectionId);
   const mat = propsFor(sec, model.opts);
-  const H = model.geom.postHeight;
+  const lv = levels(model);
+  const H = extra.braced ? lv.wallPostTop : lv.postTop;
   const lef = cfg.mu * H;
   const fascia = sec.h + 200;
   const n = purlin.reactions.length;
+  const EI = mat.E * sec.props.Ix;
+  const GAs = mat.G * sec.props.As;
 
   return purlin.reactions.map((r, i) => {
     const N = Math.max(0, r.R) + sec.weight * H * GAMMA_F.steel;
     const trib = i === 0 || i === n - 1 ? model.geom.B / (2 * Math.max(1, n - 1)) : model.geom.B / Math.max(1, n - 1);
-    const Hpost = (extra.thrust ?? 0) / n;
+    const Hwind = extra.braced ? 0 : (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
+    const Hpost = (extra.thrust ?? 0) / n + Hwind;
     const Mecc = N * model.opts.postEccentricity;
-    let M;
-    if (extra.braced) {
-      // распор передаётся на стену шпильками; изгиб — местный, между точками крепления
-      const sBolt = H / Math.max(1, cfg.boltCount);
-      M = Mecc + (Hpost * sBolt) / 8;
-    } else {
-      const Hwind = (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
-      M = Mecc + (Hwind + Hpost) * H;
-    }
     const Nup = -(purlin.uplift[i]?.R ?? 0);
+
+    // эпюры по высоте столба: горизонтальная сила и момент от эксцентриситета
+    // приложены вверху, в уровне опирания прогона
+    let diagram, bolts = null;
+    if (extra.braced) {
+      // столб держат сквозные шпильки — балка на опорах в их отметках плюс база
+      const zs = boltHeights(H, Math.max(1, cfg.boltCount));
+      diagram = solveBeam({
+        length: H, supports: [0, ...zs], EI, GAs,
+        point: [{ x: H, P: Hpost }], moments: [{ x: H, M: Mecc }], nEl: 80,
+      });
+      const forces = diagram.reactions.slice(1).map((x) => Math.abs(x.R));
+      const Nbolt = Math.max(0, ...forces);
+      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / Math.max(1, cfg.boltCount);
+      bolts = { Nbolt, Vbolt, count: cfg.boltCount, heights: zs, forces };
+    } else {
+      // отдельно стоящий столб — консоль, защемлённая в фундаменте
+      const nS = 121, x = new Float64Array(nS), M = new Float64Array(nS), V = new Float64Array(nS), w = new Float64Array(nS);
+      for (let k = 0; k < nS; k++) {
+        const z = (H * k) / (nS - 1);
+        x[k] = z;
+        V[k] = Hpost;
+        M[k] = Mecc + Hpost * (H - z);
+        w[k] = (Hpost * z * z * (3 * H - z)) / 6 / EI + (Mecc * z * z) / 2 / EI;
+      }
+      diagram = { x, M, V, w, reactions: [{ x: 0, R: Hpost }], maxM: M[0], maxV: Hpost };
+    }
+    let M = 0;
+    for (let k = 0; k < diagram.M.length; k++) if (Math.abs(diagram.M[k]) > Math.abs(M)) M = diagram.M[k];
 
     const stab = steelStability(N, sec.props, mat, lef, 'y');
     const checks = [
@@ -1461,24 +1506,20 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
       steelSlenderness(stab.lambda, stab.U),
       steelLocalBuckling(sec, mat, stab.lb),
     ];
-
-    let bolts = null;
-    if (extra.braced) {
-      // отрыв от стены: горизонтальный распор растягивает шпильки,
-      // верхняя нагружена сильнее — принят коэффициент неравномерности 1,5
-      const nb = Math.max(1, cfg.boltCount);
-      const Nbolt = (Hpost * 1.5) / nb;
-      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / nb;
+    if (bolts) {
       const bChecks = [
-        boltPlateBearing(Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
-        boltHoleBearing(Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
-        boltShear(Vbolt, cfg.boltDiameter, cfg.boltGrade),
+        boltPlateBearing(bolts.Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
+        boltHoleBearing(bolts.Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
+        boltShear(bolts.Vbolt, cfg.boltDiameter, cfg.boltGrade),
       ];
-      bolts = { Nbolt, Vbolt, count: nb, ...worstOf(bChecks) };
+      Object.assign(bolts, worstOf(bChecks));
       checks.push(...bChecks);
     }
 
-    return { x: r.x, N, M, Nup, Hpost, sec, mat, lef, bolts, braced: !!extra.braced, ...worstOf(checks) };
+    return {
+      x: r.x, N, M, Nup, Hpost, sec, mat, lef, H, bolts, diagram,
+      braced: !!extra.braced, ...worstOf(checks),
+    };
   });
 }
 
@@ -1965,8 +2006,7 @@ function drawSection(res) {
   s.push(`<rect x="${X(0)}" y="${Y(lv.rafterBottomWall)}" width="${Math.max(3, wbS.b * sc)}" height="${lv.wallPurlinH * sc}" fill="${uColor(res.wallPurlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
   s.push(`<rect x="${X(0)}" y="${Y(lv.wallPostTop)}" width="${Math.max(4, wpS.b * sc)}" height="${lv.wallPostTop * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
   const nb = m.wallPosts.boltCount;
-  for (let i = 0; i < nb; i++) {
-    const hy = (lv.wallPostTop * (i + 0.6)) / (nb + 0.2);
+  for (const hy of boltHeights(lv.wallPostTop, nb)) {
     s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(90)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
     s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
   }
@@ -2009,22 +2049,35 @@ function chart(title, xs, ys, W, H, x0, y0, color, unit, scaleY, flip = false) {
    <text x="${x0 + W}" y="${y0 - 5}" font-size="10" text-anchor="end" font-family="${mono}" fill="${color}">max ${(maxA * scaleY).toFixed(2).replace('.', ',')} ${unit}</text></g>`;
 }
 
+function emptyDiagrams(text) {
+  return {
+    svg: `<svg viewBox="0 0 600 90" role="img" aria-label="${esc(text)}">
+      <text x="300" y="46" font-size="13" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">${esc(text)}</text></svg>`,
+    meta: null,
+  };
+}
+
 function drawDiagrams(res, sel) {
   const el = pickElement(res, sel);
-  if (!el || !el.res) return { svg: '<svg viewBox="0 0 100 40"></svg>', meta: null };
+  if (!el) return emptyDiagrams('Выберите элемент на плане или в сводке внизу');
+  if (!el.res) return emptyDiagrams(`Для элемента «${el.title.toLowerCase()}» эпюры не строятся`);
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
-  const W = 720, H = 84, pad = { l: 46, r: 26, t: 26 };
+  const vertical = el.kind === 'post' || el.kind === 'wallPost';
+  const W = 720, H = 84, pad = { l: 46, r: 26, t: 48 }; // сверху оставлено место под панель масштаба
   const vw = W + pad.l + pad.r, vh = 3 * (H + 34) + pad.t;
   const xs = Array.from(r.x);
   const s = [`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Эпюры">`];
-  s.push(chart(`ЭПЮРА M · ${el.title} · на растянутом волокне`, xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
-  s.push(chart('ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
-  s.push(chart('ПРОГИБ (нормативные нагрузки)', xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
+  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? ' · по высоте от базы' : ' · на растянутом волокне'}`,
+    xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
+  s.push(chart(vertical ? 'ПОПЕРЕЧНАЯ СИЛА' : 'ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
+  s.push(chart(vertical ? 'ГОРИЗОНТАЛЬНОЕ СМЕЩЕНИЕ' : 'ПРОГИБ (нормативные нагрузки)',
+    xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
   for (const sup of r.reactions) {
     const x = pad.l + (W * sup.x) / xs[xs.length - 1];
     s.push(`<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${vh - 8}" stroke="var(--ink-3)" stroke-dasharray="2 4" opacity=".7"/>`);
     s.push(`<text x="${x + 3}" y="${vh - 2}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${f2(sup.R / 1000)} кН</text>`);
+    if (vertical) s.push(`<text x="${x + 3}" y="${vh - 12}" font-size="8.5" font-family="${mono}" fill="var(--ink-3)">${Math.round(sup.x)}</text>`);
   }
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
@@ -2040,12 +2093,12 @@ function pickElement(res, sel) {
   if (sel.type === 'wallPurlin') return { ...res.wallPurlin, title: 'ОБВЯЗКА У СТЕНЫ', kind: 'wallPurlin' };
   if (sel.type === 'wallPost') {
     const p = res.wallPosts[sel.index] ?? res.wallPosts[0];
-    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: null };
+    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: { uls: p.diagram, sls: p.diagram } };
   }
   if (sel.type === 'battens') return { ...res.battens, title: 'ОБРЕШЁТКА', res: { uls: res.battens.res.uls, sls: res.battens.res.sls }, kind: 'battens' };
   if (sel.type === 'post') {
     const p = res.posts[sel.index] ?? res.posts[0];
-    return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: null };
+    return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
   return null;
 }
@@ -2166,6 +2219,7 @@ const CONTROLS = [
       { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
       { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
   { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
+  { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
 
   { group: 'Площадка и кровля' },
   { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
@@ -2341,6 +2395,7 @@ function renderInspector(res) {
       kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
       kv.push(['На шпильку: растяжение', `${f2(el.bolts.Nbolt / 1000)} кН`]);
       kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
+      kv.push(['По шпилькам снизу вверх', el.bolts.forces.map((f) => f2(f / 1000)).join(' / ') + ' кН']);
     }
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);

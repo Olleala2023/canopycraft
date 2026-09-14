@@ -127,3 +127,13 @@ export function levels(m) {
     wallPostLength: wallPostTop + 300,
   };
 }
+
+/**
+ * Отметки сквозных шпилек по высоте стенового столба, мм от базы.
+ * Крайние отступают от концов, чтобы не рвать газоблок у края.
+ */
+export function boltHeights(H, n) {
+  if (n <= 1) return [H * 0.55];
+  const lo = H * 0.12, hi = H * 0.92;
+  return Array.from({ length: n }, (_, i) => lo + ((hi - lo) * i) / (n - 1));
+}

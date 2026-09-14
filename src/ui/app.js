@@ -113,6 +113,7 @@ const CONTROLS = [
       { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
       { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
   { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
+  { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
 
   { group: 'Площадка и кровля' },
   { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
@@ -288,6 +289,7 @@ function renderInspector(res) {
       kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
       kv.push(['На шпильку: растяжение', `${f2(el.bolts.Nbolt / 1000)} кН`]);
       kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
+      kv.push(['По шпилькам снизу вверх', el.bolts.forces.map((f) => f2(f / 1000)).join(' / ') + ' кН']);
     }
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);

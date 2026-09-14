@@ -195,3 +195,49 @@ test('ссылка на расчёт: короткая, восстанавлив
   assert.equal(patched.geom.чужое, undefined);
   assert.equal(patched.geom.B, base.geom.B, 'остальное берётся из умолчаний');
 });
+
+test('у столбов есть эпюры по высоте, а не одно число', async () => {
+  const { boltHeights } = await import('../src/core/model.js');
+  const r = analyse(defaultModel());
+  for (const p of [r.posts[1], r.wallPosts[2]]) {
+    assert.ok(p.diagram && p.diagram.M.length > 50, 'эпюра момента построена');
+    assert.ok(p.diagram.x[p.diagram.x.length - 1] > 1000, 'ось — высота столба');
+    assert.ok(Math.abs(p.M) > 0, 'расчётный момент взят из эпюры');
+  }
+  // наружный столб — консоль: момент максимален у базы и падает к верху
+  const outer = r.posts[1].diagram;
+  assert.ok(Math.abs(outer.M[0]) > Math.abs(outer.M[outer.M.length - 1]), 'момент консоли растёт к базе');
+
+  // стеновой столб: сумма реакций базы и шпилек равна приложенному распору
+  const w = r.wallPosts[2];
+  const sum = w.diagram.reactions.reduce((a, x) => a + x.R, 0);
+  assert.ok(Math.abs(sum - w.Hpost) < 1, `${sum.toFixed(2)} ≠ ${w.Hpost.toFixed(2)} Н`);
+  assert.equal(w.bolts.forces.length, defaultModel().wallPosts.boltCount);
+  assert.equal(w.bolts.heights.length, defaultModel().wallPosts.boltCount);
+  assert.deepEqual(w.bolts.heights, boltHeights(w.H, defaultModel().wallPosts.boltCount));
+  // усилие на шпильку берётся из расчёта, а не делением поровну
+  assert.ok(w.bolts.Nbolt > Math.max(...w.bolts.forces) - 1e-6);
+});
+
+test('усилие на шпильку растёт с распором и с эксцентриситетом опирания', () => {
+  const m = defaultModel();
+  const worst = (mm) => Math.max(...analyse(mm).wallPosts.map((p) => p.bolts.Nbolt));
+
+  const calm = worst({ ...m, site: { ...m.site, windRegion: 'Ia' } });
+  const windy = worst({ ...m, site: { ...m.site, windRegion: 'VII' } });
+  assert.ok(windy > calm, `${windy.toFixed(0)} должно быть больше ${calm.toFixed(0)} Н`);
+
+  const centred = worst({ ...m, opts: { ...m.opts, postEccentricity: 5 } });
+  const offset = worst({ ...m, opts: { ...m.opts, postEccentricity: 80 } });
+  assert.ok(offset > centred, `${offset.toFixed(0)} должно быть больше ${centred.toFixed(0)} Н`);
+});
+
+test('момент вверху столба воспринимается парой ближайших шпилек', () => {
+  // шпильки разнесены шире — плечо пары больше, усилия меньше
+  const m = defaultModel();
+  const r = analyse(m);
+  const w = r.wallPosts[2];
+  const top = w.bolts.forces[w.bolts.forces.length - 1];
+  const bottom = w.bolts.forces[0];
+  assert.ok(top > bottom, `верхняя шпилька нагружена сильнее: ${top.toFixed(0)} против ${bottom.toFixed(0)} Н`);
+});
