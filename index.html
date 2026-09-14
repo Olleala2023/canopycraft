@@ -1,0 +1,2663 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanopyCraft</title>
+<meta name="description" content="Расчёт односкатного навеса, пристроенного к дому: стропила, обрешётка, прогоны, столбы. Сосна и профильная труба по СП 20, СП 64, СП 16. Карта загрузки, эпюры, массы и смета.">
+<meta name="theme-color" content="#12405E">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CanopyCraft — расчёт навеса">
+<meta property="og:description" content="Карта загрузки, эпюры и подбор сечений для навеса у дома. Сосна и профильная труба.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#EDF0F3; --surface:#FFFFFF; --surface-2:#F5F8FA; --sunk:#E4E9EE;
+  --ink:#111820; --ink-2:#48545F; --ink-3:#7C8894;
+  --rule:#D2DAE1; --rule-2:#BCC7D0;
+  --accent:#12405E; --accent-2:#1D6791; --accent-soft:#E1EBF2;
+  --u-low:#3D7EA6; --u-ok:#3E8E59; --u-warn:#C88A11; --u-bad:#BC382F;
+  --grid:#CBD6DF;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
+    --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
+    --rule:#2A333C; --rule-2:#3A4650;
+    --accent:#8CBEDE; --accent-2:#6FA9CD; --accent-soft:#17252F;
+    --u-low:#6DA8CB; --u-ok:#5CB37A; --u-warn:#E0AA3D; --u-bad:#E06B60;
+    --grid:#233039;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
+  --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
+  --rule:#2A333C; --rule-2:#3A4650;
+  --accent:#8CBEDE; --accent-2:#6FA9CD; --accent-soft:#17252F;
+  --u-low:#6DA8CB; --u-ok:#5CB37A; --u-warn:#E0AA3D; --u-bad:#E06B60;
+  --grid:#233039;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--paper); color:var(--ink); margin:0;
+  font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif; font-size:14px; line-height:1.5;
+}
+.mono,input,select,button{font-variant-numeric:tabular-nums}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:0; letter-spacing:.02em}
+:focus-visible{outline:2px solid var(--accent-2); outline-offset:2px}
+
+.shell{max-width:1400px; margin:0 auto; padding-block:14px 40px; padding-left:16px; padding-right:16px;
+  display:flex; flex-direction:column; gap:12px}
+
+/* ── шапка ── */
+.topbar{display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  border-bottom:2px solid var(--ink); padding-bottom:10px}
+.brand{font-family:Oswald,sans-serif; font-size:19px; text-transform:uppercase; letter-spacing:.09em}
+.brand small{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.14em; color:var(--ink-3); display:block; text-transform:none; letter-spacing:.1em}
+.grow{flex:1}
+.tabs{display:flex; border:1px solid var(--rule-2)}
+.tabs button{font:inherit; font-size:12.5px; padding:4px 14px; background:transparent; border:0; color:var(--ink-2); cursor:pointer}
+.tabs button[aria-pressed="true"]{background:var(--accent); color:var(--paper)}
+.btn{font:inherit; font-size:12.5px; padding:5px 12px; background:var(--surface); color:var(--ink);
+  border:1px solid var(--rule-2); cursor:pointer}
+.btn:hover{border-color:var(--accent-2); color:var(--accent-2)}
+.btn.primary{background:var(--accent); color:var(--paper); border-color:var(--accent)}
+.btn.primary:hover{opacity:.9; color:var(--paper)}
+.verdict-pill{font-family:"IBM Plex Mono",monospace; font-size:12px; padding:4px 10px; border:1px solid; white-space:nowrap}
+
+/* ── три колонки ── */
+.panes{display:grid; grid-template-columns:236px minmax(0,1fr) 260px; gap:0;
+  border:1px solid var(--rule-2); background:var(--surface)}
+.pane{padding:13px; min-width:0; overflow-wrap:anywhere}
+.pane + .pane{border-left:1px solid var(--rule)}
+.pane-title{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.15em;
+  text-transform:uppercase; color:var(--ink-3); margin-bottom:9px}
+.pane-title + .pane-title{margin-top:16px}
+
+.field{display:flex; flex-direction:column; gap:2px; margin-bottom:8px}
+.field label{font-size:11.5px; color:var(--ink-2); display:flex; justify-content:space-between; gap:8px}
+.field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
+input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
+select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
+  background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}
+.check{display:flex; gap:7px; align-items:flex-start; font-size:12px; color:var(--ink-2); cursor:pointer; margin-bottom:6px}
+.check input{margin-top:3px; accent-color:var(--accent-2)}
+.row2{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+
+/* ── сцена ── */
+.stage{padding:0; display:flex; flex-direction:column}
+.canvas{flex:1; padding:10px; background:
+  linear-gradient(var(--grid) 1px, transparent 1px) 0 0/20px 20px,
+  linear-gradient(90deg,var(--grid) 1px, transparent 1px) 0 0/20px 20px, var(--surface-2)}
+.canvas svg{display:block; width:100%; height:auto; touch-action:none}
+.hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
+.legend{display:flex; flex-wrap:wrap; gap:4px 14px; padding:7px 13px; border-top:1px solid var(--rule); font-size:11px; color:var(--ink-2)}
+.legend i{display:inline-block; width:15px; height:8px; margin-right:5px; vertical-align:1px}
+/* подписи и штриховка не должны перехватывать клики по элементам схемы */
+.canvas svg text, .canvas svg polyline, .canvas svg polygon{pointer-events:none}
+g.pickable{cursor:pointer}
+g.pickable text{pointer-events:none}
+g.draggable{cursor:ew-resize}
+
+/* ── инспектор ── */
+.chk{display:grid; grid-template-columns:1fr auto; gap:1px 8px; font-size:12px; align-items:baseline; margin-bottom:7px}
+.chk .nm{color:var(--ink-2)}
+.chk .v{font-family:"IBM Plex Mono",monospace; font-weight:500}
+.chk .bar{grid-column:1/-1; height:5px; background:var(--sunk); position:relative; overflow:hidden}
+.chk .bar span{position:absolute; left:0; top:0; bottom:0; display:block}
+.chk .fx{grid-column:1/-1; font-family:"IBM Plex Mono",monospace; font-size:10.5px; color:var(--ink-3); overflow-wrap:anywhere}
+.verdict{margin:10px 0; padding:9px 10px; font-size:12px; border-left:3px solid; background:var(--surface-2)}
+.kv{display:flex; justify-content:space-between; gap:10px; font-size:12px; border-bottom:1px dotted var(--rule); padding:2px 0}
+.kv span:last-child{font-family:"IBM Plex Mono",monospace; text-align:right}
+.kv span{overflow-wrap:anywhere; min-width:0}
+
+/* ── сводка ── */
+.summary{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px}
+.card{border:1px solid var(--rule-2); background:var(--surface); padding:10px 12px; display:flex; flex-direction:column; gap:5px; cursor:pointer}
+.card:hover{border-color:var(--accent-2)}
+.card .t{font-family:Oswald,sans-serif; text-transform:uppercase; font-size:13px; letter-spacing:.05em}
+.card .u{font-family:"IBM Plex Mono",monospace; font-size:22px; line-height:1}
+.card .w{font-size:11.5px; color:var(--ink-2)}
+.card .bar{height:5px; background:var(--sunk); position:relative; overflow:hidden}
+.card .bar span{position:absolute; left:0; top:0; bottom:0}
+
+.bom{border:1px solid var(--rule-2); background:var(--surface); padding:12px}
+.tbl{overflow-x:auto}
+.tbl table{min-width:540px}
+table{border-collapse:collapse; width:100%; font-size:12.5px}
+th,td{text-align:left; padding:4px 10px 4px 0; border-bottom:1px solid var(--rule)}
+th{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); font-weight:500}
+td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
+.foot{font-size:11.5px; color:var(--ink-3); display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;
+  border-top:1px solid var(--rule-2); padding-top:10px}
+
+/* ── отчёт ── */
+#report{display:none}
+@media print{
+  body{background:#fff}
+  .shell > *:not(#report){display:none !important}
+  #report{display:block; font-size:11pt; color:#000}
+  #report h2{margin-top:14pt}
+  #report table{font-size:9.5pt}
+  #report th,#report td{border-bottom:1px solid #999}
+}
+
+@media (max-width:1000px){
+  .panes{grid-template-columns:1fr}
+  .pane + .pane{border-left:0; border-top:1px solid var(--rule)}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div class="brand">CanopyCraft<small>расчёт навеса у дома</small></div>
+    <div class="tabs" role="group" aria-label="Вид">
+      <button id="tab-plan" aria-pressed="true">План</button>
+      <button id="tab-section" aria-pressed="false">Разрез</button>
+      <button id="tab-diagrams" aria-pressed="false">Эпюры</button>
+    </div>
+    <span class="grow"></span>
+    <span class="verdict-pill" id="verdict-pill">—</span>
+    <button class="btn" id="btn-pick-all">Подобрать всё</button>
+    <button class="btn" id="btn-report">Отчёт</button>
+    <button class="btn" id="btn-link">Ссылка на расчёт</button>
+    <button class="btn" id="btn-reset">Сбросить</button>
+  </div>
+
+  <div class="panes">
+    <aside class="pane" id="params"></aside>
+    <section class="pane stage">
+      <div class="canvas" id="canvas"></div>
+      <div class="legend">
+        <span><i style="background:var(--u-low)"></i>U &lt; 0,5 запас</span>
+        <span><i style="background:var(--u-ok)"></i>0,5–0,85 норма</span>
+        <span><i style="background:var(--u-warn)"></i>0,85–1,0 предел</span>
+        <span><i style="background:var(--u-bad)"></i>U &gt; 1,0 не проходит</span>
+      </div>
+      <div class="hint" id="hint"></div>
+    </section>
+    <aside class="pane" id="inspector"></aside>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div class="bom" id="bom"></div>
+
+  <div class="foot">
+    <span>Инженерная оценка для частного строительства по СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017. Не заменяет проект, прошедший экспертизу.</span>
+    <span class="mono">v0.2</span>
+  </div>
+
+  <div id="report"></div>
+</div>
+<script>
+(function(){
+"use strict";
+/* ── src/core/sections.js ── */
+/**
+ * Сортаменты сечений.
+ *
+ * Единицы всюду: мм, мм², мм⁴, мм³.
+ *
+ * Профильные трубы — ГОСТ 30245-2003 (гнутосварные) и ГОСТ 8645-68 для мелких.
+ * Геометрические характеристики вычисляются с учётом скруглений углов
+ * (R_нар = 2,0t при t ≤ 6 мм, иначе 2,5t), поэтому отличаются от табличных
+ * значений ГОСТ примерно на 1 %, но всегда в безопасную сторону по сравнению
+ * с наивной «разностью прямых прямоугольников» (та завышает I на 3–6 %).
+ *
+ * Пиломатериал — ГОСТ 24454-80, размеры при влажности 20 %.
+ */
+
+/** Площадь одного углового «серпика» между квадратом r×r и четвертью круга. */
+const cornerArea = (r) => (1 - Math.PI / 4) * r * r;
+/** Расстояние от угла до центра тяжести этого серпика. */
+const cornerCentroid = (r) => (r * (10 - 3 * Math.PI)) / (12 - 3 * Math.PI);
+
+/** Момент инерции прямоугольника со скруглёнными углами относительно своей оси. */
+function roundedRectI(b, h, r) {
+  if (r <= 0) return (b * h * h * h) / 12;
+  const d = h / 2 - cornerCentroid(r);
+  return (b * h * h * h) / 12 - 4 * cornerArea(r) * d * d;
+}
+function roundedRectA(b, h, r) {
+  return b * h - 4 * cornerArea(r);
+}
+
+/**
+ * Геометрические характеристики замкнутого гнутосварного профиля.
+ * @param {number} h высота (в плоскости основного изгиба), мм
+ * @param {number} b ширина, мм
+ * @param {number} t толщина стенки, мм
+ */
+function rhsProps(h, b, t) {
+  const Ro = t <= 6 ? 2.0 * t : 2.5 * t;
+  const Ri = Math.max(0, Ro - t);
+  const bi = b - 2 * t;
+  const hi = h - 2 * t;
+  const A = roundedRectA(b, h, Ro) - roundedRectA(bi, hi, Ri);
+  const Ix = roundedRectI(b, h, Ro) - roundedRectI(bi, hi, Ri);
+  const Iy = roundedRectI(h, b, Ro) - roundedRectI(hi, bi, Ri);
+  return {
+    A,
+    Ix,
+    Iy,
+    Wx: Ix / (h / 2),
+    Wy: Iy / (b / 2),
+    ix: Math.sqrt(Ix / A),
+    iy: Math.sqrt(Iy / A),
+    /** сдвиговая площадь — две стенки */
+    As: 2 * t * hi,
+    /** статический момент полусечения (для касательных напряжений) */
+    Sx: b * t * (h - t) / 2 + 2 * t * (hi / 2) * (hi / 4),
+  };
+}
+
+/** Характеристики прямоугольного деревянного сечения. */
+function rectProps(h, b) {
+  const A = b * h;
+  return {
+    A,
+    Ix: (b * h * h * h) / 12,
+    Iy: (h * b * b * b) / 12,
+    Wx: (b * h * h) / 6,
+    Wy: (h * b * b) / 6,
+    ix: h / Math.sqrt(12),
+    iy: b / Math.sqrt(12),
+    As: (5 / 6) * A,
+    Sx: (b * h * h) / 8,
+  };
+}
+
+const STEEL_SIZES = [
+  // квадратные
+  [40, 40, [2, 3]], [50, 50, [2, 3, 4]], [60, 60, [2, 3, 4, 5]],
+  [80, 80, [3, 4, 5, 6]], [100, 100, [3, 4, 5, 6]], [120, 120, [4, 5, 6]],
+  [140, 140, [4, 5, 6]], [150, 150, [4, 5, 6]], [160, 160, [5, 6]],
+  [180, 180, [5, 6]], [200, 200, [6, 8]],
+  // прямоугольные (первое число — высота, работает в плоскости изгиба)
+  [50, 25, [2, 3]], [60, 30, [2, 3]], [60, 40, [2, 3]], [80, 40, [2, 3, 4]],
+  [80, 60, [3, 4]], [100, 50, [3, 4, 5]], [100, 60, [3, 4, 5]], [100, 80, [3, 4, 5]],
+  [120, 60, [3, 4, 5]], [120, 80, [4, 5, 6]], [140, 80, [4, 5, 6]],
+  [140, 100, [4, 5, 6]], [160, 80, [4, 5, 6]], [160, 120, [5, 6]],
+  [180, 100, [5, 6]], [200, 100, [5, 6, 8]], [200, 120, [6, 8]],
+];
+
+const TIMBER_SIZES = [
+  [100, 25], [100, 32], [100, 40], [50, 50], [100, 50],
+  [150, 40], [150, 50], [150, 100],
+  [175, 50], [200, 40], [200, 50], [200, 60], [200, 75], [200, 100],
+  [225, 50], [250, 50], [250, 60], [250, 75], [250, 100],
+];
+
+/** @typedef {{id:string,label:string,material:'timber'|'steel',h:number,b:number,t?:number,props:object,weight:number,massPerM:number}} Section */
+
+/**
+ * Плотность материалов, кг/м³.
+ * Сосна при эксплуатационной влажности 12–20 % — 500; свежераспиленная
+ * доска весит до 700–800 кг/м³, это стоит помнить при подъёме вручную.
+ * Сталь — 7850.
+ */
+const DENSITY = { timber: 500, steel: 7850 };
+const G = 9.80665; // м/с²
+
+/** Погонная масса сечения, кг/м:  m = A·ρ,  A в м². */
+function massPerMetre(A, material) {
+  return A * 1e-6 * DENSITY[material];
+}
+/** Погонный вес, кН/м:  q = m·g. */
+function selfWeight(A, material) {
+  return (massPerMetre(A, material) * G) / 1000;
+}
+
+/** @type {Section[]} */
+const SECTIONS = [];
+
+for (const [h, b] of TIMBER_SIZES) {
+  const props = rectProps(h, b);
+  SECTIONS.push({
+    id: `t${b}x${h}`,
+    label: `${b}×${h}`,
+    material: 'timber',
+    h, b,
+    props,
+    weight: selfWeight(props.A, 'timber'),
+    massPerM: massPerMetre(props.A, 'timber'),
+  });
+}
+for (const [h, b, ts] of STEEL_SIZES) {
+  for (const t of ts) {
+    const props = rhsProps(h, b, t);
+    SECTIONS.push({
+      id: `s${b}x${h}x${t}`,
+      label: `${b}×${h}×${t}`,
+      material: 'steel',
+      h, b, t,
+      props,
+      weight: selfWeight(props.A, 'steel'),
+      massPerM: massPerMetre(props.A, 'steel'),
+    });
+  }
+}
+
+const BY_ID = new Map(SECTIONS.map((s) => [s.id, s]));
+
+function section(id) {
+  const s = BY_ID.get(id);
+  if (!s) throw new Error(`Неизвестное сечение: ${id}`);
+  return s;
+}
+
+/** Сечения одного материала, от самого дешёвого (по расходу материала) к дорогому. */
+function ladder(material, opts = {}) {
+  const { minH = 0, maxH = 1e9 } = opts;
+  return SECTIONS
+    .filter((s) => s.material === material && s.h >= minH && s.h <= maxH)
+    .sort((a, b) => a.props.A - b.props.A || a.props.Wx - b.props.Wx);
+}
+
+/* ── src/core/materials.js ── */
+/**
+ * Материалы: расчётные сопротивления и коэффициенты условий работы.
+ * Дерево — СП 64.13330.2017, сталь — СП 16.13330.2017.
+ * Напряжения в МПа (Н/мм²), модули в МПа.
+ */
+
+/** Расчётные сопротивления сосны/ели, МПа. Табл. 3 СП 64.13330.2017. */
+const TIMBER_GRADES = {
+  1: { bendSmall: 14, bendMid: 15, bendWide: 16, tension: 10, shear: 1.8 },
+  2: { bendSmall: 13, bendMid: 14, bendWide: 15, tension: 7, shear: 1.8 },
+  3: { bendSmall: 8.5, bendMid: 10, bendWide: 11, tension: 0, shear: 1.6 },
+};
+
+/**
+ * Коэффициент условий работы по влажности m_в, табл. 9 СП 64.13330.2017.
+ * 1–2 — закрытые помещения и под навесом, 3 — открытый воздух, 4 — влажная среда.
+ */
+const SERVICE_CLASS_M = { 1: 1.0, 2: 1.0, 3: 0.9, 4: 0.85 };
+
+const TIMBER_DEFAULTS = {
+  grade: 2,
+  serviceClass: 3, // навес — открытый воздух
+  E: 10000,
+  G: 500,
+  Rcm90: 3.0, // местное смятие поперёк волокон
+  density: 5.0, // кН/м³
+};
+
+/**
+ * Расчётные характеристики деревянного элемента заданного сечения.
+ * @param {{h:number,b:number}} sec
+ * @param {{grade?:number,serviceClass?:number,mdl?:number}} opts
+ */
+function timberProps(sec, opts = {}) {
+  const grade = opts.grade ?? TIMBER_DEFAULTS.grade;
+  const cls = opts.serviceClass ?? TIMBER_DEFAULTS.serviceClass;
+  const mdl = opts.mdl ?? 1.0; // 1,0 — сочетание с кратковременной (снег); 0,66 — только постоянная
+  const g = TIMBER_GRADES[grade];
+  // выбор строки таблицы 3 по ширине и высоте сечения
+  let Rbase;
+  if (sec.b > 130 && sec.h > 110 && sec.h <= 500) Rbase = g.bendWide;
+  else if (sec.b > 110 && sec.h > 110 && sec.h <= 500) Rbase = g.bendMid;
+  else Rbase = g.bendSmall;
+  const mv = SERVICE_CLASS_M[cls];
+  const k = mv * mdl;
+  return {
+    material: 'timber',
+    Rbend: Rbase * k,
+    Rcompr: Rbase * k,
+    Rtens: g.tension * k,
+    Rshear: g.shear * k,
+    Rcm90: TIMBER_DEFAULTS.Rcm90 * mv,
+    E: TIMBER_DEFAULTS.E,
+    G: TIMBER_DEFAULTS.G,
+    mv, mdl, grade,
+    note: `сосна ${grade} сорт, m_в=${mv}, m_дл=${mdl}`,
+  };
+}
+
+/** Стали для гнутосварных профилей. R_y, R_un — МПа. */
+const STEELS = {
+  C245: { Ry: 240, Run: 370, label: 'С245' },
+  C255: { Ry: 240, Run: 370, label: 'С255' },
+  C345: { Ry: 315, Run: 470, label: 'С345' },
+};
+
+const STEEL_DEFAULTS = { grade: 'C245', gammaC: 1.0, E: 206000, G: 79000, density: 78.5 };
+
+function steelProps(opts = {}) {
+  const g = STEELS[opts.grade ?? STEEL_DEFAULTS.grade];
+  const gammaC = opts.gammaC ?? STEEL_DEFAULTS.gammaC;
+  return {
+    material: 'steel',
+    Ry: g.Ry,
+    Run: g.Run,
+    Rs: 0.58 * g.Ry,
+    E: STEEL_DEFAULTS.E,
+    G: STEEL_DEFAULTS.G,
+    gammaC,
+    label: g.label,
+    note: `${g.label}, γ_c=${gammaC}`,
+  };
+}
+
+/** Свойства материала по сечению и настройкам модели. */
+function propsFor(sec, opts = {}) {
+  return sec.material === 'timber' ? timberProps(sec, opts.timber) : steelProps(opts.steel);
+}
+
+
+/* ── src/core/loads.js ── */
+/**
+ * Нагрузки и их сочетания — СП 20.13330.2016.
+ * Давления в кПа (кН/м²), длины в мм, углы в градусах.
+ */
+
+/** Расчётное значение веса снегового покрова S_g, кПа. Табл. 10.1. */
+const SNOW_REGIONS = { I: 0.5, II: 1.0, III: 1.5, IV: 2.0, V: 2.5, VI: 3.0, VII: 3.5, VIII: 4.0 };
+
+/** Нормативное давление ветра w_0, кПа. Табл. 11.1. */
+const WIND_REGIONS = { Ia: 0.17, I: 0.23, II: 0.30, III: 0.38, IV: 0.48, V: 0.60, VI: 0.73, VII: 0.85 };
+
+/** k(z_e) — табл. 11.2. Типы местности: A открытая, B пригород/лес, C плотная застройка. */
+const K_TABLE = {
+  A: [[5, 0.75], [10, 1.0], [20, 1.25], [40, 1.5], [60, 1.7], [80, 1.85], [100, 2.0]],
+  B: [[5, 0.5], [10, 0.65], [20, 0.85], [40, 1.1], [60, 1.3], [80, 1.45], [100, 1.6]],
+  C: [[5, 0.4], [10, 0.4], [20, 0.55], [40, 0.8], [60, 1.0], [80, 1.15], [100, 1.25]],
+};
+/** ζ(z_e) — коэффициент пульсаций давления ветра, табл. 11.4. */
+const ZETA_TABLE = {
+  A: [[5, 0.85], [10, 0.76], [20, 0.69], [40, 0.62], [60, 0.58], [80, 0.56], [100, 0.54]],
+  B: [[5, 1.22], [10, 1.06], [20, 0.92], [40, 0.80], [60, 0.75], [80, 0.71], [100, 0.68]],
+  C: [[5, 1.78], [10, 1.78], [20, 1.50], [40, 1.26], [60, 1.14], [80, 1.06], [100, 1.0]],
+};
+
+function interp(table, z) {
+  if (z <= table[0][0]) return table[0][1];
+  for (let i = 1; i < table.length; i++) {
+    if (z <= table[i][0]) {
+      const [z0, v0] = table[i - 1], [z1, v1] = table[i];
+      return v0 + ((v1 - v0) * (z - z0)) / (z1 - z0);
+    }
+  }
+  return table[table.length - 1][1];
+}
+
+/** Кровельные покрытия: собственный вес по скату, кН/м², и предельный пролёт обрешётки, мм. */
+const ROOFING = {
+  pc6: { label: 'Поликарбонат сотовый 6 мм', g: 0.013, maxBatten: 600 },
+  pc8: { label: 'Поликарбонат сотовый 8 мм', g: 0.015, maxBatten: 700 },
+  pc10: { label: 'Поликарбонат сотовый 10 мм', g: 0.017, maxBatten: 900 },
+  pcm4: { label: 'Поликарбонат монолитный 4 мм', g: 0.048, maxBatten: 700 },
+  prof8: { label: 'Профлист С8–С21, 0,5 мм', g: 0.05, maxBatten: 800 },
+  prof35: { label: 'Профлист НС35–Н60, 0,7 мм', g: 0.08, maxBatten: 1500 },
+  metal: { label: 'Металлочерепица', g: 0.05, maxBatten: 350 },
+  soft: { label: 'Мягкая черепица по OSB-9', g: 0.20, maxBatten: 250 },
+};
+
+/** μ для односкатного покрытия. Прил. Б.1 СП 20. */
+function snowMu(alphaDeg) {
+  if (alphaDeg <= 30) return 1.0;
+  if (alphaDeg >= 60) return 0.0;
+  return (60 - alphaDeg) / 30;
+}
+
+/**
+ * Снеговой мешок у стены дома — прил. Б, схема Б.10 (перепад высот).
+ * @param {number} hDrop перепад высот кровля дома / навес, мм
+ * @param {number} Sg расчётный вес снегового покрова, кПа
+ * @returns {{mu:number, length:number}} μ у стены и длина зоны намёта, мм
+ */
+function snowDrift(hDrop, Sg) {
+  const gammaSnow = 2.0; // кН/м³, удельный вес снега
+  const h = Math.max(0, hDrop) / 1000;
+  const mu = Math.min(4.0, (2 * h * gammaSnow) / Sg);
+  const length = Math.min(16000, Math.max(5000, 2 * hDrop));
+  return { mu: Math.max(1, mu), length };
+}
+
+/**
+ * Эпюра снега вдоль ската: функция горизонтальной координаты от стены (мм) → кПа.
+ * Расчётное значение; нормативное = 0,7 от расчётного (п. 10.12).
+ */
+function snowProfile(site, alphaDeg) {
+  const Sg = SNOW_REGIONS[site.snowRegion];
+  const muRoof = snowMu(alphaDeg) * (site.ce ?? 1.0) * (site.ct ?? 1.0);
+  if (!site.drift) return { at: () => muRoof * Sg, muWall: muRoof, driftLength: 0, Sg };
+  const d = snowDrift(site.driftH ?? 1200, Sg);
+  const muWall = Math.max(muRoof, d.mu) * (site.ct ?? 1.0);
+  return {
+    Sg,
+    muWall,
+    driftLength: d.length,
+    at(y) {
+      const k = Math.min(1, Math.max(0, y) / d.length);
+      return (muWall - (muWall - muRoof) * k) * Sg;
+    },
+  };
+}
+
+/**
+ * Ветровое давление на уровне кровли навеса.
+ * w = w_0 · k(z_e) · c · (1 + ζ·ν)  — п. 11.1.
+ * @returns {{up:number, down:number, lateral:number, wm:number}} кПа, расчётные значения
+ */
+function windPressure(site, zMm) {
+  const w0 = WIND_REGIONS[site.windRegion];
+  const z = Math.max(2, zMm / 1000);
+  const k = interp(K_TABLE[site.terrain] ?? K_TABLE.B, z);
+  const zeta = interp(ZETA_TABLE[site.terrain] ?? ZETA_TABLE.B, z);
+  const nu = 0.95; // коэффициент пространственной корреляции для малых сооружений
+  const dyn = 1 + zeta * nu;
+  const wm = w0 * k;
+  const gammaF = 1.4;
+  const cUp = site.cUp ?? 1.4; // отсос сверху
+  const cUnder = site.cUnder ?? 0.8; // поддув снизу
+  const cDown = site.cDown ?? 0.5; // прижимающая составляющая при другом направлении
+  return {
+    wm,
+    dyn,
+    up: w0 * k * dyn * (cUp + cUnder) * gammaF,
+    down: w0 * k * dyn * cDown * gammaF,
+    lateral: w0 * k * dyn * 1.4 * gammaF, // на боковую проекцию столба/фризовой доски
+  };
+}
+
+/** Коэффициенты надёжности по нагрузке, табл. 7.1 СП 20. */
+const GAMMA_F = {
+  steel: 1.05,
+  timber: 1.1,
+  roofing: 1.2,
+  relieving: 0.9, // постоянная, когда она разгружает (проверка на отрыв)
+};
+
+/**
+ * Сочетания нагрузок. Каждое возвращает множители для составляющих.
+ * ULS — по прочности и устойчивости, SLS — по прогибам (нормативные нагрузки).
+ */
+const COMBOS = [
+  { id: 'ULS-1', label: 'G + снег', kind: 'uls', dead: null, snow: 1.0, wind: 0 },
+  { id: 'ULS-2', label: 'G + снег + 0,9·ветер↓', kind: 'uls', dead: null, snow: 1.0, wind: 0.9 },
+  { id: 'ULS-3', label: '0,9·G − ветер↑ (отрыв)', kind: 'uplift', dead: GAMMA_F.relieving, snow: 0, wind: -1.0 },
+  { id: 'SLS', label: 'G_н + S_н (прогибы)', kind: 'sls', dead: 1.0, snow: 0.7, wind: 0 },
+];
+
+/* ── src/core/beam.js ── */
+/**
+ * Балочный решатель: МКЭ, элемент Тимошенко (учитывает сдвиговые деформации).
+ *
+ * Система координат: x вдоль оси балки, прогиб v и нагрузки — положительные вниз.
+ * Единицы: мм, Н, Н/мм, МПа, мм⁴.
+ *
+ * Опоры — шарнирные (v = 0), число и положение произвольные, консоли с любой стороны.
+ * Эпюры M и Q считаются статикой по найденным реакциям, а не по узловым усилиям МКЭ,
+ * поэтому не зависят от густоты сетки.
+ */
+
+/** Симметричная ленточная матрица: хранится верхняя лента. */
+function bandedSolve(n, bw, band, f) {
+  const A = band;
+  const idx = (i, j) => i * (bw + 1) + (j - i);
+  // LDL^T
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j <= Math.min(i + bw, n - 1); j++) {
+      let s = A[idx(i, j)];
+      for (let k = Math.max(0, i - bw, j - bw); k < i; k++) {
+        s -= A[idx(k, i)] * A[idx(k, j)] * A[idx(k, k)];
+      }
+      if (i === j) A[idx(i, i)] = s;
+      else A[idx(i, j)] = s / A[idx(i, i)];
+    }
+  }
+  const y = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = f[i];
+    for (let k = Math.max(0, i - bw); k < i; k++) s -= A[idx(k, i)] * A[idx(k, k)] * y[k];
+    y[i] = s / A[idx(i, i)];
+  }
+  const u = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--) {
+    let s = y[i];
+    for (let k = i + 1; k <= Math.min(i + bw, n - 1); k++) s -= A[idx(i, k)] * u[k];
+    u[i] = s;
+  }
+  return u;
+}
+
+function elementStiffness(Le, EI, GAs) {
+  const phi = GAs > 0 ? (12 * EI) / (GAs * Le * Le) : 0;
+  const c = EI / (Le * Le * Le * (1 + phi));
+  const L = Le;
+  return [
+    [12 * c, 6 * L * c, -12 * c, 6 * L * c],
+    [6 * L * c, (4 + phi) * L * L * c, -6 * L * c, (2 - phi) * L * L * c],
+    [-12 * c, -6 * L * c, 12 * c, -6 * L * c],
+    [6 * L * c, (2 - phi) * L * L * c, -6 * L * c, (4 + phi) * L * L * c],
+  ];
+}
+
+/**
+ * @param {object} o
+ * @param {number} o.length длина балки, мм
+ * @param {number[]} o.supports координаты шарнирных опор, мм
+ * @param {number} o.EI жёсткость на изгиб, Н·мм²
+ * @param {number} o.GAs сдвиговая жёсткость, Н (0 — не учитывать сдвиг)
+ * @param {(x:number)=>number} [o.q] распределённая нагрузка, Н/мм, вниз
+ * @param {{x:number,P:number}[]} [o.point] сосредоточенные силы, Н, вниз
+ * @param {number} [o.nEl] минимальное число конечных элементов
+ */
+function solveBeam(o) {
+  const { length, EI, GAs = 0 } = o;
+  const q = o.q ?? (() => 0);
+  const point = o.point ?? [];
+  const nEl = o.nEl ?? 120;
+
+  // --- сетка: равномерная плюс узлы в опорах и под силами
+  const set = new Set([0, length]);
+  for (let i = 1; i < nEl; i++) set.add((length * i) / nEl);
+  for (const s of o.supports) set.add(Math.min(length, Math.max(0, s)));
+  for (const p of point) set.add(Math.min(length, Math.max(0, p.x)));
+  const X = [...set].sort((a, b) => a - b).filter((v, i, a) => i === 0 || v - a[i - 1] > 1e-6);
+  const nn = X.length;
+  const ndof = 2 * nn;
+  const bw = 3;
+
+  const band = new Float64Array(ndof * (bw + 1));
+  const F = new Float64Array(ndof);
+  const idx = (i, j) => i * (bw + 1) + (j - i);
+  const elems = [];
+
+  for (let e = 0; e < nn - 1; e++) {
+    const Le = X[e + 1] - X[e];
+    const k = elementStiffness(Le, EI, GAs);
+    const dofs = [2 * e, 2 * e + 1, 2 * e + 2, 2 * e + 3];
+    elems.push({ k, dofs, Le, x0: X[e] });
+    for (let a = 0; a < 4; a++) {
+      for (let b = a; b < 4; b++) {
+        const i = dofs[a], j = dofs[b];
+        const [lo, hi] = i <= j ? [i, j] : [j, i];
+        band[idx(lo, hi)] += k[a][b];
+      }
+    }
+    // распределённая нагрузка: интегрируем q по элементу (3 точки Симпсона)
+    const wm = (q(X[e]) + 4 * q(X[e] + Le / 2) + q(X[e + 1])) / 6;
+    F[dofs[0]] += (wm * Le) / 2;
+    F[dofs[1]] += (wm * Le * Le) / 12;
+    F[dofs[2]] += (wm * Le) / 2;
+    F[dofs[3]] -= (wm * Le * Le) / 12;
+  }
+  const Fload = Float64Array.from(F);
+  for (const p of point) {
+    let n = 0;
+    for (let i = 0; i < nn; i++) if (Math.abs(X[i] - p.x) < Math.abs(X[n] - p.x)) n = i;
+    F[2 * n] += p.P;
+    Fload[2 * n] += p.P;
+  }
+
+  // --- закрепления: v = 0
+  const fixed = [];
+  for (const s of o.supports) {
+    let n = 0;
+    for (let i = 0; i < nn; i++) if (Math.abs(X[i] - s) < Math.abs(X[n] - s)) n = i;
+    fixed.push({ node: n, dof: 2 * n, x: X[n] });
+  }
+  for (const fx of fixed) {
+    const d = fx.dof;
+    for (let j = Math.max(0, d - bw); j <= Math.min(ndof - 1, d + bw); j++) {
+      if (j < d) band[idx(j, d)] = 0;
+      else if (j > d) band[idx(d, j)] = 0;
+    }
+    band[idx(d, d)] = 1;
+    F[d] = 0;
+  }
+
+  const u = bandedSolve(ndof, bw, band, F);
+
+  // --- реакции
+  const KU = new Float64Array(ndof);
+  for (const el of elems) {
+    for (let a = 0; a < 4; a++) {
+      let s = 0;
+      for (let b = 0; b < 4; b++) s += el.k[a][b] * u[el.dofs[b]];
+      KU[el.dofs[a]] += s;
+    }
+  }
+  // R > 0 — усилие, которое балка передаёт на опору (реакция направлена вверх)
+  const reactions = fixed.map((fx) => ({ x: fx.x, R: Fload[fx.dof] - KU[fx.dof] }));
+
+  // --- эпюры статикой
+  const nSample = 401;
+  const xs = new Float64Array(nSample);
+  const V = new Float64Array(nSample);
+  const M = new Float64Array(nSample);
+  const dx = length / (nSample - 1);
+  // I0 = ∫q dt, I1 = ∫q·t dt — момент считается точной статикой,
+  // а не интегрированием эпюры Q (иначе скачки в опорах дают ошибку ~ΔR·dx/2)
+  let I0 = 0, I1 = 0;
+  for (let i = 0; i < nSample; i++) {
+    const x = i * dx;
+    xs[i] = x;
+    if (i > 0) {
+      const xa = x - dx, xm = xa + dx / 2;
+      I0 += ((q(xa) + 4 * q(xm) + q(x)) / 6) * dx;
+      I1 += ((q(xa) * xa + 4 * q(xm) * xm + q(x) * x) / 6) * dx;
+    }
+    let v = -I0;
+    let m = -(x * I0 - I1);
+    for (const r of reactions) if (r.x <= x + 1e-9) { v += r.R; m += r.R * (x - r.x); }
+    for (const p of point) if (p.x <= x + 1e-9) { v -= p.P; m -= p.P * (x - p.x); }
+    V[i] = v;
+    M[i] = m;
+  }
+
+  // --- прогибы: интерполяция узловых значений на ту же сетку
+  const w = new Float64Array(nSample);
+  let n0 = 0;
+  for (let i = 0; i < nSample; i++) {
+    const x = xs[i];
+    while (n0 < nn - 2 && X[n0 + 1] < x) n0++;
+    const xa = X[n0], xb = X[n0 + 1];
+    const t = (x - xa) / (xb - xa);
+    const va = u[2 * n0], ta = u[2 * n0 + 1], vb = u[2 * n0 + 2], tb = u[2 * n0 + 3];
+    const Le = xb - xa;
+    const h00 = 2 * t ** 3 - 3 * t ** 2 + 1, h10 = t ** 3 - 2 * t ** 2 + t;
+    const h01 = -2 * t ** 3 + 3 * t ** 2, h11 = t ** 3 - t ** 2;
+    w[i] = h00 * va + h10 * Le * ta + h01 * vb + h11 * Le * tb;
+  }
+
+  let maxM = 0, maxV = 0;
+  for (let i = 0; i < nSample; i++) {
+    if (Math.abs(M[i]) > Math.abs(maxM)) maxM = M[i];
+    if (Math.abs(V[i]) > Math.abs(maxV)) maxV = V[i];
+  }
+
+  return { x: xs, V, M, w, reactions, maxM, maxV, nodes: X, u };
+}
+
+/**
+ * Максимальные прогибы по участкам: между соседними опорами и на консолях.
+ * @returns {{spans:{x0:number,x1:number,f:number,limitLength:number}[]}}
+ */
+function deflectionSpans(res, length, supports) {
+  const sup = [...supports].sort((a, b) => a - b);
+  const spans = [];
+  const pick = (x0, x1) => {
+    let f = 0;
+    for (let i = 0; i < res.x.length; i++) {
+      const x = res.x[i];
+      if (x < x0 - 1e-6 || x > x1 + 1e-6) continue;
+      if (Math.abs(res.w[i]) > Math.abs(f)) f = res.w[i];
+    }
+    return f;
+  };
+  if (sup.length && sup[0] > 1) spans.push({ kind: 'консоль', x0: 0, x1: sup[0], f: Math.abs(pick(0, sup[0])), limitLength: 2 * sup[0] });
+  for (let i = 0; i + 1 < sup.length; i++) {
+    spans.push({ kind: 'пролёт', x0: sup[i], x1: sup[i + 1], f: Math.abs(pick(sup[i], sup[i + 1])), limitLength: sup[i + 1] - sup[i] });
+  }
+  const last = sup[sup.length - 1];
+  if (last !== undefined && length - last > 1) {
+    spans.push({ kind: 'консоль', x0: last, x1: length, f: Math.abs(pick(last, length)), limitLength: 2 * (length - last) });
+  }
+  return { spans };
+}
+
+/* ── src/core/checks.js ── */
+/**
+ * Проверки несущей способности.
+ * Дерево — СП 64.13330.2017, сталь — СП 16.13330.2017.
+ *
+ * Каждая проверка возвращает единый объект:
+ *   { name, value, limit, unit, U, formula, note }
+ * где U = value / limit — коэффициент использования.
+ */
+
+const chk = (name, value, limit, unit, formula, note) => ({
+  name,
+  value,
+  limit,
+  unit,
+  U: limit > 0 ? value / limit : 0,
+  formula,
+  note,
+});
+
+/* ─────────────────────────── ДЕРЕВО ─────────────────────────── */
+
+function timberBending(M, W, mat) {
+  return chk('Изгиб', Math.abs(M) / W, mat.Rbend, 'МПа', 'σ = M / W ≤ R_и·m_в·m_дл');
+}
+
+function timberShear(V, sec, mat) {
+  const tau = (1.5 * Math.abs(V)) / (sec.b * sec.h);
+  return chk('Скалывание', tau, mat.Rshear, 'МПа', 'τ = 1,5·Q/(b·h) ≤ R_ск');
+}
+
+/**
+ * Сжатие с изгибом, п. 7.17 СП 64: N/(A·R_с) + M_д/(W·R_и) ≤ 1,
+ * где M_д = M/ξ, ξ = 1 − λ²·N/(3000·A·R_с).
+ */
+function timberCombined(N, M, sec, mat, lambda) {
+  const A = sec.b * sec.h;
+  const W = (sec.b * sec.h * sec.h) / 6;
+  const Rc = mat.Rcompr;
+  let xi = 1 - (lambda * lambda * Math.abs(N)) / (3000 * A * Rc);
+  if (xi < 0.05) xi = 0.05;
+  const Md = Math.abs(M) / xi;
+  const value = Math.abs(N) / (A * Rc) + Md / (W * mat.Rbend);
+  return chk('Сжатие с изгибом', value, 1.0, '', 'N/(A·R_с) + M_д/(W·R_и) ≤ 1',
+    `ξ = ${xi.toFixed(3)}, λ = ${lambda.toFixed(0)}`);
+}
+
+/**
+ * Устойчивость плоской формы деформирования, п. 7.4.2 СП 64:
+ * σ ≤ φ_м·R_и, φ_м = 140·b²·k_ф/(l_р·h).
+ * l_р — расстояние между закреплениями СЖАТОЙ кромки.
+ */
+function timberLateral(M, sec, mat, lr, kf = 1.75) {
+  if (lr <= 0) return null;
+  const W = (sec.b * sec.h * sec.h) / 6;
+  const phiM = Math.min(1, (140 * sec.b * sec.b * kf) / (lr * sec.h));
+  return chk('Устойчивость плоской формы', Math.abs(M) / W, phiM * mat.Rbend, 'МПа',
+    'σ ≤ φ_м·R_и,  φ_м = 140·b²·k_ф/(l_р·h)',
+    `φ_м = ${phiM.toFixed(2)}, l_р = ${Math.round(lr)} мм`);
+}
+
+/** Смятие поперёк волокон на опоре. */
+function timberBearing(R, sec, mat, supportLength) {
+  const value = Math.abs(R) / (sec.b * supportLength);
+  return chk('Смятие на опоре', value, mat.Rcm90, 'МПа', 'σ_см = R/(b·l_оп) ≤ R_см,90',
+    `площадка ${supportLength} мм`);
+}
+
+/* ─────────────────────────── СТАЛЬ ─────────────────────────── */
+
+function steelBending(M, W, mat, c1 = 1.0) {
+  return chk('Изгиб', Math.abs(M) / (c1 * W), mat.Ry * mat.gammaC, 'МПа',
+    'M/W_n,min ≤ R_y·γ_c');
+}
+
+/** τ = Q·S/(I·t_w) при t_w = 2t; для замкнутого профиля равносильно Q/A_стенок. */
+function steelShear(V, props, mat) {
+  const tau = Math.abs(V) / props.As;
+  return chk('Срез', tau, mat.Rs * mat.gammaC, 'МПа', 'τ = Q/A_стенок ≤ R_s·γ_c');
+}
+
+/**
+ * Коэффициент устойчивости при центральном сжатии, п. 7.1.3 СП 16.
+ * Тип кривой «b» (гнутосварные замкнутые профили): α = 0,04, β = 0,09.
+ */
+function phiBuckling(lambda, Ry, E = 206000, curve = 'b') {
+  const AB = { a: [0.03, 0.06], b: [0.04, 0.09], c: [0.04, 0.14] }[curve];
+  const lb = lambda * Math.sqrt(Ry / E);
+  if (lb <= 0.4) return { phi: 1, lb };
+  if (lb > 3.8) return { phi: 332 / (lb * lb * (51 - lb)), lb };
+  const delta = 9.87 * (1 - AB[0] + AB[1] * lb) + lb * lb;
+  const phi = (0.5 * (delta - Math.sqrt(delta * delta - 39.48 * lb * lb))) / (lb * lb);
+  return { phi: Math.min(1, phi), lb };
+}
+
+/** Устойчивость центрально-сжатого стержня. */
+function steelStability(N, props, mat, lef, axis = 'y') {
+  const i = axis === 'y' ? props.iy : props.ix;
+  const lambda = lef / i;
+  const { phi, lb } = phiBuckling(lambda, mat.Ry, mat.E);
+  const c = chk('Устойчивость столба', Math.abs(N), phi * props.A * mat.Ry * mat.gammaC, 'Н',
+    'N ≤ φ·A·R_y·γ_c', `λ = ${lambda.toFixed(0)}, λ̄ = ${lb.toFixed(2)}, φ = ${phi.toFixed(3)}`);
+  c.lambda = lambda;
+  c.phi = phi;
+  c.lb = lb;
+  return c;
+}
+
+/**
+ * Сжатие с изгибом. Вместо таблицы φ_e (прил. Д.3 СП 16) используется
+ * взаимодействие с усилением момента по деформированной схеме —
+ * результат заведомо не менее консервативен, чем по φ_e.
+ */
+function steelBeamColumn(N, M, props, mat, lef, axis = 'x') {
+  const i = axis === 'x' ? props.ix : props.iy;
+  const I = axis === 'x' ? props.Ix : props.Iy;
+  const W = axis === 'x' ? props.Wx : props.Wy;
+  const lambda = lef / i;
+  const { phi } = phiBuckling(lambda, mat.Ry, mat.E);
+  const Ncr = (Math.PI * Math.PI * mat.E * I) / (lef * lef);
+  const amp = 1 / Math.max(0.2, 1 - Math.abs(N) / Ncr);
+  const Rd = mat.Ry * mat.gammaC;
+  const value = Math.abs(N) / (phi * props.A * Rd) + (Math.abs(M) * amp) / (W * Rd);
+  const c = chk('Сжатие с изгибом', value, 1.0, '',
+    'N/(φ·A·R_y·γ_c) + M·η/(W·R_y·γ_c) ≤ 1',
+    `φ = ${phi.toFixed(3)}, η = ${amp.toFixed(2)}, N_cr = ${(Ncr / 1000).toFixed(0)} кН`);
+  c.phi = phi;
+  c.lambda = lambda;
+  return c;
+}
+
+/** Предельная гибкость сжатого элемента: λ_u = 180 − 60α. */
+function steelSlenderness(lambda, alpha) {
+  const a = Math.min(1, Math.max(0.5, alpha));
+  return chk('Гибкость', lambda, 180 - 60 * a, '', 'λ ≤ 180 − 60·α', `α = ${a.toFixed(2)}`);
+}
+
+/** Местная устойчивость стенки замкнутого профиля, табл. 9 СП 16. */
+function steelLocalBuckling(sec, mat, lb = 0) {
+  const bef = sec.h - 2 * (sec.t ?? 0);
+  const t = sec.t ?? 1;
+  const limit = Math.min(1.9, 1.2 + 0.35 * lb) * Math.sqrt(mat.E / mat.Ry);
+  return chk('Местная устойчивость стенки', bef / t, limit, '',
+    'b_ef/t ≤ (1,2 + 0,35·λ̄)·√(E/R_y)');
+}
+
+/* ─────────────────────── ОБЩИЕ ─────────────────────── */
+
+/**
+ * Прогибы. Предельные значения — табл. 19 СП 64 и прил. Д СП 20.
+ * @param {{kind:string,f:number,limitLength:number}[]} spans
+ * @param {number} ratio знаменатель: 200 для стропил и прогонов, 150 для обрешётки
+ */
+function deflectionCheck(spans, ratio) {
+  let worst = null;
+  for (const s of spans) {
+    const limit = s.limitLength / ratio;
+    const c = chk('Прогиб', s.f, limit, 'мм', `f ≤ l/${ratio}`,
+      `${s.kind} ${Math.round(s.x1 - s.x0)} мм${s.kind === 'консоль' ? ' (расчётная длина 2a)' : ''}`);
+    if (!worst || c.U > worst.U) worst = c;
+  }
+  return worst;
+}
+
+/** Худшая проверка из набора и общий коэффициент использования. */
+function worstOf(checks) {
+  const list = checks.filter(Boolean);
+  const U = list.reduce((m, c) => Math.max(m, c.U), 0);
+  const worst = list.find((c) => c.U === U) ?? null;
+  return { checks: list, U, worst };
+}
+
+/* ───────────── КРЕПЛЕНИЕ К ГАЗОБЕТОННОЙ СТЕНЕ ───────────── */
+
+/**
+ * Расчётное сопротивление сжатию кладки из ячеистобетонных блоков на клею, МПа.
+ * Ориентир по СП 15.13330; уточняется по данным производителя блоков.
+ */
+const AERATED_R = { 'B2.0': 0.85, 'B2.5': 1.0, 'B3.5': 1.3, 'B5.0': 1.7 };
+
+/** Смятие газоблока под шайбой сквозной шпильки (растяжение от стены). */
+function boltPlateBearing(N, plateSize, boltD, blockClass) {
+  const R = AERATED_R[blockClass] ?? 1.0;
+  const area = plateSize * plateSize - (Math.PI * boltD * boltD) / 4;
+  return chk('Смятие газоблока под шайбой', Math.abs(N) / area, R * 1.2, 'МПа',
+    'σ = N/A_шайбы ≤ 1,2·R_кладки',
+    `шайба ${plateSize}×${plateSize} мм, блок ${blockClass} → R = ${R} МПа`);
+}
+
+/** Смятие газоблока стенкой отверстия от поперечной силы на шпильку. */
+function boltHoleBearing(V, boltD, wallThickness, blockClass) {
+  const R = AERATED_R[blockClass] ?? 1.0;
+  return chk('Смятие газоблока в отверстии', Math.abs(V) / (boltD * wallThickness), R * 1.2, 'МПа',
+    'σ = Q/(d·t_стены) ≤ 1,2·R_кладки',
+    `М${boltD} через стену ${wallThickness} мм`);
+}
+
+/** Срез шпильки. R_bs = 0,4·R_bun (СП 16, табл. Д.5): класс 5.8 → 200 МПа, 8.8 → 320 МПа. */
+function boltShear(V, boltD, grade = '5.8', planes = 1) {
+  const Rbs = { '4.8': 160, '5.8': 200, '8.8': 320 }[grade] ?? 200;
+  const As = { 10: 58, 12: 84.3, 16: 157, 20: 245, 24: 353 }[boltD] ?? (Math.PI * boltD * boltD) / 4 * 0.78;
+  return chk('Срез шпильки', Math.abs(V) / (As * planes), Rbs, 'МПа',
+    'τ = Q/A_ш ≤ R_bs', `М${boltD} класса ${grade}, A_нетто = ${As} мм²`);
+}
+
+/* ── src/core/model.js ── */
+/** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
+
+/**
+ * Схема опирания:
+ *   ─ у дома: ряд стальных столбов, притянутых к газоблоку сквозными шпильками,
+ *     сверху на них лежит обвязочная доска (её часто называют мауэрлатом, но
+ *     мауэрлат лежит на кладке — здесь это прогон по столбам у стены);
+ *   ─ снаружи: ряд отдельно стоящих столбов и прогон по ним;
+ *   ─ стропила опираются на оба прогона, за наружный уходят консолью.
+ */
+function defaultModel() {
+  const B = 6000, L = 4000, a = 800;
+  const nRafters = 11, nPosts = 4, nWallPosts = 5;
+  return {
+    geom: {
+      B,                // ширина навеса вдоль стены
+      L,                // от оси стеновых столбов до оси наружных
+      a,                // свес за наружные столбы
+      alpha: 8,         // уклон, °
+      postHeight: 2500, // от верха фундамента до низа наружного прогона
+      driftH: 1200,     // перепад высот кровля дома / навес
+    },
+    site: {
+      // Воронеж: по картам прил. Е СП 20.13330.2016 — снег III, ветер II
+      snowRegion: 'III',
+      windRegion: 'II',
+      terrain: 'B',
+      drift: true,
+      ce: 1.0, ct: 1.0,
+      cUp: 1.4, cUnder: 0.8, cDown: 0.5,
+    },
+    roofing: 'prof8',
+    rafters: {
+      xs: Array.from({ length: nRafters }, (_, i) => (B * i) / (nRafters - 1)),
+      sectionId: 't50x250',
+    },
+    posts: {
+      xs: Array.from({ length: nPosts }, (_, i) => (B * i) / (nPosts - 1)),
+      sectionId: 's100x100x3',
+      mu: 2.0,
+    },
+    purlin: { sectionId: 's80x140x4' },
+    /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
+    wallPosts: {
+      xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
+      sectionId: 's60x60x3',
+      mu: 1.0,            // раскреплён стеной по всей высоте
+      boltCount: 3,       // шпилек на столб
+      boltDiameter: 16,   // М16
+      boltGrade: '5.8',
+      plateSize: 120,     // квадратная шайба-пластина изнутри, мм
+      blockClass: 'B2.5', // класс газоблока по прочности на сжатие
+      wallThickness: 300,
+    },
+    /** Обвязочная доска поверх стеновых столбов — по ней идут стропила. */
+    wallPurlin: { sectionId: 't50x200' },
+    battens: { sectionId: 't50x50', spacing: 600 },
+    opts: {
+      timber: { grade: 2, serviceClass: 3 },
+      steel: { grade: 'C245', gammaC: 1.0 },
+      bearingLength: 100,
+      postEccentricity: 50,
+      stockLength: 6000, // стандартная длина доски и трубы в продаже
+    },
+    /**
+     * Цены — ориентировочные, подставьте свои.
+     * Дерево считается по объёму, металл по массе, кровля по площади,
+     * метизы поштучно.
+     */
+    prices: {
+      timberM3: 25000,   // ₽ за м³ обрезной доски
+      steelKg: 120,      // ₽ за кг профильной трубы
+      roofingM2: 600,    // ₽ за м² покрытия
+      fastenerPc: 150,   // ₽ за комплект шпилька + пластина + гайки
+      currency: '₽',
+    },
+  };
+}
+
+/** Равномерно распределить n элементов по ширине B. */
+function spread(B, n) {
+  return Array.from({ length: n }, (_, i) => (B * i) / (n - 1));
+}
+
+/** Грузовые ширины: половина расстояния до соседей слева и справа. */
+function tributaries(xs, B) {
+  const s = [...xs].sort((p, q) => p - q);
+  return s.map((x, i) => {
+    const left = i === 0 ? 0 : (x - s[i - 1]) / 2;
+    const right = i === s.length - 1 ? 0 : (s[i + 1] - x) / 2;
+    const edgeLeft = i === 0 ? Math.max(0, x - 0) : 0;
+    const edgeRight = i === s.length - 1 ? Math.max(0, B - x) : 0;
+    return left + right + edgeLeft + edgeRight;
+  });
+}
+
+/* ── src/core/share.js ── */
+/**
+ * Упаковка модели в ссылку.
+ *
+ * В URL кладётся не вся модель, а только отличия от значений по умолчанию —
+ * тогда ссылка на слегка изменённый расчёт остаётся короткой, а новые поля,
+ * появившиеся в программе позже, подставятся из текущих умолчаний.
+ */
+
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** Разница между моделью и эталоном: только изменённые листья и массивы целиком. */
+function diffModel(model, base = defaultModel()) {
+  const out = {};
+  for (const [k, v] of Object.entries(model)) {
+    const b = base?.[k];
+    if (isPlain(v) && isPlain(b)) {
+      const d = diffModel(v, b);
+      if (Object.keys(d).length) out[k] = d;
+    } else if (JSON.stringify(v) !== JSON.stringify(b)) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** Накладывает разницу на эталон. Неизвестные ключи игнорируются. */
+function mergeModel(patch, base = defaultModel()) {
+  const out = Array.isArray(base) ? [...base] : { ...base };
+  if (!isPlain(patch)) return out;
+  for (const [k, v] of Object.entries(patch)) {
+    if (!(k in out)) continue;
+    out[k] = isPlain(v) && isPlain(out[k]) ? mergeModel(v, out[k]) : v;
+  }
+  return out;
+}
+
+function toBase64Url(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromBase64Url(code) {
+  const b64 = code.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/** Модель → строка для адресной строки. */
+function encodeModel(model) {
+  return toBase64Url(JSON.stringify(diffModel(model)));
+}
+
+/** Строка из адресной строки → модель. null, если строка испорчена. */
+function decodeModel(code) {
+  try {
+    const patch = JSON.parse(fromBase64Url(code));
+    if (!isPlain(patch)) return null;
+    return mergeModel(patch);
+  } catch {
+    return null;
+  }
+}
+
+/* ── src/core/analysis.js ── */
+/**
+ * Сборка расчёта: передача нагрузок по цепочке и проверки всех элементов.
+ *
+ * кровля → обрешётка → стропила → { прогон | брус у стены } → столбы → фундамент
+ *
+ * Единицы: мм, Н, Н/мм (= кН/м), МПа, кПа.
+ */
+
+
+
+
+
+
+const deg = (d) => (d * Math.PI) / 180;
+
+/** Жёсткости сечения для решателя. */
+function stiffness(sec, mat) {
+  const p = sec.props;
+  return { EI: mat.E * p.Ix, GAs: mat.G * p.As };
+}
+
+/** Собственный вес кровельного «пирога» без стропил, кН/м² по скату. */
+function roofDead(model) {
+  const roof = ROOFING[model.roofing];
+  const batten = section(model.battens.sectionId);
+  const gBatten = (batten.weight * 1000) / model.battens.spacing; // кН/м / мм → кН/м²
+  return { roof: roof.g, batten: gBatten, total: roof.g + gBatten, def: roof };
+}
+
+/* ───────────────────────── СТРОПИЛА ───────────────────────── */
+
+function analyseRafter(model, x, trib, ctx) {
+  const { geom } = model;
+  const sec = section(model.rafters.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const { EI, GAs } = stiffness(sec, mat);
+  const al = deg(geom.alpha), ca = Math.cos(al), sa = Math.sin(al);
+
+  const Ls = (geom.L + geom.a) / ca;      // полная длина по скату
+  const xSup = geom.L / ca;               // опора на прогон
+  const supports = [0, xSup];
+  const gammaDead = sec.material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel;
+
+  // погонные нагрузки, Н/мм, перпендикулярно скату
+  const lineRoofN = (ctx.dead.roof * trib) / 1000;
+  const lineBattenN = (ctx.dead.batten * trib) / 1000;
+  const lineSelfN = sec.weight;
+  const deadPerpN = (lineRoofN + lineBattenN + lineSelfN) * ca;
+  const deadPerpD = (GAMMA_F.roofing * lineRoofN + gammaDead * (lineBattenN + lineSelfN)) * ca;
+
+  const snowAt = (xs) => (ctx.snow.at(xs * ca) * trib) / 1000 * ca * ca;
+  const windUpPerp = (ctx.wind.up * trib) / 1000;
+  const windDownPerp = (ctx.wind.down * trib) / 1000;
+
+  const combos = {
+    'ULS-1': (xs) => deadPerpD + snowAt(xs),
+    'ULS-2': (xs) => deadPerpD + snowAt(xs) + 0.9 * windDownPerp,
+    'ULS-3': () => GAMMA_F.relieving * deadPerpN - windUpPerp,
+    SLS: (xs) => deadPerpN + 0.7 * snowAt(xs),
+  };
+
+  const res = {};
+  for (const [id, q] of Object.entries(combos)) {
+    res[id] = solveBeam({ length: Ls, supports, EI, GAs, q, nEl: 120 });
+  }
+
+  // огибающая по ULS
+  let Mmax = 0, Vmax = 0, Mcant = 0;
+  const iSup = Math.round((xSup / Ls) * (res['ULS-1'].x.length - 1));
+  for (const id of ['ULS-1', 'ULS-2', 'ULS-3']) {
+    const r = res[id];
+    for (let i = 0; i < r.M.length; i++) {
+      if (Math.abs(r.M[i]) > Math.abs(Mmax)) Mmax = r.M[i];
+      if (Math.abs(r.V[i]) > Math.abs(Vmax)) Vmax = r.V[i];
+    }
+    if (Math.abs(r.M[iSup]) > Math.abs(Mcant)) Mcant = r.M[iSup];
+  }
+
+  // осевое сжатие вдоль стропила: вертикальная нагрузка × sin α, накапливается
+  // к нижней опоре (внешние реакции при этом вертикальные — распора нет)
+  const totalPerp = res['ULS-1'].reactions.reduce((sum, r) => sum + r.R, 0);
+  const N = totalPerp * (sa / ca);
+
+  const spans = deflectionSpans(res.SLS, Ls, supports).spans;
+  const cantLen = Ls - xSup;
+  const lambda = xSup / (sec.material === 'timber' ? sec.h / Math.sqrt(12) : sec.props.ix);
+
+  const checks = [];
+  if (sec.material === 'timber') {
+    checks.push(timberBending(Mmax, sec.props.Wx, mat));
+    checks.push(timberShear(Vmax, sec, mat));
+    checks.push(timberCombined(N, Mmax, sec, mat, lambda));
+    if (cantLen > 200) checks.push(timberLateral(Mcant, sec, mat, cantLen));
+    checks.push(timberBearing(res['ULS-1'].reactions[1].R, sec, mat, model.opts.bearingLength));
+  } else {
+    checks.push(steelBending(Mmax, sec.props.Wx, mat));
+    checks.push(steelShear(Vmax, sec.props, mat));
+    checks.push(steelBeamColumn(N, Mmax, sec.props, mat, xSup, 'x'));
+    checks.push(steelLocalBuckling(sec, mat, 0));
+  }
+  checks.push(deflectionCheck(spans, 200));
+
+  const w = worstOf(checks);
+  return {
+    x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans,
+    res,
+    reactions: {
+      wall: res['ULS-1'].reactions[0].R,
+      purlin: res['ULS-1'].reactions[1].R,
+      wallUplift: res['ULS-3'].reactions[0].R,
+      purlinUplift: res['ULS-3'].reactions[1].R,
+      wallSls: res.SLS.reactions[0].R,
+      purlinSls: res.SLS.reactions[1].R,
+    },
+    ...w,
+  };
+}
+
+/* ───────────────────────── ОБРЕШЁТКА ───────────────────────── */
+
+function analyseBattens(model, ctx) {
+  const sec = section(model.battens.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const { EI, GAs } = stiffness(sec, mat);
+  const xs = [...model.rafters.xs].sort((a, b) => a - b);
+  const B = model.geom.B;
+  const gammaDead = sec.material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel;
+  const ca = Math.cos(deg(model.geom.alpha));
+
+  // худшее место — у стены, там снеговой мешок
+  const sp = model.battens.spacing;
+  const deadN = ((ctx.dead.roof * sp) / 1000 + sec.weight) * ca;
+  const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
+  const snowD = (ctx.snow.at(0) * sp) / 1000 * ca * ca;
+
+  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + snowD, nEl: 160 });
+  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + 0.7 * snowD, nEl: 160 });
+
+  // сосредоточенная 1 кН (СП 20 п. 8.3.4) в середине наибольшего пролёта
+  let span = 0, mid = B / 2;
+  for (let i = 0; i + 1 < xs.length; i++) {
+    if (xs[i + 1] - xs[i] > span) { span = xs[i + 1] - xs[i]; mid = (xs[i] + xs[i + 1]) / 2; }
+  }
+  const point = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD, point: [{ x: mid, P: 1000 }], nEl: 160 });
+
+  const Mmax = Math.abs(uls.maxM) > Math.abs(point.maxM) ? uls.maxM : point.maxM;
+  const Vmax = Math.abs(uls.maxV) > Math.abs(point.maxV) ? uls.maxV : point.maxV;
+  const spans = deflectionSpans(sls, B, xs).spans;
+
+  const checks = [];
+  if (sec.material === 'timber') {
+    checks.push(timberBending(Mmax, sec.props.Wx, mat));
+    checks.push(timberShear(Vmax, sec, mat));
+  } else {
+    checks.push(steelBending(Mmax, sec.props.Wx, mat));
+    checks.push(steelShear(Vmax, sec.props, mat));
+  }
+  checks.push(deflectionCheck(spans, 150));
+  // ограничение производителя кровли по пролёту обрешётки
+  checks.push({
+    name: 'Пролёт под кровлю',
+    value: span, limit: ctx.dead.def.maxBatten, unit: 'мм',
+    U: span / ctx.dead.def.maxBatten,
+    formula: 'шаг стропил ≤ допустимого пролёта покрытия',
+    note: ctx.dead.def.label,
+  });
+
+  return { sec, mat, span, res: { uls, sls, point }, spans, ...worstOf(checks) };
+}
+
+/* ───────────────────── ПРОГОН И БРУС У СТЕНЫ ───────────────────── */
+
+function analyseLineBeam(model, sectionId, supports, loads, label) {
+  const sec = section(sectionId);
+  const mat = propsFor(sec, model.opts);
+  const { EI, GAs } = stiffness(sec, mat);
+  const B = model.geom.B;
+  const gammaDead = sec.material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel;
+  const self = sec.weight * gammaDead;
+
+  const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, nEl: 160 });
+  const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, nEl: 160 });
+  const up = solveBeam({ length: B, supports, EI, GAs, q: () => 0, point: loads.uplift, nEl: 160 });
+
+  const spans = deflectionSpans(sls, B, supports).spans;
+  const checks = [];
+  if (sec.material === 'timber') {
+    checks.push(timberBending(uls.maxM, sec.props.Wx, mat));
+    checks.push(timberShear(uls.maxV, sec, mat));
+  } else {
+    checks.push(steelBending(uls.maxM, sec.props.Wx, mat));
+    checks.push(steelShear(uls.maxV, sec.props, mat));
+  }
+  checks.push(deflectionCheck(spans, 200));
+  return { label, sec, mat, res: { uls, sls, up }, spans, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
+}
+
+/* ───────────────────────── СТОЛБЫ ───────────────────────── */
+
+/**
+ * Ряд столбов под прогоном.
+ * @param {object} cfg model.posts или model.wallPosts
+ * @param {object} purlin результат расчёта прогона, лежащего на этом ряду
+ * @param {{braced:boolean, thrust:number, alongWall:number}} extra
+ *   braced — столб раскреплён стеной (сквозные шпильки);
+ *   thrust — суммарный горизонтальный распор от ската и ветра на весь ряд, Н;
+ *   alongWall — ветровая сила вдоль стены на весь ряд, Н.
+ */
+function analysePostRow(model, cfg, purlin, ctx, extra) {
+  const sec = section(cfg.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const H = model.geom.postHeight;
+  const lef = cfg.mu * H;
+  const fascia = sec.h + 200;
+  const n = purlin.reactions.length;
+
+  return purlin.reactions.map((r, i) => {
+    const N = Math.max(0, r.R) + sec.weight * H * GAMMA_F.steel;
+    const trib = i === 0 || i === n - 1 ? model.geom.B / (2 * Math.max(1, n - 1)) : model.geom.B / Math.max(1, n - 1);
+    const Hpost = (extra.thrust ?? 0) / n;
+    const Mecc = N * model.opts.postEccentricity;
+    let M;
+    if (extra.braced) {
+      // распор передаётся на стену шпильками; изгиб — местный, между точками крепления
+      const sBolt = H / Math.max(1, cfg.boltCount);
+      M = Mecc + (Hpost * sBolt) / 8;
+    } else {
+      const Hwind = (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
+      M = Mecc + (Hwind + Hpost) * H;
+    }
+    const Nup = -(purlin.uplift[i]?.R ?? 0);
+
+    const stab = steelStability(N, sec.props, mat, lef, 'y');
+    const checks = [
+      stab,
+      steelBeamColumn(N, M, sec.props, mat, lef, 'x'),
+      steelSlenderness(stab.lambda, stab.U),
+      steelLocalBuckling(sec, mat, stab.lb),
+    ];
+
+    let bolts = null;
+    if (extra.braced) {
+      // отрыв от стены: горизонтальный распор растягивает шпильки,
+      // верхняя нагружена сильнее — принят коэффициент неравномерности 1,5
+      const nb = Math.max(1, cfg.boltCount);
+      const Nbolt = (Hpost * 1.5) / nb;
+      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / nb;
+      const bChecks = [
+        boltPlateBearing(Nbolt, cfg.plateSize, cfg.boltDiameter, cfg.blockClass),
+        boltHoleBearing(Vbolt, cfg.boltDiameter, cfg.wallThickness, cfg.blockClass),
+        boltShear(Vbolt, cfg.boltDiameter, cfg.boltGrade),
+      ];
+      bolts = { Nbolt, Vbolt, count: nb, ...worstOf(bChecks) };
+      checks.push(...bChecks);
+    }
+
+    return { x: r.x, N, M, Nup, Hpost, sec, mat, lef, bolts, braced: !!extra.braced, ...worstOf(checks) };
+  });
+}
+
+/* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
+
+/**
+ * Кровельная часть (нагрузки, стропила, обрешётка) не зависит от положения
+ * и сечений столбов, поэтому её результат переиспользуется между вызовами —
+ * иначе перетаскивание столба каждый кадр пересчитывало бы все стропила.
+ */
+let roofMemo = { key: null, value: null };
+
+function analyseRoof(model) {
+  const key = JSON.stringify([model.geom, model.site, model.roofing, model.rafters, model.battens, model.opts]);
+  if (roofMemo.key === key) return roofMemo.value;
+
+  const { geom } = model;
+  const dead = roofDead(model);
+  const snow = snowProfile(model.site, geom.alpha);
+  const zTop = geom.postHeight + geom.L * Math.tan(deg(geom.alpha));
+  const wind = windPressure(model.site, zTop);
+  const ctx = { dead, snow, wind };
+
+  const xs = [...model.rafters.xs].sort((a, b) => a - b);
+  const tribs = tributaries(xs, geom.B);
+  const cache = new Map();
+  const rafters = xs.map((x, i) => {
+    const k = Math.round(tribs[i] * 10);
+    if (!cache.has(k)) cache.set(k, analyseRafter(model, 0, tribs[i], ctx));
+    return { ...cache.get(k), x, index: i };
+  });
+  const battens = analyseBattens(model, ctx);
+
+  roofMemo = { key, value: { ctx, dead, snow, wind, rafters, battens } };
+  return roofMemo.value;
+}
+
+function analyse(model) {
+  const { geom } = model;
+  const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
+
+  const pick = (key) => rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
+
+  const outerXs = [...model.posts.xs].sort((a, b) => a - b);
+  const purlin = analyseLineBeam(model, model.purlin.sectionId, outerXs,
+    { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') }, 'Прогон по столбам');
+
+  const wallXs = [...model.wallPosts.xs].sort((a, b) => a - b);
+  const wallPurlin = analyseLineBeam(model, model.wallPurlin.sectionId, wallXs,
+    { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') }, 'Обвязка у стены');
+
+  // ── горизонтальные силы, которые должен принять стеновой ряд.
+  // Сила тяжести распора не даёт: опоры вертикальные, ΣH = 0. Горизонталь — только ветер:
+  // горизонтальная проекция давления по нормали к скату плюс напор на наружную кромку.
+  const al = deg(geom.alpha);
+  const roofArea = (geom.B * (geom.L + geom.a)) / 1e6; // м²
+  const fasciaH = section(model.rafters.sectionId).h + 200;
+  const thrustRoof = wind.up * roofArea * Math.sin(al) * 1000;
+  const thrustFascia = wind.lateral * ((fasciaH * geom.B) / 1e6) * 1000;
+  const thrust = thrustRoof + thrustFascia;
+  const alongWall = wind.lateral * ((fasciaH * geom.L) / 1e6) * 1000;
+
+  const posts = analysePostRow(model, model.posts, purlin, ctx, { braced: false, thrust: 0, alongWall: 0 });
+  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { braced: true, thrust, alongWall });
+
+  const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
+  const foundation = {
+    uplift: maxUplift,
+    requiredMass: maxUplift / 0.9 / 1000,
+    cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000,
+    maxDown: Math.max(...posts.map((p) => p.N)),
+  };
+
+  const rowWorst = (list) => list.reduce((a, b) => (a.U > b.U ? a : b));
+  const all = [
+    { key: 'battens', label: 'Обрешётка', U: battens.U, worst: battens.worst },
+    { key: 'rafters', label: 'Стропила', U: Math.max(...rafters.map((r) => r.U)), worst: rowWorst(rafters).worst },
+    { key: 'purlin', label: 'Прогон наружный', U: purlin.U, worst: purlin.worst },
+    { key: 'posts', label: 'Столбы наружные', U: Math.max(...posts.map((p) => p.U)), worst: rowWorst(posts).worst },
+    { key: 'wallPurlin', label: 'Обвязка у стены', U: wallPurlin.U, worst: wallPurlin.worst },
+    { key: 'wallPosts', label: 'Столбы у стены', U: Math.max(...wallPosts.map((p) => p.U)), worst: rowWorst(wallPosts).worst },
+  ];
+
+  return {
+    model, ctx, dead, snow, wind,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, foundation,
+    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall },
+    summary: all,
+    maxU: Math.max(...all.map((a) => a.U)),
+  };
+}
+
+/**
+ * Спецификация и массы.
+ *
+ * Формулы:
+ *   дерево   V = b·h·L·n,            m = V·ρ,   ρ = 500 кг/м³
+ *   сталь    m = A·L·n·ρ,            ρ = 7850 кг/м³  (то же, что A[см²]·0,785 кг/м)
+ *   кровля   m = g·S/g₀,             g — кН/м² по скату, S — площадь ската
+ *   шпилька  m = π/4·d²·L·ρ_ст,      пластина m = a²·t·ρ_ст
+ *
+ * Стоимость: дерево — по объёму (V·цена за м³), металл — по массе (m·цена за кг),
+ * кровля — по площади ската, метизы — поштучно. Цены задаёт пользователь.
+ *
+ * Собственный вес всех этих элементов уже входит в расчёт нагрузок:
+ * стропила и прогоны — погонным весом сечения, обрешётка — весом на 1 м²,
+ * столбы — весом ствола в осевой силе.
+ */
+function billOfMaterials(result) {
+  const m = result.model;
+  const stock = m.opts.stockLength ?? 6000;
+  const pr = m.prices ?? { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' };
+  const G0 = 9.80665;
+  const items = [];
+  const add = (name, sec, lengthMm, count) => {
+    const isT = sec.material === 'timber';
+    const perStock = Math.max(1, Math.floor(stock / lengthMm));
+    const volume = (sec.props.A * lengthMm * count) / 1e9; // м³
+    const mass = (sec.massPerM * lengthMm * count) / 1000;
+    items.push({
+      name,
+      section: sec.label,
+      material: isT ? 'сосна' : 'сталь',
+      count,
+      length: Math.round(lengthMm),
+      totalLength: (lengthMm * count) / 1000,
+      stockPieces: lengthMm > stock ? null : Math.ceil(count / perStock),
+      volume: isT ? volume : null,
+      mass,
+      unitPrice: isT ? pr.timberM3 : pr.steelKg,
+      unit: isT ? '₽/м³' : '₽/кг',
+      cost: isT ? volume * pr.timberM3 : mass * pr.steelKg,
+    });
+  };
+  const ca = Math.cos(deg(m.geom.alpha));
+  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + 100, m.rafters.xs.length);
+  const nBatten = Math.floor((m.geom.L + m.geom.a) / ca / m.battens.spacing) + 1;
+  add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
+  add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);
+  add('Прогон наружный', section(m.purlin.sectionId), m.geom.B, 1);
+  add('Столбы наружные', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
+  add('Столбы у стены', section(m.wallPosts.sectionId), m.geom.postHeight + 300, m.wallPosts.xs.length);
+
+  // кровля
+  const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату
+  const roofMass = (result.dead.roof * roofArea * 1000) / G0;
+
+  // метизы
+  const wp = m.wallPosts;
+  const boltLen = wp.wallThickness + 120;
+  const boltCount = wp.boltCount * wp.xs.length;
+  const boltMass = (Math.PI / 4) * wp.boltDiameter ** 2 * boltLen * boltCount * 7.85e-6;
+  const plateMass = wp.plateSize ** 2 * 8 * boltCount * 7.85e-6;
+  const fasteners = [
+    { name: `Шпилька М${wp.boltDiameter} класса ${wp.boltGrade}`, count: boltCount,
+      note: `длина ≥ ${boltLen} мм`, mass: boltMass, cost: boltCount * pr.fastenerPc },
+    { name: `Пластина-шайба ${wp.plateSize}×${wp.plateSize}×8 мм`, count: boltCount,
+      note: 'с внутренней стороны стены, под гайку с шайбой', mass: plateMass, cost: 0 },
+  ];
+
+  const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
+  const byName = (n) => items.find((i) => i.name === n)?.mass ?? 0;
+  // всё, что висит над головой (без столбов) — это и есть постоянная нагрузка на кровлю
+  const roofPartMass = byName('Стропила') + byName('Обрешётка') + byName('Обвязка у стены')
+    + byName('Прогон наружный') + roofMass;
+  const timberVolume = items.reduce((a, i) => a + (i.volume ?? 0), 0);
+  const timberMass = sum((i) => i.material === 'сосна');
+  const steelMass = sum((i) => i.material === 'сталь');
+  const steelLength = items.filter((i) => i.material === 'сталь').reduce((a, i) => a + i.totalLength, 0);
+  const fastenerMass = fasteners.reduce((a, f) => a + f.mass, 0);
+  const total = timberMass + steelMass + roofMass + fastenerMass;
+  const planArea = (m.geom.B * (m.geom.L + m.geom.a)) / 1e6; // м² в плане
+
+  const groups = [
+    { name: 'Кровельное покрытие', mass: roofMass, note: ROOFING[m.roofing].label },
+    { name: 'Обрешётка', mass: byName('Обрешётка'), note: 'сосна' },
+    { name: 'Стропила', mass: byName('Стропила'), note: 'сосна' },
+    { name: 'Прогоны и обвязка', mass: byName('Прогон наружный') + byName('Обвязка у стены'), note: 'сталь + сосна' },
+    { name: 'Столбы', mass: byName('Столбы наружные') + byName('Столбы у стены'), note: 'сталь' },
+    { name: 'Метизы', mass: boltMass + plateMass, note: 'шпильки и пластины' },
+  ];
+
+  const weights = {
+    timber: { volume: timberVolume, mass: timberMass, density: 500 },
+    steel: { mass: steelMass, length: steelLength, density: 7850 },
+    roofing: { area: roofArea, mass: roofMass, label: ROOFING[m.roofing].label },
+    fasteners: { mass: fastenerMass, count: boltCount * 2 },
+    total,
+    perSqm: total / planArea,
+    planArea,
+    /** нагрузка от собственного веса всей кровельной части, кПа по скату */
+    deadPressure: (roofPartMass * G0) / roofArea / 1000,
+    /** доля собственного веса в полной нагрузке у стены и в поле */
+    deadShareWall: null,
+    deadShareField: null,
+    groups,
+  };
+  const dp = weights.deadPressure;
+  weights.deadShareWall = dp / (dp + result.snow.at(0));
+  weights.deadShareField = dp / (dp + result.snow.at(m.geom.L + m.geom.a));
+
+  const costTimber = items.filter((i) => i.material === 'сосна').reduce((a, i) => a + i.cost, 0);
+  const costSteel = items.filter((i) => i.material === 'сталь').reduce((a, i) => a + i.cost, 0);
+  const costRoofing = roofArea * pr.roofingM2;
+  const costFasteners = fasteners.reduce((a, f) => a + (f.cost ?? 0), 0);
+  const costs = {
+    currency: pr.currency ?? '₽',
+    prices: pr,
+    timber: costTimber,
+    steel: costSteel,
+    roofing: costRoofing,
+    fasteners: costFasteners,
+    total: costTimber + costSteel + costRoofing + costFasteners,
+    perSqm: (costTimber + costSteel + costRoofing + costFasteners) / planArea,
+    groups: [
+      { name: 'Кровельное покрытие', cost: costRoofing, base: `${roofArea.toFixed(1)} м² × ${pr.roofingM2} ₽/м²` },
+      { name: 'Сосна', cost: costTimber, base: `${timberVolume.toFixed(3)} м³ × ${pr.timberM3} ₽/м³` },
+      { name: 'Сталь', cost: costSteel, base: `${steelMass.toFixed(0)} кг × ${pr.steelKg} ₽/кг` },
+      { name: 'Метизы', cost: costFasteners, base: `${boltCount} компл. × ${pr.fastenerPc} ₽` },
+    ],
+  };
+
+  return { items, fasteners, weights, costs, timberVolume, timberMass, steelMass, steelLength, stock, total };
+}
+
+/* ── src/core/optimize.js ── */
+/** Автоподбор сечений и шагов. */
+
+
+
+const PATH = {
+  rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
+  battens: (m, id) => ({ ...m, battens: { ...m.battens, sectionId: id } }),
+  purlin: (m, id) => ({ ...m, purlin: { ...m.purlin, sectionId: id } }),
+  wallPurlin: (m, id) => ({ ...m, wallPurlin: { ...m.wallPurlin, sectionId: id } }),
+  wallPosts: (m, id) => ({ ...m, wallPosts: { ...m.wallPosts, sectionId: id } }),
+  posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
+};
+
+const U_OF = {
+  rafters: (r) => Math.max(...r.rafters.map((x) => x.U)),
+  battens: (r) => r.battens.U,
+  purlin: (r) => r.purlin.U,
+  wallPurlin: (r) => r.wallPurlin.U,
+  wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
+  posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+};
+
+/**
+ * Подобрать минимальное сечение элемента, при котором U ≤ target.
+ * @returns {{id:string,U:number,tried:{id:string,U:number}[]}|null}
+ */
+function pickSection(model, key, target = 0.95) {
+  const current = section(model[key].sectionId);
+  const candidates = ladder(current.material).filter((s) =>
+    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2 : true
+  );
+  const tried = [];
+  for (const cand of candidates) {
+    const m = PATH[key](model, cand.id);
+    let U;
+    try { U = U_OF[key](analyse(m)); } catch { continue; }
+    tried.push({ id: cand.id, label: cand.label, U });
+    if (U <= target) return { id: cand.id, label: cand.label, U, tried };
+  }
+  return null;
+}
+
+/**
+ * Подобрать число стропил (шаг) при неизменном сечении.
+ * @returns {{count:number,step:number,U:number}|null}
+ */
+function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
+  for (let n = 4; n <= maxCount; n++) {
+    const m = { ...model, rafters: { ...model.rafters, xs: spread(model.geom.B, n) } };
+    const r = analyse(m);
+    const U = Math.max(U_OF.rafters(r), r.battens.U);
+    if (U <= target) return { count: n, step: model.geom.B / (n - 1), U };
+  }
+  return null;
+}
+
+/** Подобрать все элементы подряд, снизу вверх по цепочке. */
+function pickAll(model, target = 0.9) {
+  let m = model;
+  const log = [];
+  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts']) {
+    const r = pickSection(m, key, target);
+    if (r) {
+      m = PATH[key](m, r.id);
+      log.push({ key, label: r.label, U: r.U });
+    } else {
+      log.push({ key, label: null, U: null });
+    }
+  }
+  return { model: m, log };
+}
+
+/* ── src/ui/views.js ── */
+/** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
+
+const uColor = (U) =>
+  U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
+
+const f2 = (x) => x.toFixed(2).replace('.', ',');
+const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+const mono = 'IBM Plex Mono, ui-monospace, monospace';
+
+function dimH(x1, x2, y, text, color = 'var(--ink-3)') {
+  return `<g pointer-events="none"><line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}"/>
+   <line x1="${x1}" y1="${y - 4}" x2="${x1}" y2="${y + 4}" stroke="${color}"/>
+   <line x1="${x2}" y1="${y - 4}" x2="${x2}" y2="${y + 4}" stroke="${color}"/>
+   <text x="${(x1 + x2) / 2}" y="${y - 5}" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
+}
+function dimV(y1, y2, x, text, color = 'var(--ink-3)') {
+  return `<g pointer-events="none"><line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="${color}"/>
+   <line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="${color}"/>
+   <line x1="${x - 4}" y1="${y2}" x2="${x + 4}" y2="${y2}" stroke="${color}"/>
+   <text transform="translate(${x - 5},${(y1 + y2) / 2}) rotate(-90)" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
+}
+
+/* ───────────────────────────── ПЛАН ───────────────────────────── */
+
+function drawPlan(res, sel) {
+  const m = res.model, g = m.geom;
+  const pad = { l: 60, r: 34, t: 44, b: 68 };
+  const sc = Math.min(780 / g.B, 360 / (g.L + g.a));
+  const W = g.B * sc, H = (g.L + g.a) * sc;
+  const vw = W + pad.l + pad.r, vh = H + pad.t + pad.b;
+  const X = (x) => pad.l + x * sc, Y = (y) => pad.t + y * sc;
+  const s = [];
+  s.push(`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="План навеса с картой загрузки">`);
+  s.push(`<defs><linearGradient id="drift" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="var(--u-bad)" stop-opacity=".28"/>
+    <stop offset="1" stop-color="var(--u-bad)" stop-opacity="0"/></linearGradient></defs>`);
+
+  s.push(`<rect x="${X(0)}" y="${Y(0)}" width="${W}" height="${H}" fill="var(--surface)" stroke="var(--rule-2)"/>`);
+  if (res.snow.driftLength > 0) {
+    const bd = Math.min(H, res.snow.driftLength * sc);
+    s.push(`<rect x="${X(0)}" y="${Y(0)}" width="${W}" height="${bd}" fill="url(#drift)"/>`);
+
+  }
+  s.push(`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(g.B)}" y2="${Y(0)}" stroke="var(--ink)" stroke-width="5"/>`);
+  s.push(`<text x="${X(0)}" y="${Y(0) - 12}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · газоблок ${m.wallPosts.wallThickness} мм, столбы на сквозных шпильках М${m.wallPosts.boltDiameter}</text>`);
+  s.push(`<g class="pickable" data-pick="wallPurlin"><rect x="${X(0)}" y="${Y(0)}" width="${W}" height="12" fill="transparent"/>
+    <line x1="${X(0)}" y1="${Y(0) + 5}" x2="${X(g.B)}" y2="${Y(0) + 5}" stroke="${uColor(res.wallPurlin.U)}" stroke-width="5"/>
+    <title>Обвязка у стены ${res.wallPurlin.sec.label} · U ${f2(res.wallPurlin.U)}</title></g>`);
+
+  // стропила
+  const rsec = res.rafters[0]?.sec;
+  const tw = Math.max(2.5, (rsec?.b ?? 50) * sc * 0.9);
+  res.rafters.forEach((r, i) => {
+    const x = X(r.x);
+    const on = sel.type === 'rafter' && sel.index === i;
+    s.push(`<g class="pickable draggable" data-pick="rafter" data-index="${i}">`);
+    s.push(`<rect x="${x - 9}" y="${Y(0)}" width="18" height="${H}" fill="transparent"/>`);
+    s.push(`<line x1="${x}" y1="${Y(0)}" x2="${x}" y2="${Y(g.L + g.a)}" stroke="${uColor(r.U)}" stroke-width="${tw}" opacity="${on ? 1 : 0.85}"/>`);
+    if (on) s.push(`<line x1="${x}" y1="${Y(0) - 5}" x2="${x}" y2="${Y(g.L + g.a) + 5}" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+    s.push(`<text x="${x}" y="${Y(g.L + g.a) + 13}" font-size="9.5" text-anchor="middle" font-family="${mono}" fill="${uColor(r.U)}">${f2(r.U)}</text>`);
+    s.push(`<title>Стропило ${i + 1} · ${r.sec.label} · грузовая ${Math.round(r.trib)} мм · U ${f2(r.U)} (${r.worst?.name})</title></g>`);
+  });
+
+  // прогон
+  s.push(`<g class="pickable" data-pick="purlin"><rect x="${X(0)}" y="${Y(g.L) - 7}" width="${W}" height="14" fill="transparent"/>
+    <line x1="${X(0)}" y1="${Y(g.L)}" x2="${X(g.B)}" y2="${Y(g.L)}" stroke="${uColor(res.purlin.U)}" stroke-width="5"/>
+    <title>Прогон ${res.purlin.sec.label} · U ${f2(res.purlin.U)}</title></g>`);
+
+  // столбы
+  res.posts.forEach((p, i) => {
+    const px = X(p.x), py = Y(g.L), sz = 11;
+    s.push(`<g class="pickable draggable" data-pick="post" data-index="${i}">
+      <rect x="${px - 10}" y="${py - 10}" width="20" height="20" fill="transparent"/>
+      <rect x="${px - sz / 2}" y="${py - sz / 2}" width="${sz}" height="${sz}" fill="var(--surface)" stroke="${uColor(p.U)}" stroke-width="2.6"/>
+      <title>Столб ${i + 1} · ${p.sec.label} · N ${f2(p.N / 1000)} кН · U ${f2(p.U)}</title></g>`);
+  });
+  if (sel.type === 'post') {
+    const px = X(res.posts[sel.index]?.x ?? 0);
+    s.push(`<circle cx="${px}" cy="${Y(g.L)}" r="13" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+  }
+
+  res.wallPosts.forEach((p, i) => {
+    const px = X(p.x), py = Y(0) + 5, sz = 10;
+    s.push(`<g class="pickable draggable" data-pick="wallPost" data-index="${i}">
+      <rect x="${px - 10}" y="${py - 10}" width="20" height="20" fill="transparent"/>
+      <rect x="${px - sz / 2}" y="${py - sz / 2}" width="${sz}" height="${sz}" fill="var(--surface)" stroke="${uColor(p.U)}" stroke-width="2.6"/>
+      <title>Столб у стены ${i + 1} · ${p.sec.label} · N ${f2(p.N / 1000)} кН · U ${f2(p.U)}</title></g>`);
+  });
+  if (sel.type === 'wallPost') {
+    const px = X(res.wallPosts[sel.index]?.x ?? 0);
+    s.push(`<circle cx="${px}" cy="${Y(0) + 5}" r="13" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+  }
+
+  // обрешётка — тонкими штрихами
+  const nB = Math.floor((g.L + g.a) / m.battens.spacing);
+  for (let i = 1; i <= nB; i++) {
+    const y = Y(Math.min(g.L + g.a, i * m.battens.spacing));
+    s.push(`<line x1="${X(0)}" y1="${y}" x2="${X(g.B)}" y2="${y}" stroke="${uColor(res.battens.U)}" stroke-width="1" opacity=".35"/>`);
+  }
+
+  if (res.snow.driftLength > 0) {
+    const dl = `снеговой мешок · μ = ${f2(res.snow.muWall)} · ${f2(res.snow.muWall * res.snow.Sg)} кПа`;
+    s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4" pointer-events="none"/>`);
+    s.push(`<text x="${X(0) + 9}" y="${Y(0) + 17}" font-size="10" font-family="${mono}" fill="var(--u-bad)">${dl}</text>`);
+  }
+  s.push(dimH(X(0), X(g.B), Y(g.L + g.a) + 34, `${g.B}`));
+  s.push(dimV(Y(0), Y(g.L), X(0) - 26, `${g.L}`));
+  if (g.a > 0) s.push(dimV(Y(g.L), Y(g.L + g.a), X(0) - 26, `${g.a}`, 'var(--u-warn)'));
+  const steps = [];
+  for (let i = 1; i < res.rafters.length; i++) steps.push(Math.round(res.rafters[i].x - res.rafters[i - 1].x));
+  const uniq = [...new Set(steps)];
+  s.push(`<text x="${X(g.B)}" y="${Y(g.L + g.a) + 50}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">шаг стропил ${uniq.length === 1 ? uniq[0] : `${Math.min(...steps)}…${Math.max(...steps)}`} мм</text>`);
+  s.push('</svg>');
+  return { svg: s.join(''), meta: { sc, ox: pad.l, oy: pad.t, vw, vh } };
+}
+
+/* ──────────────────────────── РАЗРЕЗ ──────────────────────────── */
+
+function drawSection(res) {
+  const m = res.model, g = m.geom;
+  const al = (g.alpha * Math.PI) / 180;
+  const rise = g.L * Math.tan(al);
+  const totalH = g.postHeight + rise + g.driftH + 600;
+  const pad = { l: 138, r: 44, t: 30, b: 62 };
+  const sc = Math.min(700 / (g.L + g.a + 600), 380 / totalH);
+  const vw = (g.L + g.a + 700) * sc + pad.l + pad.r;
+  const vh = totalH * sc + pad.t + pad.b;
+  const X = (x) => pad.l + (x + 400) * sc;
+  const Y = (y) => pad.t + (totalH - y) * sc; // y — высота от верха фундамента
+  const s = [];
+  s.push(`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Разрез навеса">`);
+
+  // дом
+  s.push(`<rect x="${X(-400)}" y="${Y(g.postHeight + rise + g.driftH + 400)}" width="${400 * sc}" height="${(g.postHeight + rise + g.driftH + 400) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  s.push(`<text transform="translate(${X(-400) + 200 * sc},${Y(g.postHeight * 0.35)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
+  // кровля дома — на перепад выше верха навеса у стены
+  const hWall = g.postHeight + rise;         // верх навеса у стены, от верха фундамента
+  const hHouse = hWall + g.driftH;           // кровля дома
+  const xDim = X(-400) - 30;                 // размерная линия слева от дома
+  s.push(`<line x1="${xDim - 6}" y1="${Y(hHouse)}" x2="${X(0)}" y2="${Y(hHouse)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  // выносные линии к размерам
+  for (const [hv, col] of [[0, 'var(--ink-3)'], [hWall, 'var(--u-warn)']]) {
+    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(60)}" y2="${Y(hv)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" opacity=".8" pointer-events="none"/>`);
+  }
+  s.push(dimV(Y(0), Y(hWall), xDim, `${Math.round(hWall)} до верха навеса`, 'var(--u-warn)'));
+  s.push(dimV(Y(hWall), Y(hHouse), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+
+  // снеговая эпюра
+  const sn = res.snow, kPaToPx = 26 * sc * 40;
+  const pts = [];
+  for (let i = 0; i <= 20; i++) {
+    const y = ((g.L + g.a) * i) / 20;
+    const h = g.postHeight + rise - y * Math.tan(al);
+    pts.push(`${X(y)},${Y(h + sn.at(y) * kPaToPx)}`);
+  }
+  s.push(`<polygon points="${X(0)},${Y(g.postHeight + rise)} ${pts.join(' ')} ${X(g.L + g.a)},${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1"/>`);
+  s.push(`<text x="${X(120)}" y="${Y(g.postHeight + rise + sn.at(0) * kPaToPx) - 6}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(sn.at(0))} → ${f2(sn.at(g.L + g.a))} кПа</text>`);
+
+  // стропило
+  const rU = Math.max(...res.rafters.map((r) => r.U));
+  s.push(`<line x1="${X(0)}" y1="${Y(g.postHeight + rise)}" x2="${X(g.L + g.a)}" y2="${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" stroke="${uColor(rU)}" stroke-width="${Math.max(3, res.rafters[0].sec.h * sc)}" stroke-linecap="butt"/>`);
+  // стеновой столб и сквозные шпильки
+  const wps = res.wallPosts[0].sec;
+  s.push(`<rect x="${X(0) - (wps.b * sc) / 2}" y="${Y(g.postHeight + rise)}" width="${Math.max(4, wps.b * sc)}" height="${(g.postHeight + rise) * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9"/>`);
+  const nb = m.wallPosts.boltCount;
+  for (let i = 0; i < nb; i++) {
+    const hy = ((g.postHeight + rise) * (i + 0.6)) / (nb + 0.2);
+    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(50)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
+    s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
+  }
+  s.push(`<text x="${X(80)}" y="${Y((g.postHeight + rise) * 0.5) - 12}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} насквозь через газоблок ${m.wallPosts.wallThickness} мм</text>`);
+  // столб
+  s.push(`<rect x="${X(g.L) - (res.posts[0].sec.b * sc) / 2}" y="${Y(g.postHeight)}" width="${Math.max(4, res.posts[0].sec.b * sc)}" height="${g.postHeight * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9"/>`);
+  // фундамент
+  const fs = Math.max(300, res.foundation.cubeSide);
+  s.push(`<rect x="${X(g.L) - (fs * sc) / 2}" y="${Y(0)}" width="${fs * sc}" height="${fs * sc * 0.55}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  s.push(`<text x="${X(g.L)}" y="${Y(0) + fs * sc * 0.55 + 26}" font-size="9.5" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">фундамент ≈ ${Math.round(fs)} мм</text>`);
+  // ветер
+  s.push(`<g stroke="var(--accent-2)" fill="var(--accent-2)">`);
+  for (let i = 1; i <= 4; i++) {
+    const x = X(((g.L + g.a) * i) / 5);
+    const y0 = Y(g.postHeight + rise - ((g.L + g.a) * i * Math.tan(al)) / 5);
+    s.push(`<line x1="${x}" y1="${y0 - 6}" x2="${x}" y2="${y0 - 24}"/><polygon points="${x - 3},${y0 - 22} ${x + 3},${y0 - 22} ${x},${y0 - 29}"/>`);
+  }
+  s.push(`</g><text x="${X(g.L + g.a)}" y="${Y(g.postHeight + rise) - 34}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--accent-2)">ветровой отрыв ${f2(res.wind.up)} кПа</text>`);
+
+  s.push(dimH(X(0), X(g.L), Y(0) + 34, `${g.L}`));
+  s.push(dimH(X(g.L), X(g.L + g.a), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
+  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 28, `${g.postHeight} наружный столб`));
+  s.push(`<text x="${X(g.L / 2)}" y="${Y(g.postHeight + rise / 2) - 12}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">уклон ${g.alpha}°</text>`);
+  s.push('</svg>');
+  return { svg: s.join(''), meta: null };
+}
+
+/* ──────────────────────────── ЭПЮРЫ ──────────────────────────── */
+
+function chart(title, xs, ys, W, H, x0, y0, color, unit, scaleY, flip = false) {
+  const maxA = Math.max(1e-9, ...ys.map(Math.abs));
+  const k = (H / 2 / maxA) * 0.92 * (flip ? -1 : 1);
+  const pts = [];
+  for (let i = 0; i < xs.length; i += 2) {
+    pts.push(`${(x0 + (W * xs[i]) / xs[xs.length - 1]).toFixed(1)},${(y0 + H / 2 - ys[i] * k).toFixed(1)}`);
+  }
+  return `<g><text x="${x0}" y="${y0 - 5}" font-size="10" font-family="${mono}" fill="var(--ink-3)" letter-spacing="1.1">${title}</text>
+   <line x1="${x0}" y1="${y0 + H / 2}" x2="${x0 + W}" y2="${y0 + H / 2}" stroke="var(--rule-2)"/>
+   <polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="1.6"/>
+   <text x="${x0 + W}" y="${y0 - 5}" font-size="10" text-anchor="end" font-family="${mono}" fill="${color}">max ${(maxA * scaleY).toFixed(2).replace('.', ',')} ${unit}</text></g>`;
+}
+
+function drawDiagrams(res, sel) {
+  const el = pickElement(res, sel);
+  if (!el || !el.res) return { svg: '<svg viewBox="0 0 100 40"></svg>', meta: null };
+  const r = el.res.uls ?? el.res['ULS-1'];
+  const sls = el.res.sls ?? el.res.SLS;
+  const W = 720, H = 84, pad = { l: 46, r: 26, t: 26 };
+  const vw = W + pad.l + pad.r, vh = 3 * (H + 34) + pad.t;
+  const xs = Array.from(r.x);
+  const s = [`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Эпюры">`];
+  s.push(chart(`ЭПЮРА M · ${el.title} · на растянутом волокне`, xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
+  s.push(chart('ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
+  s.push(chart('ПРОГИБ (нормативные нагрузки)', xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
+  for (const sup of r.reactions) {
+    const x = pad.l + (W * sup.x) / xs[xs.length - 1];
+    s.push(`<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${vh - 8}" stroke="var(--ink-3)" stroke-dasharray="2 4" opacity=".7"/>`);
+    s.push(`<text x="${x + 3}" y="${vh - 2}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${f2(sup.R / 1000)} кН</text>`);
+  }
+  s.push('</svg>');
+  return { svg: s.join(''), meta: null };
+}
+
+/** Элемент, выбранный в интерфейсе. */
+function pickElement(res, sel) {
+  if (sel.type === 'rafter') {
+    const r = res.rafters[sel.index] ?? res.rafters[0];
+    return r && { ...r, title: `СТРОПИЛО ${(sel.index ?? 0) + 1}`, kind: 'rafter' };
+  }
+  if (sel.type === 'purlin') return { ...res.purlin, title: 'ПРОГОН', kind: 'purlin' };
+  if (sel.type === 'wallPurlin') return { ...res.wallPurlin, title: 'ОБВЯЗКА У СТЕНЫ', kind: 'wallPurlin' };
+  if (sel.type === 'wallPost') {
+    const p = res.wallPosts[sel.index] ?? res.wallPosts[0];
+    return p && { ...p, title: `СТОЛБ У СТЕНЫ ${(sel.index ?? 0) + 1}`, kind: 'wallPost', res: null };
+  }
+  if (sel.type === 'battens') return { ...res.battens, title: 'ОБРЕШЁТКА', res: { uls: res.battens.res.uls, sls: res.battens.res.sls }, kind: 'battens' };
+  if (sel.type === 'post') {
+    const p = res.posts[sel.index] ?? res.posts[0];
+    return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: null };
+  }
+  return null;
+}
+
+
+/* ── src/ui/app.js ── */
+
+
+
+
+
+
+
+const $ = (id) => document.getElementById(id);
+const STORE_KEY = 'canopycraft.model.v2';
+
+/** Расчёт из ссылки важнее сохранённого: по ссылке приходят делиться конкретным вариантом. */
+function initialModel() {
+  const h = typeof location !== 'undefined' ? location.hash : '';
+  const fromLink = h && h.startsWith('#p=') ? decodeModel(h.slice(3)) : null;
+  return fromLink ?? load() ?? defaultModel();
+}
+
+const state = {
+  model: initialModel(),
+  sel: { type: 'rafter', index: 0 },
+  view: 'plan',
+  result: null,
+  meta: null,
+};
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const m = JSON.parse(raw);
+    return m && m.geom && m.wallPosts && m.wallPurlin && m.prices ? m : null;
+  } catch { return null; }
+}
+function save() {
+  if (drag) return; // во время перетаскивания сохраняем один раз, в конце
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state.model)); } catch { /* приватный режим */ }
+  syncUrl();
+}
+
+/** Адресная строка всегда показывает текущий расчёт — её можно скопировать в любой момент. */
+let urlTimer = 0;
+function syncUrl() {
+  if (urlTimer) return;
+  urlTimer = setTimeout(() => {
+    urlTimer = 0;
+    try {
+      const code = encodeModel(state.model);
+      const base = location.href.split('#')[0];
+      history.replaceState(null, '', code ? `${base}#p=${code}` : base);
+    } catch { /* внутри фрейма адресная строка недоступна — не беда */ }
+  }, 400);
+}
+
+/** Ссылка на текущий расчёт. */
+function shareUrl() {
+  const code = encodeModel(state.model);
+  return location.href.split('#')[0] + (code ? `#p=${code}` : '');
+}
+
+/* ─────────────────── панель параметров ─────────────────── */
+
+const timberOpts = () => SECTIONS.filter((s) => s.material === 'timber');
+const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
+const anyOpts = () => SECTIONS;
+
+const CONTROLS = [
+  { group: 'Геометрия' },
+  { k: 'geom.B', label: 'Ширина навеса', type: 'range', min: 3000, max: 12000, step: 250, unit: 'мм' },
+  { k: 'geom.L', label: 'Пролёт до столбов', type: 'range', min: 2000, max: 6500, step: 100, unit: 'мм' },
+  { k: 'geom.a', label: 'Свес за столбы', type: 'range', min: 0, max: 2000, step: 50, unit: 'мм' },
+  { k: 'geom.alpha', label: 'Уклон', type: 'range', min: 3, max: 30, step: 1, unit: '°' },
+  { k: 'geom.postHeight', label: 'Высота столба', type: 'range', min: 1800, max: 4000, step: 50, unit: 'мм' },
+  { k: 'geom.driftH', label: 'Перепад до кровли дома', type: 'range', min: 0, max: 4000, step: 100, unit: 'мм' },
+
+  { group: 'Элементы' },
+  { k: '#rafterCount', label: 'Стропил', type: 'range', min: 3, max: 25, step: 1, unit: 'шт', actions: [
+      ['равномерно', (m) => { m.rafters.xs = spread(m.geom.B, m.rafters.xs.length); return 'Стропила распределены равномерно'; }],
+      ['подобрать шаг', (m) => {
+        const r = pickRafterSpacing(m, 0.9);
+        if (!r) return 'Даже при 31 стропиле сечение не проходит — нужно крупнее';
+        m.rafters.xs = spread(m.geom.B, r.count);
+        return `Шаг ${Math.round(r.step)} мм (${r.count} шт), U = ${f2(r.U)}`;
+      }]] },
+  { k: 'rafters.sectionId', label: 'Сечение стропила', type: 'select', options: anyOpts, pick: 'rafters' },
+  { k: 'battens.sectionId', label: 'Обрешётка', type: 'select', options: anyOpts, pick: 'battens' },
+  { k: 'battens.spacing', label: 'Шаг обрешётки', type: 'range', min: 200, max: 1200, step: 50, unit: 'мм' },
+  { k: 'purlin.sectionId', label: 'Прогон наружный', type: 'select', options: anyOpts, pick: 'purlin' },
+  { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
+  { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
+  { k: 'posts.mu', label: 'μ наружного столба', type: 'select', options: () => [
+      { id: '2', label: '2,0 — защемлён внизу, свободен вверху' },
+      { id: '1', label: '1,0 — есть связи в обе стороны' },
+      { id: '0.7', label: '0,7 — защемление + шарнир' }], numeric: true },
+
+  { group: 'Крепление к дому' },
+  { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
+  { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
+  { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
+  { k: 'wallPosts.mu', label: 'μ стенового столба', type: 'select', numeric: true, options: () => [
+      { id: '1', label: '1,0 — раскреплён стеной' },
+      { id: '0.7', label: '0,7 — жёсткая заделка внизу' },
+      { id: '2', label: '2,0 — крепление к стене не учитывать' }] },
+  { k: 'wallPosts.boltCount', label: 'Шпилек на столб', type: 'range', min: 2, max: 6, step: 1, unit: 'шт' },
+  { k: 'wallPosts.boltDiameter', label: 'Диаметр шпильки', type: 'select', numeric: true, options: () => [
+      { id: '12', label: 'М12' }, { id: '16', label: 'М16' }, { id: '20', label: 'М20' }, { id: '24', label: 'М24' }] },
+  { k: 'wallPosts.boltGrade', label: 'Класс прочности шпильки', type: 'select', options: () => [
+      { id: '4.8', label: '4.8' }, { id: '5.8', label: '5.8' }, { id: '8.8', label: '8.8' }] },
+  { k: 'wallPosts.plateSize', label: 'Шайба-пластина изнутри', type: 'range', min: 60, max: 250, step: 10, unit: 'мм' },
+  { k: 'wallPosts.blockClass', label: 'Класс газоблока', type: 'select', options: () => [
+      { id: 'B2.0', label: 'B2,0 (D400) — R 0,85 МПа' },
+      { id: 'B2.5', label: 'B2,5 (D500) — R 1,0 МПа' },
+      { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
+      { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
+  { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
+
+  { group: 'Площадка и кровля' },
+  { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
+  { k: 'site.snowRegion', label: 'Снеговой район', type: 'select', options: () => Object.entries(SNOW_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
+  { k: 'site.windRegion', label: 'Ветровой район', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
+  { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
+      { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
+  { k: 'site.drift', label: 'Снеговой мешок у стены дома', type: 'check' },
+
+  { group: 'Материалы' },
+  { k: 'opts.timber.grade', label: 'Сорт сосны', type: 'select', numeric: true,
+    options: () => [{ id: '1', label: '1 сорт' }, { id: '2', label: '2 сорт' }, { id: '3', label: '3 сорт' }] },
+  { k: 'opts.timber.serviceClass', label: 'Условия эксплуатации', type: 'select', numeric: true,
+    options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
+  { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
+    options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
+  { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
+    options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
+
+  { group: 'Цены — подставьте свои' },
+  { k: 'prices.timberM3', label: 'Доска обрезная, ₽/м³', type: 'number', min: 0, step: 500 },
+  { k: 'prices.steelKg', label: 'Профильная труба, ₽/кг', type: 'number', min: 0, step: 5 },
+  { k: 'prices.roofingM2', label: 'Кровля, ₽/м²', type: 'number', min: 0, step: 50 },
+  { k: 'prices.fastenerPc', label: 'Комплект шпилька+пластина, ₽/шт', type: 'number', min: 0, step: 10 },
+];
+
+const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
+function setPath(o, p, v) {
+  const parts = p.split('.');
+  const last = parts.pop();
+  const t = parts.reduce((a, k) => a[k], o);
+  t[last] = v;
+}
+
+function readVirtual(k) {
+  if (k === '#rafterCount') return state.model.rafters.xs.length;
+  if (k === '#postCount') return state.model.posts.xs.length;
+  if (k === '#wallPostCount') return state.model.wallPosts.xs.length;
+  return getPath(state.model, k);
+}
+function writeVirtual(k, v) {
+  if (k === '#rafterCount') { state.model.rafters.xs = spread(state.model.geom.B, v); return; }
+  if (k === '#postCount') { state.model.posts.xs = spread(state.model.geom.B, v); return; }
+  if (k === '#wallPostCount') { state.model.wallPosts.xs = spread(state.model.geom.B, v); return; }
+  setPath(state.model, k, v);
+}
+
+function buildParams() {
+  const host = $('params');
+  host.innerHTML = '';
+  for (const c of CONTROLS) {
+    if (c.group) {
+      const t = document.createElement('div');
+      t.className = 'pane-title';
+      t.textContent = c.group;
+      host.appendChild(t);
+      continue;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const id = 'c_' + c.k.replace(/[.#]/g, '_');
+    if (c.type === 'check') {
+      wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}</span></label>`;
+    } else if (c.type === 'number') {
+      wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
+    } else if (c.type === 'range') {
+      const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(' ');
+      wrap.innerHTML = `<label for="${id}">${c.label} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
+    } else {
+      const opts = c.options().map((o) => `<option value="${o.id}">${o.label}</option>`).join('');
+      wrap.innerHTML = `<label for="${id}">${c.label}${c.pick ? ` <button class="btn" data-pick-el="${c.pick}" style="padding:0 6px;font-size:11px">подобрать</button>` : ''}</label><select id="${id}">${opts}</select>`;
+    }
+    host.appendChild(wrap);
+    const input = wrap.querySelector('input,select');
+    input.addEventListener('input', () => {
+      let v = c.type === 'check' ? input.checked : input.value;
+      if (c.type === 'range' || c.type === 'number' || c.numeric) v = Number(v) || 0;
+      writeVirtual(c.k, v);
+      if (c.k === 'geom.B') {
+        state.model.rafters.xs = spread(state.model.geom.B, state.model.rafters.xs.length);
+        state.model.posts.xs = spread(state.model.geom.B, state.model.posts.xs.length);
+        state.model.wallPosts.xs = spread(state.model.geom.B, state.model.wallPosts.xs.length);
+      }
+      render();
+    });
+  }
+  host.querySelectorAll('[data-act]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      const [key, i] = b.getAttribute('data-act').split(':');
+      const ctrl = CONTROLS.find((c) => c.k === key);
+      b.textContent = '…';
+      setTimeout(() => {
+        const msg = ctrl.actions[Number(i)][1](state.model);
+        b.textContent = ctrl.actions[Number(i)][0];
+        render(msg);
+      }, 10);
+    })
+  );
+  host.querySelectorAll('[data-pick-el]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      const key = b.getAttribute('data-pick-el');
+      b.textContent = '…';
+      setTimeout(() => {
+        const r = key === 'rafters' && e.shiftKey ? null : pickSection(state.model, key, 0.9);
+        if (r) { setPath(state.model, `${key}.sectionId`, r.id); }
+        b.textContent = 'подобрать';
+        render(r ? `Подобрано: ${r.label}, U = ${f2(r.U)}` : 'Подходящего сечения в сортаменте нет — уменьшите пролёт или шаг');
+      }, 10);
+    })
+  );
+}
+
+function syncParams() {
+  for (const c of CONTROLS) {
+    if (c.group) continue;
+    const id = 'c_' + c.k.replace(/[.#]/g, '_');
+    const el = $(id);
+    if (!el) continue;
+    const v = readVirtual(c.k);
+    if (c.type === 'check') el.checked = !!v;
+    else el.value = String(v);
+    const b = document.querySelector(`[data-val="${id}"]`);
+    if (b) {
+      let extra = '';
+      if (c.k === '#rafterCount') extra = ` · шаг ${Math.round(state.model.geom.B / (v - 1))}`;
+      if (c.k === '#postCount' || c.k === '#wallPostCount') extra = ` · пролёт ${Math.round(state.model.geom.B / (v - 1))}`;
+      b.textContent = `${v} ${c.unit ?? ''}${extra}`;
+    }
+  }
+}
+
+/* ─────────────────── инспектор ─────────────────── */
+
+function renderInspector(res) {
+  const el = pickElement(res, state.sel);
+  const host = $('inspector');
+  if (!el) { host.innerHTML = ''; return; }
+  const rows = [];
+  rows.push(`<div class="pane-title">${el.title} · ${el.sec.label}</div>`);
+  for (const c of el.checks) {
+    rows.push(`<div class="chk">
+      <span class="nm">${c.name}</span><span class="v" style="color:${uColor(c.U)}">${f2(c.U)}</span>
+      <span class="bar"><span style="width:${Math.min(100, c.U * 100).toFixed(0)}%;background:${uColor(c.U)}"></span></span>
+      <span class="fx">${c.formula}${c.note ? ' · ' + c.note : ''} → ${fmtVal(c)}</span>
+    </div>`);
+  }
+  const v = el.U > 1
+    ? `<b>Не проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
+    : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
+    : el.U < 0.4 ? `<b>Большой запас.</b> Можно уменьшить сечение или увеличить шаг.`
+    : `<b>Проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`;
+  rows.push(`<div class="verdict" style="border-color:${uColor(el.U)}">${v}</div>`);
+
+  const kv = [];
+  if (el.kind === 'rafter') {
+    kv.push(['Грузовая ширина', `${Math.round(el.trib)} мм`]);
+    kv.push(['Длина по скату', `${Math.round(el.Ls)} мм`]);
+    kv.push(['M max', `${f2(Math.abs(el.Mmax) / 1e6)} кН·м`]);
+    kv.push(['Q max', `${f2(Math.abs(el.Vmax) / 1000)} кН`]);
+    kv.push(['N (скатная)', `${f2(el.N / 1000)} кН`]);
+    for (const s of el.spans) kv.push([`Прогиб, ${s.kind}`, `${f2(s.f)} мм / ${f2(s.limitLength / 200)}`]);
+    kv.push(['Реакция на стену', `${f2(el.reactions.wall / 1000)} кН`]);
+    kv.push(['Реакция на прогон', `${f2(el.reactions.purlin / 1000)} кН`]);
+  } else if (el.kind === 'post' || el.kind === 'wallPost') {
+    kv.push(['N сжатие', `${f2(el.N / 1000)} кН`]);
+    kv.push(['M', `${f2(el.M / 1e6)} кН·м`]);
+    kv.push(['Отрыв', `${f2(Math.max(0, el.Nup) / 1000)} кН`]);
+    kv.push(['Расчётная длина', `${Math.round(el.lef)} мм`]);
+    if (el.bolts) {
+      kv.push(['Горизонт. распор на столб', `${f2(el.Hpost / 1000)} кН`]);
+      kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
+      kv.push(['На шпильку: растяжение', `${f2(el.bolts.Nbolt / 1000)} кН`]);
+      kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
+    }
+  } else if (el.res?.uls) {
+    kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
+    kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
+    const worstSpan = el.spans?.reduce((a, b) => (a.f > b.f ? a : b), { f: 0, limitLength: 1 });
+    if (worstSpan) kv.push(['Прогиб', `${f2(worstSpan.f)} мм`]);
+  }
+  rows.push(kv.map(([a, b]) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`).join(''));
+  host.innerHTML = rows.join('');
+}
+
+const fmtVal = (c) => `${f2(c.value)}${c.unit ? ' ' + c.unit : ''} / ${f2(c.limit)}${c.unit ? ' ' + c.unit : ''}`;
+
+/* ─────────────────── сводка и спецификация ─────────────────── */
+
+const SEL_FOR = {
+  battens: { type: 'battens' }, rafters: { type: 'rafter', index: 0 },
+  purlin: { type: 'purlin' }, wallPurlin: { type: 'wallPurlin' },
+  posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
+};
+const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
+function selectRow(res, key) {
+  const row = ROW_OF[key];
+  if (!row) return { ...SEL_FOR[key] };
+  const list = res[row[0]];
+  const i = list.reduce((bi, e, idx) => (e.U > list[bi].U ? idx : bi), 0);
+  return { type: row[1], index: i };
+}
+
+function renderSummary(res) {
+  $('summary').innerHTML = res.summary.map((s) => `
+    <div class="card" data-sel="${s.key}">
+      <span class="t">${s.label}</span>
+      <span class="u" style="color:${uColor(s.U)}">${f2(s.U)}</span>
+      <span class="bar"><span style="width:${Math.min(100, s.U * 100).toFixed(0)}%;background:${uColor(s.U)}"></span></span>
+      <span class="w">${s.worst ? s.worst.name : ''}</span>
+    </div>`).join('');
+  $('summary').querySelectorAll('[data-sel]').forEach((c) =>
+    c.addEventListener('click', () => {
+      state.sel = selectRow(res, c.getAttribute('data-sel'));
+      render();
+    }));
+}
+
+function renderBom(res) {
+  const b = billOfMaterials(res);
+  const w = b.weights;
+  const c = b.costs;
+  const money = (x) => Math.round(x).toLocaleString('ru-RU');
+  const rows = b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.material}</td>
+    <td class="n">${i.count}</td><td class="n">${i.length}</td><td class="n">${i.totalLength.toFixed(1)}</td>
+    <td class="n">${i.stockPieces ?? '—'}</td><td class="n">${i.volume ? i.volume.toFixed(3) : '—'}</td>
+    <td class="n">${i.mass.toFixed(1)}</td><td class="n">${money(i.cost)}</td></tr>`).join('');
+  const fast = b.fasteners.map((f) => `<tr><td>${f.name}</td><td colspan="2">${f.note}</td>
+    <td class="n">${f.count}</td><td colspan="3"></td><td class="n">—</td><td class="n">${f.mass.toFixed(1)}</td>
+    <td class="n">${f.cost ? money(f.cost) : '—'}</td></tr>`).join('');
+  const groups = w.groups.map((g) => `<div class="kv"><span>${g.name} <i style="color:var(--ink-3);font-style:normal">· ${g.note}</i></span><span>${g.mass.toFixed(0)} кг</span></div>`).join('');
+
+  $('bom').innerHTML = `<div class="pane-title">Спецификация · закупка хлыстами по ${(b.stock / 1000).toFixed(0)} м</div>
+    <div class="tbl"><table>
+    <tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Купить</th><th>Объём, м³</th><th>Масса, кг</th><th>Стоимость, ${c.currency}</th></tr>
+    ${rows}${fast}
+    <tr><td colspan="7"><b>Итого</b></td><td class="n"><b>${w.timber.volume.toFixed(3)}</b></td><td class="n"><b>${w.total.toFixed(0)}</b></td><td class="n"><b>${money(c.total - c.roofing)}</b></td></tr></table></div>
+
+    <div class="pane-title" style="margin-top:14px">Масса конструкции</div>
+    <div class="row2" style="gap:14px">
+      <div>${groups}</div>
+      <div>
+        <div class="kv"><span><b>Сосна</b></span><span><b>${w.timber.volume.toFixed(3)} м³ · ${w.timber.mass.toFixed(0)} кг</b></span></div>
+        <div class="kv"><span><b>Сталь</b></span><span><b>${w.steel.length.toFixed(1)} пог. м · ${w.steel.mass.toFixed(0)} кг</b></span></div>
+        <div class="kv"><span><b>Кровля</b> · ${w.roofing.area.toFixed(1)} м²</span><span><b>${w.roofing.mass.toFixed(0)} кг</b></span></div>
+        <div class="kv"><span><b>Всего</b> на ${w.planArea.toFixed(1)} м² навеса</span><span><b>${w.total.toFixed(0)} кг · ${w.perSqm.toFixed(1)} кг/м²</b></span></div>
+        <div class="kv"><span>Собственный вес кровельной части</span><span>${f2(w.deadPressure)} кПа</span></div>
+        <div class="kv"><span>Его доля в нагрузке: у стены / в поле</span><span>${(w.deadShareWall * 100).toFixed(0)} % / ${(w.deadShareField * 100).toFixed(0)} %</span></div>
+      </div>
+    </div>
+    <div class="hint" style="border:0;padding:8px 0 0">
+      m = V·ρ для дерева (ρ = 500 кг/м³, сухая сосна) и m = A·L·ρ для стали (ρ = 7850 кг/м³).
+      Этот вес уже учтён в расчёте нагрузок, а не добавлен задним числом.
+    </div>
+
+    <div class="pane-title" style="margin-top:14px">Стоимость материалов</div>
+    <div class="row2" style="gap:14px">
+      <div>${c.groups.map((g) => `<div class="kv"><span>${g.name} <i style="color:var(--ink-3);font-style:normal">· ${g.base}</i></span><span>${money(g.cost)} ${c.currency}</span></div>`).join('')}</div>
+      <div>
+        <div class="kv"><span><b>Всего материалов</b></span><span><b>${money(c.total)} ${c.currency}</b></span></div>
+        <div class="kv"><span>На 1 м² навеса</span><span>${money(c.perSqm)} ${c.currency}/м²</span></div>
+        <div class="kv"><span>Доля дерева / металла</span><span>${c.total > 0 ? `${Math.round((c.timber / c.total) * 100)} % / ${Math.round((c.steel / c.total) * 100)} %` : '—'}</span></div>
+      </div>
+    </div>
+    <div class="hint" style="border:0;padding:8px 0 0">
+      Цены задаются в панели слева: дерево по объёму, металл по массе, кровля по площади, метизы поштучно.
+      Работа, фундамент, доставка и крепёж стропил сюда не входят.
+    </div>
+
+    <div class="kv" style="margin-top:10px"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
+    <div class="kv"><span>Наружный столб: вниз / отрыв</span><span>${f2(res.foundation.maxDown / 1000)} кН / ${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>`;
+}
+
+/* ─────────────────── сцена и перетаскивание ─────────────────── */
+
+function renderCanvas(res) {
+  const draw = state.view === 'plan' ? drawPlan : state.view === 'section' ? drawSection : drawDiagrams;
+  const out = draw(res, state.sel);
+  $('canvas').innerHTML = out.svg;
+  state.meta = out.meta;
+  if (state.view === 'plan') wirePlan();
+}
+
+/** Массивы координат, которые можно таскать мышью. */
+const ARRAY_OF = {
+  rafter: (m) => m.rafters.xs,
+  post: (m) => m.posts.xs,
+  wallPost: (m) => m.wallPosts.xs,
+};
+const LABEL_OF = { rafter: 'Стропило', post: 'Столб', wallPost: 'Столб у стены' };
+const MIN_GAP = 100; // мм — соседи не могут слипнуться или поменяться местами
+
+/**
+ * Состояние перетаскивания живёт вне разметки, а слушатели висят на window:
+ * каждая перерисовка заменяет SVG целиком, вместе с элементом, который иначе
+ * держал бы захват указателя — тогда перетаскивание обрывалось бы на первом шаге.
+ */
+let drag = null;
+let dragFrame = 0;
+
+function canvasToMm(clientX) {
+  const svg = $('canvas').querySelector('svg');
+  const meta = state.meta;
+  if (!svg || !meta) return 0;
+  const r = svg.getBoundingClientRect();
+  return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+  drag.clientX = e.clientX;
+  drag.fine = e.shiftKey;
+  if (dragFrame) return; // кадры склеиваются, чтобы пересчёт не отставал от мыши
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    if (!drag) return;
+    const arr = ARRAY_OF[drag.type](state.model);
+    const step = drag.fine ? 10 : 50;
+    const x = Math.max(drag.lo, Math.min(drag.hi, Math.round(canvasToMm(drag.clientX) / step) * step));
+    if (arr[drag.index] === x) return;
+    arr[drag.index] = x;
+    drag.moved = true;
+    render(`${LABEL_OF[drag.type]} ${drag.index + 1} → ${Math.round(x)} мм`);
+  });
+}
+
+function onDragEnd() {
+  if (!drag) return;
+  if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
+  const moved = drag.moved;
+  drag = null;
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  window.removeEventListener('pointercancel', onDragEnd);
+  if (moved) save();
+  else render(); // простой клик — только подсветить выбранный элемент
+}
+
+function wirePlan() {
+  const svg = $('canvas').querySelector('svg');
+  svg.querySelectorAll('[data-pick]').forEach((g) => {
+    g.addEventListener('pointerdown', (e) => {
+      const type = g.getAttribute('data-pick');
+      if (!ARRAY_OF[type]) { state.sel = { type }; render(); return; }
+      const index = Number(g.getAttribute('data-index'));
+      const arr = ARRAY_OF[type](state.model);
+      state.sel = { type, index };
+      drag = {
+        type, index, moved: false, clientX: e.clientX, fine: e.shiftKey,
+        lo: index > 0 ? arr[index - 1] + MIN_GAP : 0,
+        hi: index < arr.length - 1 ? arr[index + 1] - MIN_GAP : state.model.geom.B,
+      };
+      window.addEventListener('pointermove', onDragMove);
+      window.addEventListener('pointerup', onDragEnd);
+      window.addEventListener('pointercancel', onDragEnd);
+      e.preventDefault();
+      renderInspector(state.result);
+    });
+  });
+}
+
+// двойной клик слушаем на контейнере, а не на SVG: SVG подменяется между кликами
+$('canvas').addEventListener('dblclick', (e) => {
+  if (state.view !== 'plan') return;
+  const x = Math.max(0, Math.min(state.model.geom.B, Math.round(canvasToMm(e.clientX) / 50) * 50));
+  state.model.rafters.xs.push(x);
+  state.model.rafters.xs.sort((a, b) => a - b);
+  state.sel = { type: 'rafter', index: state.model.rafters.xs.indexOf(x) };
+  render(`Добавлено стропило на ${x} мм`);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state.sel.type === 'rafter' && state.model.rafters.xs.length > 3) {
+      state.model.rafters.xs.splice(state.sel.index, 1);
+      state.sel.index = Math.max(0, state.sel.index - 1);
+      render('Стропило удалено');
+    } else if ((state.sel.type === 'post' || state.sel.type === 'wallPost')) {
+      const arr = ARRAY_OF[state.sel.type](state.model);
+      if (arr.length > 2) {
+        arr.splice(state.sel.index, 1);
+        state.sel.index = Math.max(0, state.sel.index - 1);
+        render(`${LABEL_OF[state.sel.type]} удалён`);
+      }
+    }
+  }
+});
+
+/* ─────────────────── отчёт ─────────────────── */
+
+function buildReport(res) {
+  const m = res.model, b = billOfMaterials(res);
+  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? ''}</td></tr>`;
+  const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
+    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
+  const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
+  const worstPost = res.posts.reduce((a, c) => (a.U > c.U ? a : c));
+  const worstWallPost = res.wallPosts.reduce((a, c) => (a.U > c.U ? a : c));
+  const wp = m.wallPosts;
+  $('report').innerHTML = `
+    <h1>Расчёт навеса, пристроенного к дому</h1>
+    <p>Дата: ${new Date().toLocaleDateString('ru-RU')}. Нормы: СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017.</p>
+    <h2>1. Исходные данные</h2>
+    <table>
+      <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
+      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.mu}, стеновых ${wp.mu}</td></tr>
+      <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
+      <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
+      <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
+      <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
+      <tr><td>Снеговой мешок</td><td>${m.site.drift ? `перепад ${m.geom.driftH} мм, μ = ${f2(res.snow.muWall)}, зона ${res.snow.driftLength} мм` : 'не учитывается'}</td></tr>
+      <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
+    </table>
+    <h2>2. Нагрузки</h2>
+    <table>
+      <tr><td>Собственный вес кровли и обрешётки</td><td>${f2(res.dead.total)} кН/м² по скату</td></tr>
+      <tr><td>Снег у стены / в поле (расчётный)</td><td>${f2(res.snow.at(0))} / ${f2(res.snow.at(m.geom.L + m.geom.a))} кПа</td></tr>
+      <tr><td>Ветровой отрыв</td><td>${f2(res.wind.up)} кПа</td></tr>
+      <tr><td>Сосредоточенная (п. 8.3.4)</td><td>1,0 кН на обрешётку</td></tr>
+    </table>
+    <h2>3. Результаты по элементам</h2>
+    <table><tr><th>Элемент</th><th>Итог</th><th>U</th><th>Определяющая проверка</th></tr>${res.summary.map(el).join('')}</table>
+    ${checkRows(`Стропило ${worstRafter.sec.label} (самое нагруженное)`, worstRafter.checks)}
+    ${checkRows(`Обрешётка ${res.battens.sec.label}`, res.battens.checks)}
+    ${checkRows(`Прогон ${res.purlin.sec.label}`, res.purlin.checks)}
+    ${checkRows(`Обвязка у стены ${res.wallPurlin.sec.label}`, res.wallPurlin.checks)}
+    ${checkRows(`Наружный столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
+    ${checkRows(`Стеновой столб ${worstWallPost.sec.label} и его крепление (самый нагруженный)`, worstWallPost.checks)}
+    <h2>4. Узлы и фундамент (оценочно)</h2>
+    <table>
+      <tr><td>Горизонтальный распор на стеновой ряд</td><td>${f2(res.thrust.total / 1000)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
+      <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
+      <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
+      <tr><td>Фундамент против отрыва</td><td>масса ≥ ${f2(res.foundation.requiredMass)} кН, куб бетона ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
+    </table>
+    <h2>5. Массы конструкции</h2>
+    <p>Собственный вес всех элементов входит в расчёт нагрузок: стропила и прогоны — погонным
+    весом сечения, обрешётка — весом на 1 м², столбы — весом ствола в осевой силе. Формулы:</p>
+    <p><i>дерево:</i> V = b·h·L·n, m = V·ρ, ρ = 500 кг/м³ (сухая сосна; свежераспиленная до 700–800).<br>
+       <i>сталь:</i> m = A·L·n·ρ, ρ = 7850 кг/м³ — то же, что A[см²]·0,785 кг/м.<br>
+       <i>кровля:</i> m = g·S/g₀, где g — вес покрытия по скату, S — площадь ската.</p>
+    <table><tr><th>Группа</th><th>Что входит</th><th>Масса, кг</th></tr>
+      ${b.weights.groups.map((g) => `<tr><td>${g.name}</td><td>${g.note}</td><td>${g.mass.toFixed(1)}</td></tr>`).join('')}
+      <tr><td colspan="2"><b>Всего</b></td><td><b>${b.weights.total.toFixed(0)}</b></td></tr>
+    </table>
+    <table>
+      <tr><td>Сосна</td><td>${b.weights.timber.volume.toFixed(3)} м³ = ${b.weights.timber.mass.toFixed(0)} кг</td></tr>
+      <tr><td>Сталь</td><td>${b.weights.steel.length.toFixed(1)} пог. м = ${b.weights.steel.mass.toFixed(0)} кг</td></tr>
+      <tr><td>Кровля</td><td>${b.weights.roofing.area.toFixed(1)} м² = ${b.weights.roofing.mass.toFixed(0)} кг</td></tr>
+      <tr><td>Метизы</td><td>${b.weights.fasteners.mass.toFixed(1)} кг</td></tr>
+      <tr><td>Удельный вес навеса</td><td>${b.weights.perSqm.toFixed(1)} кг/м² в плане</td></tr>
+      <tr><td>Собственный вес кровельной части</td><td>${f2(b.weights.deadPressure)} кПа — это ${(b.weights.deadShareWall * 100).toFixed(0)} % полной нагрузки у стены и ${(b.weights.deadShareField * 100).toFixed(0)} % в поле</td></tr>
+    </table>
+
+    <h2>6. Стоимость материалов</h2>
+    <p>Цены — те, что заданы в расчёте; работа, фундамент, доставка и крепёж стропил не учтены.</p>
+    <table><tr><th>Группа</th><th>Расчёт</th><th>Стоимость, ${b.costs.currency}</th></tr>
+      ${b.costs.groups.map((g) => `<tr><td>${g.name}</td><td>${g.base}</td><td>${Math.round(g.cost).toLocaleString('ru-RU')}</td></tr>`).join('')}
+      <tr><td colspan="2"><b>Всего</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')}</b></td></tr>
+      <tr><td colspan="2">На 1 м² навеса</td><td>${Math.round(b.costs.perSqm).toLocaleString('ru-RU')}</td></tr>
+    </table>
+
+    <h2>7. Спецификация</h2>
+    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Хлыстов по ${(b.stock / 1000).toFixed(0)} м</th><th>Объём</th><th>Масса</th><th>Стоимость</th></tr>
+      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : '—'}</td><td>${i.mass.toFixed(1)} кг</td><td>${Math.round(i.cost).toLocaleString('ru-RU')} ${b.costs.currency}</td></tr>`).join('')}
+      <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³</b></td><td><b>${b.weights.total.toFixed(0)} кг</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')} ${b.costs.currency}</b></td></tr></table>
+    <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
+    <h2>8. Ограничения</h2>
+    <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
+    температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
+    с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
+    <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
+    (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
+    на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
+    между шпильками учтена коэффициентом 1,5 на верхнюю. Принято также, что плоскость кровли
+    (обрешётка и крепление стропил к обвязке) передаёт горизонтальный распор на раскреплённый стеновой ряд;
+    иначе наружные столбы нужно раскреплять раскосами.</p>
+    <p>Результат — инженерная оценка, а не проект, прошедший экспертизу.</p>`;
+}
+
+/* ─────────────────── рендер ─────────────────── */
+
+let hintText = 'Тяните стропила и столбы мышью — шаг 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
+
+function render(hint) {
+  if (hint) hintText = hint;
+  const res = analyse(state.model);
+  state.result = res;
+  const rows = { rafter: res.rafters, post: res.posts, wallPost: res.wallPosts }[state.sel.type];
+  if (rows && state.sel.index >= rows.length) state.sel.index = rows.length - 1;
+  syncParams();
+  renderCanvas(res);
+  renderInspector(res);
+  renderSummary(res);
+  renderBom(res);
+  const pill = $('verdict-pill');
+  pill.textContent = `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`;
+  pill.style.color = uColor(res.maxU);
+  pill.style.borderColor = uColor(res.maxU);
+  $('hint').textContent = hintText;
+  save();
+}
+
+/* ─────────────────── события шапки ─────────────────── */
+
+for (const [id, view] of [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams']]) {
+  $(id).addEventListener('click', () => {
+    state.view = view;
+    for (const t of ['tab-plan', 'tab-section', 'tab-diagrams']) $(t).setAttribute('aria-pressed', String(t === id));
+    render();
+  });
+}
+$('btn-pick-all').addEventListener('click', () => {
+  $('btn-pick-all').textContent = 'Считаю…';
+  setTimeout(() => {
+    const sp = pickRafterSpacing(state.model, 0.9);
+    if (sp) state.model.rafters.xs = spread(state.model.geom.B, sp.count);
+    const out = pickAll(state.model, 0.9);
+    state.model = out.model;
+    $('btn-pick-all').textContent = 'Подобрать всё';
+    render('Подобрано: ' + out.log.map((l) => `${l.label ?? '—'}`).join(' · ') + (sp ? ` · стропил ${sp.count} шт` : ''));
+  }, 10);
+});
+$('btn-report').addEventListener('click', () => { buildReport(state.result); window.print(); });
+$('btn-link').addEventListener('click', async () => {
+  const url = shareUrl();
+  try {
+    await navigator.clipboard.writeText(url);
+    render(`Ссылка на расчёт скопирована · ${url.length} символов`);
+  } catch {
+    window.prompt('Ссылка на расчёт:', url);
+  }
+});
+$('btn-reset').addEventListener('click', () => {
+  state.model = defaultModel();
+  state.sel = { type: 'rafter', index: 0 };
+  render('Сброшено к значениям по умолчанию');
+});
+// открыли ссылку на другой расчёт в той же вкладке
+window.addEventListener('hashchange', () => {
+  const h = location.hash;
+  if (!h.startsWith('#p=')) return;
+  if (h.slice(3) === encodeModel(state.model)) return;
+  const m = decodeModel(h.slice(3));
+  if (!m) return;
+  state.model = m;
+  render('Загружен расчёт из ссылки');
+});
+
+function selectWorst(res) {
+  state.sel = selectRow(res, res.summary.reduce((a, b) => (a.U > b.U ? a : b)).key);
+}
+
+buildParams();
+selectWorst(analyse(state.model));
+render();
+
+})();
+</script>
+</body>
+</html>
