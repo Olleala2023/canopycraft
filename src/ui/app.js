@@ -66,7 +66,7 @@ const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
 const anyOpts = () => SECTIONS;
 
 const CONTROLS = [
-  { group: 'Геометрия' },
+  { group: 'Геометрия', open: true },
   { k: 'geom.B', label: 'Ширина навеса', type: 'range', min: 3000, max: 12000, step: 250, unit: 'мм' },
   { k: 'geom.L', label: 'Пролёт до столбов', type: 'range', min: 2000, max: 6500, step: 100, unit: 'мм' },
   { k: 'geom.a', label: 'Свес за столбы', type: 'range', min: 0, max: 2000, step: 50, unit: 'мм' },
@@ -74,7 +74,7 @@ const CONTROLS = [
   { k: 'geom.postHeight', label: 'Высота столба', type: 'range', min: 1800, max: 4000, step: 50, unit: 'мм' },
   { k: 'geom.driftH', label: 'Перепад до кровли дома', type: 'range', min: 0, max: 4000, step: 100, unit: 'мм' },
 
-  { group: 'Элементы' },
+  { group: 'Элементы', open: true },
   { k: '#rafterCount', label: 'Стропил', type: 'range', min: 3, max: 25, step: 1, unit: 'шт', actions: [
       ['равномерно', (m) => { m.rafters.xs = spread(m.geom.B, m.rafters.xs.length); return 'Стропила распределены равномерно'; }],
       ['подобрать шаг', (m) => {
@@ -83,6 +83,7 @@ const CONTROLS = [
         m.rafters.xs = spread(m.geom.B, r.count);
         return `Шаг ${Math.round(r.step)} мм (${r.count} шт), U = ${f2(r.U)}`;
       }]] },
+  { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
   { k: 'rafters.sectionId', label: 'Сечение стропила', type: 'select', options: anyOpts, pick: 'rafters' },
   { k: 'battens.sectionId', label: 'Обрешётка', type: 'select', options: anyOpts, pick: 'battens' },
   { k: 'battens.spacing', label: 'Шаг обрешётки', type: 'range', min: 200, max: 1200, step: 50, unit: 'мм' },
@@ -116,8 +117,7 @@ const CONTROLS = [
   { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
   { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
 
-  { group: 'Площадка и кровля' },
-  { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
+  { group: 'Площадка', side: 'right' },
   { k: 'site.snowRegion', label: 'Снеговой район', type: 'select', options: () => Object.entries(SNOW_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
   { k: 'site.windRegion', label: 'Ветровой район', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
   { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
@@ -129,7 +129,7 @@ const CONTROLS = [
   { k: 'site.reverseSlope', label: 'Уклон навеса к стене (обратный, k₂ = 1)', type: 'check' },
   { k: 'site.parapet', label: 'Сплошной парапет у перепада (m₁ = 0)', type: 'check' },
 
-  { group: 'Материалы' },
+  { group: 'Материалы', side: 'right' },
   { k: 'opts.timber.grade', label: 'Сорт сосны', type: 'select', numeric: true,
     options: () => [{ id: '1', label: '1 сорт' }, { id: '2', label: '2 сорт' }, { id: '3', label: '3 сорт' }] },
   { k: 'opts.timber.serviceClass', label: 'Условия эксплуатации', type: 'select', numeric: true,
@@ -139,7 +139,7 @@ const CONTROLS = [
   { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
     options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
 
-  { group: 'Цены — подставьте свои' },
+  { group: 'Цены — подставьте свои', side: 'right' },
   { k: 'prices.timberM3', label: 'Доска обрезная, ₽/м³', type: 'number', min: 0, step: 500 },
   { k: 'prices.steelKg', label: 'Профильная труба, ₽/кг', type: 'number', min: 0, step: 5 },
   { k: 'prices.roofingM2', label: 'Кровля, ₽/м²', type: 'number', min: 0, step: 50 },
@@ -167,15 +167,34 @@ function writeVirtual(k, v) {
   setPath(state.model, k, v);
 }
 
+/**
+ * Свёрнутость блоков переживает перезагрузку: настройки площадки и цен правят
+ * один раз, и каждый раз раскрывать их заново — лишний клик.
+ */
+const GROUPS_KEY = 'canopycraft.groups';
+const readGroups = () => { try { return JSON.parse(localStorage.getItem(GROUPS_KEY)) ?? {}; } catch { return {}; } };
+const writeGroups = (v) => { try { localStorage.setItem(GROUPS_KEY, JSON.stringify(v)); } catch { /* приватный режим */ } };
+
 function buildParams() {
-  const host = $('params');
-  host.innerHTML = '';
+  const hosts = { left: $('params'), right: $('params-right') };
+  hosts.left.innerHTML = '';
+  hosts.right.innerHTML = '';
+  const opened = readGroups();
+  let body = hosts.left;
+
   for (const c of CONTROLS) {
     if (c.group) {
-      const t = document.createElement('div');
-      t.className = 'pane-title';
-      t.textContent = c.group;
-      host.appendChild(t);
+      const box = document.createElement('details');
+      box.className = 'grp';
+      box.open = opened[c.group] ?? !!c.open;
+      box.innerHTML = `<summary class="pane-title">${c.group}</summary><div class="grp-body"></div>`;
+      box.addEventListener('toggle', () => {
+        const st = readGroups();
+        st[c.group] = box.open;
+        writeGroups(st);
+      });
+      (hosts[c.side] ?? hosts.left).appendChild(box);
+      body = box.querySelector('.grp-body');
       continue;
     }
     const wrap = document.createElement('div');
@@ -192,7 +211,7 @@ function buildParams() {
       const opts = c.options().map((o) => `<option value="${o.id}">${o.label}</option>`).join('');
       wrap.innerHTML = `<label for="${id}">${c.label}${c.pick ? ` <button class="btn" data-pick-el="${c.pick}" style="padding:0 6px;font-size:11px">подобрать</button>` : ''}</label><select id="${id}">${opts}</select>`;
     }
-    host.appendChild(wrap);
+    body.appendChild(wrap);
     const input = wrap.querySelector('input,select');
     input.addEventListener('input', () => {
       let v = c.type === 'check' ? input.checked : input.value;
@@ -206,32 +225,35 @@ function buildParams() {
       render();
     });
   }
-  host.querySelectorAll('[data-act]').forEach((b) =>
-    b.addEventListener('click', (e) => {
-      e.preventDefault();
-      const [key, i] = b.getAttribute('data-act').split(':');
-      const ctrl = CONTROLS.find((c) => c.k === key);
-      b.textContent = '…';
-      setTimeout(() => {
-        const msg = ctrl.actions[Number(i)][1](state.model);
-        b.textContent = ctrl.actions[Number(i)][0];
-        render(msg);
-      }, 10);
-    })
-  );
-  host.querySelectorAll('[data-pick-el]').forEach((b) =>
-    b.addEventListener('click', (e) => {
-      e.preventDefault();
-      const key = b.getAttribute('data-pick-el');
-      b.textContent = '…';
-      setTimeout(() => {
-        const r = key === 'rafters' && e.shiftKey ? null : pickSection(state.model, key, 0.9);
-        if (r) { setPath(state.model, `${key}.sectionId`, r.id); }
-        b.textContent = 'подобрать';
-        render(r ? `Подобрано: ${r.label}, U = ${f2(r.U)}` : 'Подходящего сечения в сортаменте нет — уменьшите пролёт или шаг');
-      }, 10);
-    })
-  );
+
+  for (const host of [hosts.left, hosts.right]) {
+    host.querySelectorAll('[data-act]').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        const [key, i] = b.getAttribute('data-act').split(':');
+        const ctrl = CONTROLS.find((c) => c.k === key);
+        b.textContent = '…';
+        setTimeout(() => {
+          const msg = ctrl.actions[Number(i)][1](state.model);
+          b.textContent = ctrl.actions[Number(i)][0];
+          render(msg);
+        }, 10);
+      })
+    );
+    host.querySelectorAll('[data-pick-el]').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        const key = b.getAttribute('data-pick-el');
+        b.textContent = '…';
+        setTimeout(() => {
+          const r = key === 'rafters' && e.shiftKey ? null : pickSection(state.model, key, 0.9);
+          if (r) { setPath(state.model, `${key}.sectionId`, r.id); }
+          b.textContent = 'подобрать';
+          render(r ? `Подобрано: ${r.label}, U = ${f2(r.U)}` : 'Подходящего сечения в сортаменте нет — уменьшите пролёт или шаг');
+        }, 10);
+      })
+    );
+  }
 }
 
 function syncParams() {
