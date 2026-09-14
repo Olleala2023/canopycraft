@@ -1,4 +1,5 @@
 :root{
+  color-scheme:light;
   --paper:#EDF0F3; --surface:#FFFFFF; --surface-2:#F5F8FA; --sunk:#E4E9EE;
   --ink:#111820; --ink-2:#48545F; --ink-3:#7C8894;
   --rule:#D2DAE1; --rule-2:#BCC7D0;
@@ -6,8 +7,10 @@
   --u-low:#3D7EA6; --u-ok:#3E8E59; --u-warn:#C88A11; --u-bad:#BC382F;
   --grid:#CBD6DF;
 }
+:root[data-theme="light"]{color-scheme:light}
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
+    color-scheme:dark;
     --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
     --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
     --rule:#2A333C; --rule-2:#3A4650;
@@ -17,6 +20,7 @@
   }
 }
 :root[data-theme="dark"]{
+  color-scheme:dark;
   --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
   --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
   --rule:#2A333C; --rule-2:#3A4650;
@@ -48,6 +52,7 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
 .tabs button[aria-pressed="true"]{background:var(--accent); color:var(--paper)}
 .btn{font:inherit; font-size:12.5px; padding:5px 12px; background:var(--surface); color:var(--ink);
   border:1px solid var(--rule-2); cursor:pointer}
+.btn.icon{padding:5px 9px; font-size:13px}
 .btn:hover{border-color:var(--accent-2); color:var(--accent-2)}
 .btn.primary{background:var(--accent); color:var(--paper); border-color:var(--accent)}
 .btn.primary:hover{opacity:.9; color:var(--paper)}
@@ -156,6 +161,18 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
 /* ── отчёт ── */
 #report{display:none}
 @media print{
+  /* печать всегда по-светлому: тёмная тема не должна делать отчёт светло-серым
+     по белому. :root:root — чтобы по весу перебить и :root[data-theme="dark"],
+     и :root:not([data-theme="light"]) из медиазапроса выше */
+  :root:root{
+    color-scheme:light;
+    --paper:#FFF; --surface:#FFF; --surface-2:#FFF; --sunk:#FFF;
+    --ink:#000; --ink-2:#333; --ink-3:#666;
+    --rule:#999; --rule-2:#999;
+    --accent:#000; --accent-2:#000; --accent-soft:#FFF;
+    --u-low:#3D7EA6; --u-ok:#3E8E59; --u-warn:#C88A11; --u-bad:#BC382F;
+    --grid:#CCC;
+  }
   body{background:#fff}
   .shell > *:not(#report){display:none !important}
   #report{display:block; font-size:11pt; color:#000}
