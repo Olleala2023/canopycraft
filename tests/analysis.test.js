@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, spread, tributaries } from '../src/core/model.js';
 import { analyse, billOfMaterials } from '../src/core/analysis.js';
-import { snowDrift, snowMu, snowProfile } from '../src/core/loads.js';
+import { snowDrift, snowMu, snowProfile, SNOW_REGIONS } from '../src/core/loads.js';
 import { phiBuckling } from '../src/core/checks.js';
 import { rhsProps, section as sectionById } from '../src/core/sections.js';
 
@@ -12,12 +12,51 @@ test('грузовые ширины покрывают всю ширину на�
   assert.equal(Math.round(t.reduce((a, b) => a + b, 0)), 6000);
 });
 
-test('снеговой мешок: μ растёт с перепадом и ограничен четырьмя', () => {
-  assert.ok(snowDrift(1200, 2.0).mu > 1);
-  assert.equal(snowDrift(1200, 2.0).mu, 2.4);
-  assert.equal(snowDrift(10000, 1.0).mu, 4);
-  assert.equal(snowDrift(300, 4.0).mu, 1); // не меньше обычного покрытия
-  assert.equal(snowDrift(1200, 2.0).length, 5000); // не менее 5 м
+test('снеговой мешок по формуле (Б.5) СП 20', () => {
+  // μ = 1 + (m₁l₁ + m₂l₂)/(2h)
+  const d = snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 4.8 });
+  assert.equal(d.raw.toFixed(3), (1 + (0.4 * 6 + 0.4 * 4.8) / (2 * 1.2)).toFixed(3));
+
+  // ограничение μ ≤ 2h/S_g обычно и определяет результат при малом перепаде
+  assert.equal(d.capGeom.toFixed(3), (2 * 1.2 / 1.5).toFixed(3));
+  assert.equal(d.mu, d.capGeom);
+  assert.match(d.governs, /2h/);
+  // там, где правит это ограничение, в мешке лежит снег толщиной h при
+  // плотности 2 кН/м³ — и нагрузка у стены не зависит от снегового района
+  for (const Sg of [1.0, 1.5, 2.0]) {
+    const x = snowDrift({ h: 1.2, Sg, l1: 6, l2: 4.8 });
+    assert.equal(x.mu, x.capGeom, `при S_g = ${Sg} должно править 2h/S_g`);
+    assert.ok(Math.abs(x.mu * Sg - 2 * 1.2) < 1e-9, `${Sg} кПа → ${(x.mu * Sg).toFixed(3)}`);
+  }
+  // в малоснежном районе ограничение перестаёт работать и правит сама формула
+  const light = snowDrift({ h: 1.2, Sg: 0.5, l1: 6, l2: 4.8 });
+  assert.equal(light.mu, light.raw);
+  assert.match(light.governs, /Б.5/);
+
+  // а в очень снежном обычный покров уже глубже ступеньки — мешку неоткуда взяться
+  const deep = snowDrift({ h: 1.2, Sg: 4.0, l1: 6, l2: 4.8 });
+  assert.equal(deep.mu, 1, 'μ не может быть меньше единицы');
+
+  // потолок 6 для навеса и 4 для обычного нижнего покрытия
+  const tall = { h: 8, Sg: 0.5, l1: 100, l2: 100 };
+  assert.equal(snowDrift({ ...tall, lowerIsCanopy: true }).mu, 6);
+  assert.equal(snowDrift({ ...tall, lowerIsCanopy: false }).mu, 4);
+
+  // при h > 8 м в расчёт идёт 8 м, длины участков не более 100 м
+  assert.equal(snowDrift({ h: 20, Sg: 4, l1: 500, l2: 500 }).h, 8);
+  assert.equal(snowDrift({ h: 20, Sg: 4, l1: 500, l2: 500 }).l1, 100);
+
+  // парапет снимает перенос с верхнего покрытия
+  const noParapet = snowDrift({ h: 3, Sg: 4, l1: 20, l2: 5 });
+  const parapet = snowDrift({ h: 3, Sg: 4, l1: 20, l2: 5, parapet: true });
+  assert.ok(parapet.raw < noParapet.raw);
+  assert.equal(parapet.m1, 0);
+
+  // зона b = 2h, не более 16 м
+  assert.equal(snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 5 }).length, 2400);
+  assert.equal(snowDrift({ h: 8, Sg: 1.5, l1: 6, l2: 5 }).length, 16000);
+
+  assert.equal(snowDrift({ h: 0, Sg: 1.5, l1: 6, l2: 5 }).mu, 1);
 });
 
 test('μ односкатного покрытия по прил. Б.1', () => {
@@ -27,11 +66,14 @@ test('μ односкатного покрытия по прил. Б.1', () => {
   assert.equal(snowMu(60), 0);
 });
 
-test('эпюра снега убывает от стены', () => {
-  const p = snowProfile({ snowRegion: 'IV', drift: true, driftH: 1200 }, 8);
-  assert.ok(p.at(0) > p.at(2000));
-  assert.ok(p.at(2000) > p.at(4800));
-  assert.equal(p.at(0), 4.8);
+test('эпюра снега убывает от стены и выходит на обычную за зоной мешка', () => {
+  const site = { snowRegion: 'IV', drift: true, houseRoofLength: 6000 };
+  const p = snowProfile(site, 8, { driftH: 1200, depth: 4800 });
+  assert.equal(p.at(0).toFixed(3), '2.400');
+  assert.ok(p.at(0) > p.at(1200));
+  assert.ok(p.at(1200) > p.at(2400));
+  assert.equal(p.at(2400).toFixed(3), p.at(4800).toFixed(3), 'за зоной b снег обычный');
+  assert.equal(p.at(4800), SNOW_REGIONS.IV, 'в поле — просто S_g при α ≤ 30°');
 });
 
 test('φ совпадает с табл. 7 СП 16 в пределах 4 %', () => {
@@ -55,9 +97,8 @@ test('полный расчёт: все элементы посчитаны, с�
   assert.equal(r.rafters.length, m.rafters.xs.length);
   assert.equal(r.posts.length, m.posts.xs.length);
   for (const s of r.summary) assert.ok(Number.isFinite(s.U) && s.U > 0, `${s.label}: U = ${s.U}`);
-  // нагрузка в снеговом мешке определяется перепадом высот, а не районом:
-  // μ·S_g = 2·h·γ_сн = 2·1,2·2,0 = 4,8 кПа
-  assert.ok(Math.abs(r.snow.muWall * r.snow.Sg - 4.8) < 1e-9, `${r.snow.muWall * r.snow.Sg} кПа`);
+  // при малом перепаде правит ограничение μ ≤ 2h/S_g, то есть μ·S_g = 2h
+  assert.ok(Math.abs(r.snow.muWall * r.snow.Sg - 2.4) < 1e-9, `${r.snow.muWall * r.snow.Sg} кПа`);
   assert.ok(r.wind.up > 0);
   assert.equal(r.wallPosts.length, m.wallPosts.xs.length);
   const b = billOfMaterials(r);
@@ -72,12 +113,16 @@ test('уплотнение стропил снижает их загрузку',
   assert.ok(U(dense) < U(sparse), `${U(dense).toFixed(2)} должно быть меньше ${U(sparse).toFixed(2)}`);
 });
 
-test('снеговой мешок заметно утяжеляет стропила', () => {
+test('снеговой мешок утяжеляет стропила и грузит стену сильнее свеса', () => {
   const m = defaultModel();
   const withDrift = analyse(m);
   const without = analyse({ ...m, site: { ...m.site, drift: false } });
   const U = (r) => Math.max(...r.rafters.map((x) => x.U));
-  assert.ok(U(withDrift) > U(without) * 1.3, `${U(withDrift).toFixed(2)} vs ${U(without).toFixed(2)}`);
+  assert.ok(U(withDrift) > U(without) * 1.1, `${U(withDrift).toFixed(2)} vs ${U(without).toFixed(2)}`);
+  assert.ok(withDrift.snow.at(0) > withDrift.snow.at(m.geom.L), 'у стены снега больше, чем в поле');
+  // с мешком реакция на стену больше, чем без него
+  const rw = (r) => r.rafters[Math.floor(r.rafters.length / 2)].reactions.wall;
+  assert.ok(rw(withDrift) > rw(without) * 1.15, `${(rw(withDrift) / 1000).toFixed(2)} против ${(rw(without) / 1000).toFixed(2)} кН`);
 });
 
 test('распор даёт только ветер: у вертикальных опор ΣH = 0 от силы тяжести', () => {

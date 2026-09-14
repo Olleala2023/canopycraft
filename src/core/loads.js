@@ -53,34 +53,84 @@ export function snowMu(alphaDeg) {
 }
 
 /**
- * Снеговой мешок у стены дома — прил. Б, схема Б.10 (перепад высот).
- * @param {number} hDrop перепад высот кровля дома / навес, мм
- * @param {number} Sg расчётный вес снегового покрова, кПа
- * @returns {{mu:number, length:number}} μ у стены и длина зоны намёта, мм
+ * Снеговой мешок у перепада высоты.
+ * СП 20.13330.2016, приложение Б, схема Б.8 (рисунок Б.11), формула (Б.5):
+ *
+ *     μ = 1 + (m₁·l₁ + m₂·l₂) / (2h)
+ *
+ * Ограничения по перечислению «д»:
+ *     μ ≤ 2h/S_g   (h в метрах, S_g в кПа) — сколько снега физически помещается
+ *     μ ≤ 4        если верхнее покрытие без продольного фонаря
+ *     μ ≤ 6        если нижнее покрытие — навес или верхнее с продольным фонарём
+ *
+ * Длина зоны b = 2h, не более 16 м.
+ *
+ * ⚠ Не выверено по тексту свода правил: формула (Б.6) для b и перечисление «в»
+ * (малая длина нижнего покрытия). Потолок μ ≤ 8, который встречается в
+ * онлайн-калькуляторах, в СП отсутствует — там 4 и 6.
+ *
+ * @param {object} o
+ * @param {number} o.h  перепад высоты, м; при h > 8 м принимается 8 м
+ * @param {number} o.Sg расчётный вес снегового покрова, кПа
+ * @param {number} o.l1 длина верхнего покрытия, м (не более 100)
+ * @param {number} o.l2 длина нижнего покрытия, м (не более 100)
+ * @param {number} [o.m1] доля переносимого снега с верхнего покрытия
+ * @param {number} [o.m2] то же для нижнего
+ * @param {boolean} [o.parapet] сплошной парапет у перепада → m₁ = 0
+ * @param {boolean} [o.lowerIsCanopy] нижнее покрытие — навес → потолок 6 вместо 4
  */
-export function snowDrift(hDrop, Sg) {
-  const gammaSnow = 2.0; // кН/м³, удельный вес снега
-  const h = Math.max(0, hDrop) / 1000;
-  const mu = Math.min(4.0, (2 * h * gammaSnow) / Sg);
-  const length = Math.min(16000, Math.max(5000, 2 * hDrop));
-  return { mu: Math.max(1, mu), length };
+export function snowDrift(o) {
+  const h = Math.min(8, Math.max(0, o.h));
+  const Sg = o.Sg;
+  const l1 = Math.min(100, Math.max(0, o.l1 ?? 0));
+  const l2 = Math.min(100, Math.max(0, o.l2 ?? 0));
+  const m1 = o.parapet ? 0 : (o.m1 ?? 0.4);
+  const m2 = o.m2 ?? 0.4;
+  const capAbs = o.lowerIsCanopy === false ? 4 : 6;
+
+  if (h <= 0) {
+    return { mu: 1, raw: 1, capGeom: Infinity, capAbs, governs: 'перепада нет', length: 0, h, l1, l2, m1, m2 };
+  }
+  const raw = 1 + (m1 * l1 + m2 * l2) / (2 * h);
+  const capGeom = (2 * h) / Sg;
+  const mu = Math.max(1, Math.min(raw, capGeom, capAbs));
+  const governs =
+    mu <= 1 ? 'снос не набирается'
+      : mu === capGeom && capGeom < raw ? 'ограничение μ ≤ 2h/S_g'
+        : mu === capAbs && capAbs < raw ? `ограничение μ ≤ ${capAbs}`
+          : 'формула (Б.5)';
+
+  return { mu, raw, capGeom, capAbs, governs, length: Math.min(16, 2 * h) * 1000, h, l1, l2, m1, m2 };
 }
 
 /**
  * Эпюра снега вдоль ската: функция горизонтальной координаты от стены (мм) → кПа.
  * Расчётное значение; нормативное = 0,7 от расчётного (п. 10.12).
  */
-export function snowProfile(site, alphaDeg) {
+export function snowProfile(site, alphaDeg, geom = {}) {
   const Sg = SNOW_REGIONS[site.snowRegion];
   const muRoof = snowMu(alphaDeg) * (site.ce ?? 1.0) * (site.ct ?? 1.0);
-  if (!site.drift) return { at: () => muRoof * Sg, muWall: muRoof, driftLength: 0, Sg };
-  const d = snowDrift(site.driftH ?? 1200, Sg);
+  if (!site.drift) {
+    return { at: () => muRoof * Sg, muWall: muRoof, driftLength: 0, Sg, drift: null };
+  }
+  const d = snowDrift({
+    h: (geom.driftH ?? 0) / 1000,
+    Sg,
+    l1: (site.houseRoofLength ?? 6000) / 1000,
+    l2: (geom.depth ?? 0) / 1000,
+    m1: site.driftM ?? 0.4,
+    m2: site.driftM ?? 0.4,
+    parapet: !!site.parapet,
+    lowerIsCanopy: true,
+  });
   const muWall = Math.max(muRoof, d.mu) * (site.ct ?? 1.0);
   return {
     Sg,
     muWall,
     driftLength: d.length,
+    drift: d,
     at(y) {
+      if (d.length <= 0) return muRoof * Sg;
       const k = Math.min(1, Math.max(0, y) / d.length);
       return (muWall - (muWall - muRoof) * k) * Sg;
     },

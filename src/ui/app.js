@@ -122,6 +122,11 @@ const CONTROLS = [
   { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
       { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', type: 'check' },
+  { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
+  { k: 'site.driftM', label: 'Доля переносимого снега m', type: 'select', numeric: true, options: () => [
+      { id: '0.4', label: '0,4 — плоские и сводчатые покрытия' },
+      { id: '0.3', label: '0,3 — с продольными фонарями, стреловидные' }] },
+  { k: 'site.parapet', label: 'Сплошной парапет у перепада (m₁ = 0)', type: 'check' },
 
   { group: 'Материалы' },
   { k: 'opts.timber.grade', label: 'Сорт сосны', type: 'select', numeric: true,
@@ -385,7 +390,8 @@ function renderBom(res) {
       Работа, фундамент, доставка и крепёж стропил сюда не входят.
     </div>
 
-    <div class="kv" style="margin-top:10px"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
+    ${res.snow.drift ? `<div class="kv" style="margin-top:10px"><span>Снеговой мешок · μ по СП 20 (Б.5)</span><span>формула ${f2(res.snow.drift.raw)} · 2h/S_g ${f2(res.snow.drift.capGeom)} · потолок ${res.snow.drift.capAbs} → принято ${f2(res.snow.muWall)} (${res.snow.drift.governs}), зона ${Math.round(res.snow.driftLength)} мм</span></div>` : ''}
+    <div class="kv"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
     <div class="kv"><span>Наружный столб: вниз / отрыв</span><span>${f2(res.foundation.maxDown / 1000)} кН / ${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>`;
 }
 
@@ -647,7 +653,11 @@ function buildReport(res) {
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
       <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
-      <tr><td>Снеговой мешок</td><td>${m.site.drift ? `перепад ${m.geom.driftH} мм, μ = ${f2(res.snow.muWall)}, зона ${res.snow.driftLength} мм` : 'не учитывается'}</td></tr>
+      <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift
+        ? `перепад h = ${(res.snow.drift.h).toFixed(2)} м, l₁ = ${res.snow.drift.l1.toFixed(1)} м, l₂ = ${res.snow.drift.l2.toFixed(1)} м, m₁ = ${res.snow.drift.m1}, m₂ = ${res.snow.drift.m2}.
+           По формуле (Б.5) μ = ${f2(res.snow.drift.raw)}; ограничения: 2h/S_g = ${f2(res.snow.drift.capGeom)}, потолок ${res.snow.drift.capAbs}.
+           Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}. Зона повышенных отложений b = 2h = ${Math.round(res.snow.driftLength)} мм.`
+        : 'не учитывается'}</td></tr>
       <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
     </table>
     <h2>2. Нагрузки</h2>
@@ -708,6 +718,10 @@ function buildReport(res) {
     <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
     температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
+    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016, формула (Б.5).
+    Не выверены по тексту свода правил формула (Б.6) для длины зоны b и перечисление «в»
+    (малая длина нижнего покрытия) — при ответственном проекте сверьтесь с действующей
+    редакцией СП. Потолок μ ≤ 8, встречающийся в онлайн-калькуляторах, в СП отсутствует.</p>
     <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
     (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
     на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность

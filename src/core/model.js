@@ -27,6 +27,10 @@ export function defaultModel() {
       windRegion: 'II',
       terrain: 'B',
       drift: true,
+      /** снеговой мешок: параметры формулы (Б.5) СП 20 */
+      houseRoofLength: 6000, // l₁ — длина верхнего покрытия, мм
+      driftM: 0.4,           // m₁ = m₂ — доля переносимого ветром снега
+      parapet: false,        // сплошной парапет у перепада → m₁ = 0
       ce: 1.0, ct: 1.0,
       cUp: 1.4, cUnder: 0.8, cDown: 0.5,
     },
