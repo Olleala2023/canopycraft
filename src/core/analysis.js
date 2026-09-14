@@ -59,10 +59,10 @@ function analyseRafter(model, x, trib, ctx) {
   const windDownPerp = (ctx.wind.down * trib) / 1000;
 
   const combos = {
-    'ULS-1': (xs) => deadPerpD + snowAt(xs),
-    'ULS-2': (xs) => deadPerpD + snowAt(xs) + 0.9 * windDownPerp,
+    'ULS-1': (xs) => deadPerpD + GAMMA_F.snow * snowAt(xs),
+    'ULS-2': (xs) => deadPerpD + GAMMA_F.snow * snowAt(xs) + 0.9 * windDownPerp,
     'ULS-3': () => GAMMA_F.relieving * deadPerpN - windUpPerp,
-    SLS: (xs) => deadPerpN + 0.7 * snowAt(xs),
+    SLS: (xs) => deadPerpN + snowAt(xs),
   };
 
   const res = {};
@@ -139,8 +139,8 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (ctx.snow.at(0) * sp) / 1000 * ca * ca;
 
-  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + snowD, nEl: 160 });
-  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + 0.7 * snowD, nEl: 160 });
+  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, nEl: 160 });
+  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, nEl: 160 });
 
   // сосредоточенная 1 кН (СП 20 п. 8.3.4) в середине наибольшего пролёта
   let span = 0, mid = B / 2;

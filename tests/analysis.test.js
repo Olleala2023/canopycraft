@@ -52,9 +52,19 @@ test('снеговой мешок по формуле (Б.5) СП 20', () => {
   assert.ok(parapet.raw < noParapet.raw);
   assert.equal(parapet.m1, 0);
 
-  // зона b = 2h, не более 16 м
-  assert.equal(snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 5 }).length, 2400);
-  assert.equal(snowDrift({ h: 8, Sg: 1.5, l1: 6, l2: 5 }).length, 16000);
+  // перечисление «г»: пока μ по формуле не упёрся в 2h/S_g — зона b = 2h;
+  // после этого снег растекается и зона доходит до 5h, но не более 16 м
+  const tight = snowDrift({ h: 1.2, Sg: 0.5, l1: 2, l2: 2 }); // формула ниже потолка
+  assert.ok(tight.raw < tight.capGeom);
+  assert.equal(tight.spread, false);
+  assert.equal(tight.length, 2400, 'b = 2h');
+
+  const spread = snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 5 }); // упёрлись в 2h/S_g
+  assert.ok(spread.raw > spread.capGeom);
+  assert.equal(spread.spread, true);
+  assert.equal(spread.length, 6000, 'b = 5h');
+
+  assert.equal(snowDrift({ h: 8, Sg: 1.5, l1: 6, l2: 5 }).length, 16000, 'не более 16 м');
 
   assert.equal(snowDrift({ h: 0, Sg: 1.5, l1: 6, l2: 5 }).mu, 1);
 });
@@ -69,11 +79,13 @@ test('μ односкатного покрытия по прил. Б.1', () => {
 test('эпюра снега убывает от стены и выходит на обычную за зоной мешка', () => {
   const site = { snowRegion: 'IV', drift: true, houseRoofLength: 6000 };
   const p = snowProfile(site, 8, { driftH: 1200, depth: 4800 });
-  assert.equal(p.at(0).toFixed(3), '2.400');
+  assert.equal(p.at(0).toFixed(3), '2.400', 'нормативное значение у стены');
   assert.ok(p.at(0) > p.at(1200));
-  assert.ok(p.at(1200) > p.at(2400));
-  assert.equal(p.at(2400).toFixed(3), p.at(4800).toFixed(3), 'за зоной b снег обычный');
-  assert.equal(p.at(4800), SNOW_REGIONS.IV, 'в поле — просто S_g при α ≤ 30°');
+  assert.ok(p.at(1200) > p.at(3000));
+  // зона 6000 мм длиннее навеса 4800 — эпюра обрезана, до μ₁ она не доходит
+  assert.ok(p.at(4800) > SNOW_REGIONS.IV, 'на краю навеса ещё остаток мешка');
+  const wide = snowProfile(site, 8, { driftH: 400, depth: 4800 });
+  assert.equal(wide.at(4800), SNOW_REGIONS.IV, 'за зоной b — обычный снег');
 });
 
 test('φ совпадает с табл. 7 СП 16 в пределах 4 %', () => {
@@ -294,4 +306,23 @@ test('испорченные исходные данные не роняют р�
     assert.ok(s.worst, `${s.label}: определяющая проверка должна быть названа`);
   }
   assert.ok(!Number.isFinite(broken.maxU), 'такой результат должен быть виден, а не выглядеть нулём');
+});
+
+test('снег: таблица даёт нормативное значение, расчётное — γ_f = 1,4', async () => {
+  const { GAMMA_F } = await import('../src/core/loads.js');
+  assert.equal(GAMMA_F.snow, 1.4, 'п. 10.12 СП 20');
+
+  const m = defaultModel();
+  const r = analyse(m);
+  // прогибы считаются на полное нормативное значение, прочность — на расчётное
+  const rafter = r.rafters[Math.floor(r.rafters.length / 2)];
+  const qUls = rafter.res['ULS-1'];
+  const qSls = rafter.res.SLS;
+  const sumR = (x) => x.reactions.reduce((a, b) => a + b.R, 0);
+  assert.ok(sumR(qUls) > sumR(qSls) * 1.25, `расчётная нагрузка должна быть заметно больше нормативной: ${(sumR(qUls) / 1000).toFixed(1)} против ${(sumR(qSls) / 1000).toFixed(1)} кН`);
+
+  // при удвоении снегового района расчётная нагрузка растёт, нормативная тоже
+  const heavier = analyse({ ...m, site: { ...m.site, snowRegion: 'VIII' } });
+  const h = heavier.rafters[Math.floor(heavier.rafters.length / 2)];
+  assert.ok(sumR(h.res['ULS-1']) > sumR(qUls));
 });

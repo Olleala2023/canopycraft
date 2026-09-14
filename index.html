@@ -471,7 +471,12 @@ function propsFor(sec, opts = {}) {
  * Давления в кПа (кН/м²), длины в мм, углы в градусах.
  */
 
-/** Расчётное значение веса снегового покрова S_g, кПа. Табл. 10.1. */
+/**
+ * НОРМАТИВНОЕ значение веса снегового покрова S_g, кПа. Табл. 10.1 СП 20.13330.2016.
+ * Изменение № 2 перевело таблицу из расчётных значений в нормативные:
+ * по п. 10.1 формула даёт нормативную нагрузку, а расчётная получается
+ * умножением на γ_f = 1,4 (п. 10.12).
+ */
 const SNOW_REGIONS = { I: 0.5, II: 1.0, III: 1.5, IV: 2.0, V: 2.5, VI: 3.0, VII: 3.5, VIII: 4.0 };
 
 /** Нормативное давление ветра w_0, кПа. Табл. 11.1. */
@@ -562,18 +567,25 @@ function snowDrift(o) {
   const raw = 1 + (m1 * l1 + m2 * l2) / (2 * h);
   const capGeom = (2 * h) / Sg;
   const mu = Math.max(1, Math.min(raw, capGeom, capAbs));
+  // перечисление «г»: пока μ по формуле не упёрся в 2h/S_g, зона b = 2h;
+  // как только упёрся — снег, который не помещается по высоте, растекается
+  // дальше, и b считается по формуле (Б.6), но не более 5h и не более 16 м.
+  // Текст (Б.6) распознан неразборчиво, поэтому берётся её верхняя граница 5h —
+  // это в запас: чем длиннее зона, тем больше снега на нижнем покрытии.
+  const spread = raw > capGeom;
+  const length = Math.min(16, spread ? 5 * h : 2 * h) * 1000;
   const governs =
     mu <= 1 ? 'снос не набирается'
       : mu === capGeom && capGeom < raw ? 'ограничение μ ≤ 2h/S_g'
         : mu === capAbs && capAbs < raw ? `ограничение μ ≤ ${capAbs}`
           : 'формула (Б.5)';
 
-  return { mu, raw, capGeom, capAbs, governs, length: Math.min(16, 2 * h) * 1000, h, l1, l2, m1, m2 };
+  return { mu, raw, capGeom, capAbs, governs, length, spread, h, l1, l2, m1, m2 };
 }
 
 /**
  * Эпюра снега вдоль ската: функция горизонтальной координаты от стены (мм) → кПа.
- * Расчётное значение; нормативное = 0,7 от расчётного (п. 10.12).
+ * Возвращает НОРМАТИВНОЕ значение (п. 10.1); расчётное = γ_f · нормативное, γ_f = 1,4.
  */
 function snowProfile(site, alphaDeg, geom = {}) {
   const Sg = SNOW_REGIONS[site.snowRegion];
@@ -633,6 +645,8 @@ function windPressure(site, zMm) {
 
 /** Коэффициенты надёжности по нагрузке, табл. 7.1 СП 20. */
 const GAMMA_F = {
+  snow: 1.4, // п. 10.12 СП 20
+  wind: 1.4, // разд. 11 СП 20
   steel: 1.05,
   timber: 1.1,
   roofing: 1.2,
@@ -1360,10 +1374,10 @@ function analyseRafter(model, x, trib, ctx) {
   const windDownPerp = (ctx.wind.down * trib) / 1000;
 
   const combos = {
-    'ULS-1': (xs) => deadPerpD + snowAt(xs),
-    'ULS-2': (xs) => deadPerpD + snowAt(xs) + 0.9 * windDownPerp,
+    'ULS-1': (xs) => deadPerpD + GAMMA_F.snow * snowAt(xs),
+    'ULS-2': (xs) => deadPerpD + GAMMA_F.snow * snowAt(xs) + 0.9 * windDownPerp,
     'ULS-3': () => GAMMA_F.relieving * deadPerpN - windUpPerp,
-    SLS: (xs) => deadPerpN + 0.7 * snowAt(xs),
+    SLS: (xs) => deadPerpN + snowAt(xs),
   };
 
   const res = {};
@@ -1440,8 +1454,8 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (ctx.snow.at(0) * sp) / 1000 * ca * ca;
 
-  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + snowD, nEl: 160 });
-  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + 0.7 * snowD, nEl: 160 });
+  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, nEl: 160 });
+  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, nEl: 160 });
 
   // сосредоточенная 1 кН (СП 20 п. 8.3.4) в середине наибольшего пролёта
   let span = 0, mid = B / 2;
@@ -1984,7 +1998,7 @@ function drawPlan(res, sel) {
   }
 
   if (res.snow.driftLength > 0) {
-    const dl = `снеговой мешок · μ = ${f2(res.snow.muWall)} · ${f2(res.snow.muWall * res.snow.Sg)} кПа`;
+    const dl = `снеговой мешок · μ = ${f2(res.snow.muWall)} · ${f2(res.snow.muWall * res.snow.Sg * 1.4)} кПа расчётных`;
     s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4" pointer-events="none"/>`);
     s.push(`<text x="${X(0) + 9}" y="${Y(0) + 17}" font-size="10" font-family="${mono}" fill="var(--u-bad)">${dl}</text>`);
   }
@@ -2043,7 +2057,7 @@ function drawSection(res) {
     pts.push(`${X(x)},${Y(top(x) + res.snow.at(x) * kPa)}`);
   }
   s.push(`<polygon points="${X(0)},${Y(top(0))} ${pts.join(' ')} ${X(total)},${Y(top(total))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1" pointer-events="none"/>`);
-  s.push(`<text x="${X(150)}" y="${Y(top(0) + res.snow.at(0) * kPa) - 7}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(res.snow.at(0))} → ${f2(res.snow.at(total))} кПа</text>`);
+  s.push(`<text x="${X(150)}" y="${Y(top(0) + res.snow.at(0) * kPa) - 7}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(res.snow.at(0))} → ${f2(res.snow.at(total))} кПа (нормативный)</text>`);
 
   // ── ветер
   s.push('<g stroke="var(--accent-2)" fill="var(--accent-2)" pointer-events="none">');
@@ -2826,14 +2840,16 @@ function buildReport(res) {
       <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift
         ? `перепад h = ${(res.snow.drift.h).toFixed(2)} м, l₁ = ${res.snow.drift.l1.toFixed(1)} м, l₂ = ${res.snow.drift.l2.toFixed(1)} м, m₁ = ${res.snow.drift.m1}, m₂ = ${res.snow.drift.m2}.
            По формуле (Б.5) μ = ${f2(res.snow.drift.raw)}; ограничения: 2h/S_g = ${f2(res.snow.drift.capGeom)}, потолок ${res.snow.drift.capAbs}.
-           Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}. Зона повышенных отложений b = 2h = ${Math.round(res.snow.driftLength)} мм.`
+           Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}.
+           Зона повышенных отложений b = ${res.snow.drift.spread ? '5h (перечисление «г», ветвь с растеканием)' : '2h'} = ${Math.round(res.snow.driftLength)} мм.`
         : 'не учитывается'}</td></tr>
       <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
     </table>
     <h2>2. Нагрузки</h2>
     <table>
       <tr><td>Собственный вес кровли и обрешётки</td><td>${f2(res.dead.total)} кН/м² по скату</td></tr>
-      <tr><td>Снег у стены / в поле (расчётный)</td><td>${f2(res.snow.at(0))} / ${f2(res.snow.at(m.geom.L + m.geom.a))} кПа</td></tr>
+      <tr><td>Снег у стены / в поле</td><td>нормативный ${f2(res.snow.at(0))} / ${f2(res.snow.at(m.geom.L + m.geom.a))} кПа;
+        расчётный (γ_f = 1,4) ${f2(res.snow.at(0) * 1.4)} / ${f2(res.snow.at(m.geom.L + m.geom.a) * 1.4)} кПа</td></tr>
       <tr><td>Ветровой отрыв</td><td>${f2(res.wind.up)} кПа</td></tr>
       <tr><td>Сосредоточенная (п. 8.3.4)</td><td>1,0 кН на обрешётку</td></tr>
     </table>
@@ -2888,10 +2904,14 @@ function buildReport(res) {
     <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
     температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
-    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016, формула (Б.5).
-    Не выверены по тексту свода правил формула (Б.6) для длины зоны b и перечисление «в»
-    (малая длина нижнего покрытия) — при ответственном проекте сверьтесь с действующей
-    редакцией СП. Потолок μ ≤ 8, встречающийся в онлайн-калькуляторах, в СП отсутствует.</p>
+    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016, формула (Б.5),
+    эпюра — по профилю «в» рисунка Б.11 (навес): линейный спад от μ у стены до μ₁ на длине b,
+    обрезанный длиной навеса. Длина зоны по перечислению «г»: пока μ по формуле не упёрся
+    в 2h/S₀, b = 2h; после этого снег растекается и b определяется формулой (Б.6) с потолком 5h.
+    Текст (Б.6) взять не удалось, поэтому принята её верхняя граница 5h — это в запас.</p>
+    <p>Не учтены, и оба в запас: снижение m₂ по перечислению «в» для пониженных покрытий
+    шириной менее 21 м и уточнение μ₁ по перечислению «е» — там μ₁ принято равным
+    коэффициенту обычного покрытия. Потолок μ ≤ 8 из онлайн-калькуляторов в СП отсутствует.</p>
     <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
     (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
     на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
