@@ -1038,11 +1038,19 @@ function deflectionCheck(spans, ratio) {
   return worst;
 }
 
-/** Худшая проверка из набора и общий коэффициент использования. */
+/**
+ * Худшая проверка из набора и общий коэффициент использования.
+ * Нечисловой U (испорченные исходные данные) считается бесконечным:
+ * такой результат должен бросаться в глаза, а не прятаться за нулём.
+ */
 function worstOf(checks) {
   const list = checks.filter(Boolean);
-  const U = list.reduce((m, c) => Math.max(m, c.U), 0);
-  const worst = list.find((c) => c.U === U) ?? null;
+  let worst = null;
+  let U = 0;
+  for (const c of list) {
+    const u = Number.isFinite(c.U) ? c.U : Infinity;
+    if (worst === null || u > U) { worst = c; U = u; }
+  }
   return { checks: list, U, worst };
 }
 
@@ -2421,11 +2429,13 @@ function renderInspector(res) {
       <span class="fx">${c.formula}${c.note ? ' · ' + c.note : ''} → ${fmtVal(c)}</span>
     </div>`);
   }
-  const v = el.U > 1
-    ? `<b>Не проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
-    : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
-    : el.U < 0.4 ? `<b>Большой запас.</b> Можно уменьшить сечение или увеличить шаг.`
-    : `<b>Проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`;
+  const worstName = el.worst?.name ?? '—';
+  const v = !Number.isFinite(el.U)
+    ? '<b>Расчёт не сошёлся.</b> Проверьте исходные данные — какой-то из параметров задан некорректно.'
+    : el.U > 1 ? `<b>Не проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`
+    : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${worstName}» — ${f2(el.U)}.`
+    : el.U < 0.4 ? '<b>Большой запас.</b> Можно уменьшить сечение или увеличить шаг.'
+    : `<b>Проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`;
   rows.push(`<div class="verdict" style="border-color:${uColor(el.U)}">${v}</div>`);
 
   const kv = [];
@@ -2789,7 +2799,7 @@ document.addEventListener('keydown', (e) => {
 
 function buildReport(res) {
   const m = res.model, b = billOfMaterials(res);
-  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? ''}</td></tr>`;
+  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
   const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
     checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
   const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
@@ -2901,7 +2911,9 @@ function render(hint) {
   renderSummary(res);
   renderBom(res);
   const pill = $('verdict-pill');
-  pill.textContent = `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`;
+  pill.textContent = Number.isFinite(res.maxU)
+    ? `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`
+    : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
   $('hint').textContent = hintText;

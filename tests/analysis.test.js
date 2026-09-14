@@ -286,3 +286,12 @@ test('момент вверху столба воспринимается пар
   const bottom = w.bolts.forces[0];
   assert.ok(top > bottom, `верхняя шпилька нагружена сильнее: ${top.toFixed(0)} против ${bottom.toFixed(0)} Н`);
 });
+
+test('испорченные исходные данные не роняют расчёт', () => {
+  const m = defaultModel();
+  const broken = analyse({ ...m, site: { ...m.site, snowRegion: 'нет такого' } });
+  for (const s of broken.summary) {
+    assert.ok(s.worst, `${s.label}: определяющая проверка должна быть названа`);
+  }
+  assert.ok(!Number.isFinite(broken.maxU), 'такой результат должен быть виден, а не выглядеть нулём');
+});
