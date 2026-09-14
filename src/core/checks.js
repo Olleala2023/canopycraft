@@ -161,11 +161,19 @@ export function deflectionCheck(spans, ratio) {
   return worst;
 }
 
-/** Худшая проверка из набора и общий коэффициент использования. */
+/**
+ * Худшая проверка из набора и общий коэффициент использования.
+ * Нечисловой U (испорченные исходные данные) считается бесконечным:
+ * такой результат должен бросаться в глаза, а не прятаться за нулём.
+ */
 export function worstOf(checks) {
   const list = checks.filter(Boolean);
-  const U = list.reduce((m, c) => Math.max(m, c.U), 0);
-  const worst = list.find((c) => c.U === U) ?? null;
+  let worst = null;
+  let U = 0;
+  for (const c of list) {
+    const u = Number.isFinite(c.U) ? c.U : Infinity;
+    if (worst === null || u > U) { worst = c; U = u; }
+  }
   return { checks: list, U, worst };
 }
 

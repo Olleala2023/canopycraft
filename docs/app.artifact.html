@@ -515,34 +515,84 @@ function snowMu(alphaDeg) {
 }
 
 /**
- * Снеговой мешок у стены дома — прил. Б, схема Б.10 (перепад высот).
- * @param {number} hDrop перепад высот кровля дома / навес, мм
- * @param {number} Sg расчётный вес снегового покрова, кПа
- * @returns {{mu:number, length:number}} μ у стены и длина зоны намёта, мм
+ * Снеговой мешок у перепада высоты.
+ * СП 20.13330.2016, приложение Б, схема Б.8 (рисунок Б.11), формула (Б.5):
+ *
+ *     μ = 1 + (m₁·l₁ + m₂·l₂) / (2h)
+ *
+ * Ограничения по перечислению «д»:
+ *     μ ≤ 2h/S_g   (h в метрах, S_g в кПа) — сколько снега физически помещается
+ *     μ ≤ 4        если верхнее покрытие без продольного фонаря
+ *     μ ≤ 6        если нижнее покрытие — навес или верхнее с продольным фонарём
+ *
+ * Длина зоны b = 2h, не более 16 м.
+ *
+ * ⚠ Не выверено по тексту свода правил: формула (Б.6) для b и перечисление «в»
+ * (малая длина нижнего покрытия). Потолок μ ≤ 8, который встречается в
+ * онлайн-калькуляторах, в СП отсутствует — там 4 и 6.
+ *
+ * @param {object} o
+ * @param {number} o.h  перепад высоты, м; при h > 8 м принимается 8 м
+ * @param {number} o.Sg расчётный вес снегового покрова, кПа
+ * @param {number} o.l1 длина верхнего покрытия, м (не более 100)
+ * @param {number} o.l2 длина нижнего покрытия, м (не более 100)
+ * @param {number} [o.m1] доля переносимого снега с верхнего покрытия
+ * @param {number} [o.m2] то же для нижнего
+ * @param {boolean} [o.parapet] сплошной парапет у перепада → m₁ = 0
+ * @param {boolean} [o.lowerIsCanopy] нижнее покрытие — навес → потолок 6 вместо 4
  */
-function snowDrift(hDrop, Sg) {
-  const gammaSnow = 2.0; // кН/м³, удельный вес снега
-  const h = Math.max(0, hDrop) / 1000;
-  const mu = Math.min(4.0, (2 * h * gammaSnow) / Sg);
-  const length = Math.min(16000, Math.max(5000, 2 * hDrop));
-  return { mu: Math.max(1, mu), length };
+function snowDrift(o) {
+  const h = Math.min(8, Math.max(0, o.h));
+  const Sg = o.Sg;
+  const l1 = Math.min(100, Math.max(0, o.l1 ?? 0));
+  const l2 = Math.min(100, Math.max(0, o.l2 ?? 0));
+  const m1 = o.parapet ? 0 : (o.m1 ?? 0.4);
+  const m2 = o.m2 ?? 0.4;
+  const capAbs = o.lowerIsCanopy === false ? 4 : 6;
+
+  if (h <= 0) {
+    return { mu: 1, raw: 1, capGeom: Infinity, capAbs, governs: 'перепада нет', length: 0, h, l1, l2, m1, m2 };
+  }
+  const raw = 1 + (m1 * l1 + m2 * l2) / (2 * h);
+  const capGeom = (2 * h) / Sg;
+  const mu = Math.max(1, Math.min(raw, capGeom, capAbs));
+  const governs =
+    mu <= 1 ? 'снос не набирается'
+      : mu === capGeom && capGeom < raw ? 'ограничение μ ≤ 2h/S_g'
+        : mu === capAbs && capAbs < raw ? `ограничение μ ≤ ${capAbs}`
+          : 'формула (Б.5)';
+
+  return { mu, raw, capGeom, capAbs, governs, length: Math.min(16, 2 * h) * 1000, h, l1, l2, m1, m2 };
 }
 
 /**
  * Эпюра снега вдоль ската: функция горизонтальной координаты от стены (мм) → кПа.
  * Расчётное значение; нормативное = 0,7 от расчётного (п. 10.12).
  */
-function snowProfile(site, alphaDeg) {
+function snowProfile(site, alphaDeg, geom = {}) {
   const Sg = SNOW_REGIONS[site.snowRegion];
   const muRoof = snowMu(alphaDeg) * (site.ce ?? 1.0) * (site.ct ?? 1.0);
-  if (!site.drift) return { at: () => muRoof * Sg, muWall: muRoof, driftLength: 0, Sg };
-  const d = snowDrift(site.driftH ?? 1200, Sg);
+  if (!site.drift) {
+    return { at: () => muRoof * Sg, muWall: muRoof, driftLength: 0, Sg, drift: null };
+  }
+  const d = snowDrift({
+    h: (geom.driftH ?? 0) / 1000,
+    Sg,
+    l1: (site.houseRoofLength ?? 6000) / 1000,
+    l2: (geom.depth ?? 0) / 1000,
+    m1: site.driftM ?? 0.4,
+    m2: site.driftM ?? 0.4,
+    parapet: !!site.parapet,
+    lowerIsCanopy: true,
+  });
   const muWall = Math.max(muRoof, d.mu) * (site.ct ?? 1.0);
   return {
     Sg,
     muWall,
     driftLength: d.length,
+    drift: d,
     at(y) {
+      if (d.length <= 0) return muRoof * Sg;
       const k = Math.min(1, Math.max(0, y) / d.length);
       return (muWall - (muWall - muRoof) * k) * Sg;
     },
@@ -988,11 +1038,19 @@ function deflectionCheck(spans, ratio) {
   return worst;
 }
 
-/** Худшая проверка из набора и общий коэффициент использования. */
+/**
+ * Худшая проверка из набора и общий коэффициент использования.
+ * Нечисловой U (испорченные исходные данные) считается бесконечным:
+ * такой результат должен бросаться в глаза, а не прятаться за нулём.
+ */
 function worstOf(checks) {
   const list = checks.filter(Boolean);
-  const U = list.reduce((m, c) => Math.max(m, c.U), 0);
-  const worst = list.find((c) => c.U === U) ?? null;
+  let worst = null;
+  let U = 0;
+  for (const c of list) {
+    const u = Number.isFinite(c.U) ? c.U : Infinity;
+    if (worst === null || u > U) { worst = c; U = u; }
+  }
   return { checks: list, U, worst };
 }
 
@@ -1058,6 +1116,10 @@ function defaultModel() {
       windRegion: 'II',
       terrain: 'B',
       drift: true,
+      /** снеговой мешок: параметры формулы (Б.5) СП 20 */
+      houseRoofLength: 6000, // l₁ — длина верхнего покрытия, мм
+      driftM: 0.4,           // m₁ = m₂ — доля переносимого ветром снега
+      parapet: false,        // сплошной парапет у перепада → m₁ = 0
       ce: 1.0, ct: 1.0,
       cUp: 1.4, cUnder: 0.8, cDown: 0.5,
     },
@@ -1532,7 +1594,7 @@ function analyseRoof(model) {
 
   const { geom } = model;
   const dead = roofDead(model);
-  const snow = snowProfile(model.site, geom.alpha);
+  const snow = snowProfile(model.site, geom.alpha, { driftH: geom.driftH, depth: geom.L + geom.a });
   const zTop = levels(model).canopyTopWall;
   const wind = windPressure(model.site, zTop);
   const ctx = { dead, snow, wind };
@@ -2222,6 +2284,11 @@ const CONTROLS = [
   { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
       { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', type: 'check' },
+  { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
+  { k: 'site.driftM', label: 'Доля переносимого снега m', type: 'select', numeric: true, options: () => [
+      { id: '0.4', label: '0,4 — плоские и сводчатые покрытия' },
+      { id: '0.3', label: '0,3 — с продольными фонарями, стреловидные' }] },
+  { k: 'site.parapet', label: 'Сплошной парапет у перепада (m₁ = 0)', type: 'check' },
 
   { group: 'Материалы' },
   { k: 'opts.timber.grade', label: 'Сорт сосны', type: 'select', numeric: true,
@@ -2362,11 +2429,13 @@ function renderInspector(res) {
       <span class="fx">${c.formula}${c.note ? ' · ' + c.note : ''} → ${fmtVal(c)}</span>
     </div>`);
   }
-  const v = el.U > 1
-    ? `<b>Не проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
-    : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`
-    : el.U < 0.4 ? `<b>Большой запас.</b> Можно уменьшить сечение или увеличить шаг.`
-    : `<b>Проходит.</b> Определяет «${el.worst.name}» — ${f2(el.U)}.`;
+  const worstName = el.worst?.name ?? '—';
+  const v = !Number.isFinite(el.U)
+    ? '<b>Расчёт не сошёлся.</b> Проверьте исходные данные — какой-то из параметров задан некорректно.'
+    : el.U > 1 ? `<b>Не проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`
+    : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${worstName}» — ${f2(el.U)}.`
+    : el.U < 0.4 ? '<b>Большой запас.</b> Можно уменьшить сечение или увеличить шаг.'
+    : `<b>Проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`;
   rows.push(`<div class="verdict" style="border-color:${uColor(el.U)}">${v}</div>`);
 
   const kv = [];
@@ -2485,7 +2554,8 @@ function renderBom(res) {
       Работа, фундамент, доставка и крепёж стропил сюда не входят.
     </div>
 
-    <div class="kv" style="margin-top:10px"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
+    ${res.snow.drift ? `<div class="kv" style="margin-top:10px"><span>Снеговой мешок · μ по СП 20 (Б.5)</span><span>формула ${f2(res.snow.drift.raw)} · 2h/S_g ${f2(res.snow.drift.capGeom)} · потолок ${res.snow.drift.capAbs} → принято ${f2(res.snow.muWall)} (${res.snow.drift.governs}), зона ${Math.round(res.snow.driftLength)} мм</span></div>` : ''}
+    <div class="kv"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
     <div class="kv"><span>Наружный столб: вниз / отрыв</span><span>${f2(res.foundation.maxDown / 1000)} кН / ${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>`;
 }
 
@@ -2729,7 +2799,7 @@ document.addEventListener('keydown', (e) => {
 
 function buildReport(res) {
   const m = res.model, b = billOfMaterials(res);
-  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? ''}</td></tr>`;
+  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
   const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
     checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
   const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
@@ -2747,7 +2817,11 @@ function buildReport(res) {
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
       <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
-      <tr><td>Снеговой мешок</td><td>${m.site.drift ? `перепад ${m.geom.driftH} мм, μ = ${f2(res.snow.muWall)}, зона ${res.snow.driftLength} мм` : 'не учитывается'}</td></tr>
+      <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift
+        ? `перепад h = ${(res.snow.drift.h).toFixed(2)} м, l₁ = ${res.snow.drift.l1.toFixed(1)} м, l₂ = ${res.snow.drift.l2.toFixed(1)} м, m₁ = ${res.snow.drift.m1}, m₂ = ${res.snow.drift.m2}.
+           По формуле (Б.5) μ = ${f2(res.snow.drift.raw)}; ограничения: 2h/S_g = ${f2(res.snow.drift.capGeom)}, потолок ${res.snow.drift.capAbs}.
+           Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}. Зона повышенных отложений b = 2h = ${Math.round(res.snow.driftLength)} мм.`
+        : 'не учитывается'}</td></tr>
       <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
     </table>
     <h2>2. Нагрузки</h2>
@@ -2808,6 +2882,10 @@ function buildReport(res) {
     <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
     температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
+    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016, формула (Б.5).
+    Не выверены по тексту свода правил формула (Б.6) для длины зоны b и перечисление «в»
+    (малая длина нижнего покрытия) — при ответственном проекте сверьтесь с действующей
+    редакцией СП. Потолок μ ≤ 8, встречающийся в онлайн-калькуляторах, в СП отсутствует.</p>
     <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
     (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
     на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
@@ -2833,7 +2911,9 @@ function render(hint) {
   renderSummary(res);
   renderBom(res);
   const pill = $('verdict-pill');
-  pill.textContent = `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`;
+  pill.textContent = Number.isFinite(res.maxU)
+    ? `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`
+    : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
   $('hint').textContent = hintText;

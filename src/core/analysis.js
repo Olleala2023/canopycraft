@@ -299,7 +299,7 @@ function analyseRoof(model) {
 
   const { geom } = model;
   const dead = roofDead(model);
-  const snow = snowProfile(model.site, geom.alpha);
+  const snow = snowProfile(model.site, geom.alpha, { driftH: geom.driftH, depth: geom.L + geom.a });
   const zTop = levels(model).canopyTopWall;
   const wind = windPressure(model.site, zTop);
   const ctx = { dead, snow, wind };
