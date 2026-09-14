@@ -25,6 +25,7 @@ function load() {
   } catch { return null; }
 }
 function save() {
+  if (drag) return; // во время перетаскивания сохраняем один раз, в конце
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state.model)); } catch { /* приватный режим */ }
 }
 
@@ -364,54 +365,97 @@ function renderCanvas(res) {
   const out = draw(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
-  if (state.view === 'plan') wirePlan(res);
+  if (state.view === 'plan') wirePlan();
 }
 
-function wirePlan(res) {
+/** Массивы координат, которые можно таскать мышью. */
+const ARRAY_OF = {
+  rafter: (m) => m.rafters.xs,
+  post: (m) => m.posts.xs,
+  wallPost: (m) => m.wallPosts.xs,
+};
+const LABEL_OF = { rafter: 'Стропило', post: 'Столб', wallPost: 'Столб у стены' };
+const MIN_GAP = 100; // мм — соседи не могут слипнуться или поменяться местами
+
+/**
+ * Состояние перетаскивания живёт вне разметки, а слушатели висят на window:
+ * каждая перерисовка заменяет SVG целиком, вместе с элементом, который иначе
+ * держал бы захват указателя — тогда перетаскивание обрывалось бы на первом шаге.
+ */
+let drag = null;
+let dragFrame = 0;
+
+function canvasToMm(clientX) {
   const svg = $('canvas').querySelector('svg');
   const meta = state.meta;
-  const toMm = (clientX) => {
-    const r = svg.getBoundingClientRect();
-    return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
-  };
-  let drag = null;
+  if (!svg || !meta) return 0;
+  const r = svg.getBoundingClientRect();
+  return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+  drag.clientX = e.clientX;
+  drag.fine = e.shiftKey;
+  if (dragFrame) return; // кадры склеиваются, чтобы пересчёт не отставал от мыши
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    if (!drag) return;
+    const arr = ARRAY_OF[drag.type](state.model);
+    const step = drag.fine ? 10 : 50;
+    const x = Math.max(drag.lo, Math.min(drag.hi, Math.round(canvasToMm(drag.clientX) / step) * step));
+    if (arr[drag.index] === x) return;
+    arr[drag.index] = x;
+    drag.moved = true;
+    render(`${LABEL_OF[drag.type]} ${drag.index + 1} → ${Math.round(x)} мм`);
+  });
+}
+
+function onDragEnd() {
+  if (!drag) return;
+  if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
+  const moved = drag.moved;
+  drag = null;
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  window.removeEventListener('pointercancel', onDragEnd);
+  if (moved) save();
+  else render(); // простой клик — только подсветить выбранный элемент
+}
+
+function wirePlan() {
+  const svg = $('canvas').querySelector('svg');
   svg.querySelectorAll('[data-pick]').forEach((g) => {
     g.addEventListener('pointerdown', (e) => {
       const type = g.getAttribute('data-pick');
+      if (!ARRAY_OF[type]) { state.sel = { type }; render(); return; }
       const index = Number(g.getAttribute('data-index'));
-      state.sel = type === 'purlin' ? { type: 'purlin' } : { type, index };
-      renderInspector(res);
-      if (type === 'purlin') { render(); return; }
-      drag = { type, index, moved: false };
-      g.setPointerCapture(e.pointerId);
+      const arr = ARRAY_OF[type](state.model);
+      state.sel = { type, index };
+      drag = {
+        type, index, moved: false, clientX: e.clientX, fine: e.shiftKey,
+        lo: index > 0 ? arr[index - 1] + MIN_GAP : 0,
+        hi: index < arr.length - 1 ? arr[index + 1] - MIN_GAP : state.model.geom.B,
+      };
+      window.addEventListener('pointermove', onDragMove);
+      window.addEventListener('pointerup', onDragEnd);
+      window.addEventListener('pointercancel', onDragEnd);
       e.preventDefault();
+      renderInspector(state.result);
     });
-    g.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      const B = state.model.geom.B;
-      let x = Math.round(toMm(e.clientX) / 50) * 50;
-      x = Math.max(0, Math.min(B, x));
-      const arr = drag.type === 'rafter' ? state.model.rafters.xs : state.model.posts.xs;
-      if (arr[drag.index] === x) return;
-      arr[drag.index] = x;
-      arr.sort((a, b) => a - b);
-      drag.index = arr.indexOf(x);
-      state.sel = { type: drag.type, index: drag.index };
-      drag.moved = true;
-      render(`${drag.type === 'rafter' ? 'Стропило' : 'Столб'} ${drag.index + 1} → ${x} мм`);
-    });
-    const end = () => { if (drag) { drag = null; save(); } };
-    g.addEventListener('pointerup', end);
-    g.addEventListener('pointercancel', end);
-  });
-  svg.addEventListener('dblclick', (e) => {
-    const x = Math.max(0, Math.min(state.model.geom.B, Math.round(toMm(e.clientX) / 50) * 50));
-    state.model.rafters.xs.push(x);
-    state.model.rafters.xs.sort((a, b) => a - b);
-    state.sel = { type: 'rafter', index: state.model.rafters.xs.indexOf(x) };
-    render(`Добавлено стропило на ${x} мм`);
   });
 }
+
+// двойной клик слушаем на контейнере, а не на SVG: SVG подменяется между кликами
+$('canvas').addEventListener('dblclick', (e) => {
+  if (state.view !== 'plan') return;
+  const x = Math.max(0, Math.min(state.model.geom.B, Math.round(canvasToMm(e.clientX) / 50) * 50));
+  state.model.rafters.xs.push(x);
+  state.model.rafters.xs.sort((a, b) => a - b);
+  state.sel = { type: 'rafter', index: state.model.rafters.xs.indexOf(x) };
+  render(`Добавлено стропило на ${x} мм`);
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -419,10 +463,13 @@ document.addEventListener('keydown', (e) => {
       state.model.rafters.xs.splice(state.sel.index, 1);
       state.sel.index = Math.max(0, state.sel.index - 1);
       render('Стропило удалено');
-    } else if (state.sel.type === 'post' && state.model.posts.xs.length > 2) {
-      state.model.posts.xs.splice(state.sel.index, 1);
-      state.sel.index = Math.max(0, state.sel.index - 1);
-      render('Столб удалён');
+    } else if ((state.sel.type === 'post' || state.sel.type === 'wallPost')) {
+      const arr = ARRAY_OF[state.sel.type](state.model);
+      if (arr.length > 2) {
+        arr.splice(state.sel.index, 1);
+        state.sel.index = Math.max(0, state.sel.index - 1);
+        render(`${LABEL_OF[state.sel.type]} удалён`);
+      }
     }
   }
 });
@@ -521,14 +568,14 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
-let hintText = 'Тяните стропила и столбы мышью · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
+let hintText = 'Тяните стропила и столбы мышью — шаг 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
 
 function render(hint) {
   if (hint) hintText = hint;
   const res = analyse(state.model);
   state.result = res;
-  const n = state.sel.type === 'rafter' ? res.rafters.length : state.sel.type === 'post' ? res.posts.length : 1;
-  if (state.sel.index >= n) state.sel.index = n - 1;
+  const rows = { rafter: res.rafters, post: res.posts, wallPost: res.wallPosts }[state.sel.type];
+  if (rows && state.sel.index >= rows.length) state.sel.index = rows.length - 1;
   syncParams();
   renderCanvas(res);
   renderInspector(res);

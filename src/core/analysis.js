@@ -266,7 +266,17 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
 
 /* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
 
-export function analyse(model) {
+/**
+ * Кровельная часть (нагрузки, стропила, обрешётка) не зависит от положения
+ * и сечений столбов, поэтому её результат переиспользуется между вызовами —
+ * иначе перетаскивание столба каждый кадр пересчитывало бы все стропила.
+ */
+let roofMemo = { key: null, value: null };
+
+function analyseRoof(model) {
+  const key = JSON.stringify([model.geom, model.site, model.roofing, model.rafters, model.battens, model.opts]);
+  if (roofMemo.key === key) return roofMemo.value;
+
   const { geom } = model;
   const dead = roofDead(model);
   const snow = snowProfile(model.site, geom.alpha);
@@ -278,10 +288,19 @@ export function analyse(model) {
   const tribs = tributaries(xs, geom.B);
   const cache = new Map();
   const rafters = xs.map((x, i) => {
-    const key = Math.round(tribs[i] * 10);
-    if (!cache.has(key)) cache.set(key, analyseRafter(model, 0, tribs[i], ctx));
-    return { ...cache.get(key), x, index: i };
+    const k = Math.round(tribs[i] * 10);
+    if (!cache.has(k)) cache.set(k, analyseRafter(model, 0, tribs[i], ctx));
+    return { ...cache.get(k), x, index: i };
   });
+  const battens = analyseBattens(model, ctx);
+
+  roofMemo = { key, value: { ctx, dead, snow, wind, rafters, battens } };
+  return roofMemo.value;
+}
+
+export function analyse(model) {
+  const { geom } = model;
+  const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
 
   const pick = (key) => rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
 
@@ -306,8 +325,6 @@ export function analyse(model) {
 
   const posts = analysePostRow(model, model.posts, purlin, ctx, { braced: false, thrust: 0, alongWall: 0 });
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { braced: true, thrust, alongWall });
-
-  const battens = analyseBattens(model, ctx);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {

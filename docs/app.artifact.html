@@ -86,7 +86,10 @@ select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3p
 .hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
 .legend{display:flex; flex-wrap:wrap; gap:4px 14px; padding:7px 13px; border-top:1px solid var(--rule); font-size:11px; color:var(--ink-2)}
 .legend i{display:inline-block; width:15px; height:8px; margin-right:5px; vertical-align:1px}
+/* подписи и штриховка не должны перехватывать клики по элементам схемы */
+.canvas svg text, .canvas svg polyline, .canvas svg polygon{pointer-events:none}
 g.pickable{cursor:pointer}
+g.pickable text{pointer-events:none}
 g.draggable{cursor:ew-resize}
 
 /* ── инспектор ── */
@@ -1357,7 +1360,17 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
 
 /* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
 
-function analyse(model) {
+/**
+ * Кровельная часть (нагрузки, стропила, обрешётка) не зависит от положения
+ * и сечений столбов, поэтому её результат переиспользуется между вызовами —
+ * иначе перетаскивание столба каждый кадр пересчитывало бы все стропила.
+ */
+let roofMemo = { key: null, value: null };
+
+function analyseRoof(model) {
+  const key = JSON.stringify([model.geom, model.site, model.roofing, model.rafters, model.battens, model.opts]);
+  if (roofMemo.key === key) return roofMemo.value;
+
   const { geom } = model;
   const dead = roofDead(model);
   const snow = snowProfile(model.site, geom.alpha);
@@ -1369,10 +1382,19 @@ function analyse(model) {
   const tribs = tributaries(xs, geom.B);
   const cache = new Map();
   const rafters = xs.map((x, i) => {
-    const key = Math.round(tribs[i] * 10);
-    if (!cache.has(key)) cache.set(key, analyseRafter(model, 0, tribs[i], ctx));
-    return { ...cache.get(key), x, index: i };
+    const k = Math.round(tribs[i] * 10);
+    if (!cache.has(k)) cache.set(k, analyseRafter(model, 0, tribs[i], ctx));
+    return { ...cache.get(k), x, index: i };
   });
+  const battens = analyseBattens(model, ctx);
+
+  roofMemo = { key, value: { ctx, dead, snow, wind, rafters, battens } };
+  return roofMemo.value;
+}
+
+function analyse(model) {
+  const { geom } = model;
+  const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
 
   const pick = (key) => rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
 
@@ -1397,8 +1419,6 @@ function analyse(model) {
 
   const posts = analysePostRow(model, model.posts, purlin, ctx, { braced: false, thrust: 0, alongWall: 0 });
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { braced: true, thrust, alongWall });
-
-  const battens = analyseBattens(model, ctx);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -1644,13 +1664,13 @@ const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;
 const mono = 'IBM Plex Mono, ui-monospace, monospace';
 
 function dimH(x1, x2, y, text, color = 'var(--ink-3)') {
-  return `<g><line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}"/>
+  return `<g pointer-events="none"><line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}"/>
    <line x1="${x1}" y1="${y - 4}" x2="${x1}" y2="${y + 4}" stroke="${color}"/>
    <line x1="${x2}" y1="${y - 4}" x2="${x2}" y2="${y + 4}" stroke="${color}"/>
    <text x="${(x1 + x2) / 2}" y="${y - 5}" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
 }
 function dimV(y1, y2, x, text, color = 'var(--ink-3)') {
-  return `<g><line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="${color}"/>
+  return `<g pointer-events="none"><line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="${color}"/>
    <line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="${color}"/>
    <line x1="${x - 4}" y1="${y2}" x2="${x + 4}" y2="${y2}" stroke="${color}"/>
    <text transform="translate(${x - 5},${(y1 + y2) / 2}) rotate(-90)" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
@@ -1736,7 +1756,7 @@ function drawPlan(res, sel) {
 
   if (res.snow.driftLength > 0) {
     const dl = `снеговой мешок · μ = ${f2(res.snow.muWall)} · ${f2(res.snow.muWall * res.snow.Sg)} кПа`;
-    s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4"/>`);
+    s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4" pointer-events="none"/>`);
     s.push(`<text x="${X(0) + 9}" y="${Y(0) + 17}" font-size="10" font-family="${mono}" fill="var(--u-bad)">${dl}</text>`);
   }
   s.push(dimH(X(0), X(g.B), Y(g.L + g.a) + 34, `${g.B}`));
@@ -1757,7 +1777,7 @@ function drawSection(res) {
   const al = (g.alpha * Math.PI) / 180;
   const rise = g.L * Math.tan(al);
   const totalH = g.postHeight + rise + g.driftH + 600;
-  const pad = { l: 90, r: 40, t: 30, b: 56 };
+  const pad = { l: 138, r: 44, t: 30, b: 62 };
   const sc = Math.min(700 / (g.L + g.a + 600), 380 / totalH);
   const vw = (g.L + g.a + 700) * sc + pad.l + pad.r;
   const vh = totalH * sc + pad.t + pad.b;
@@ -1768,10 +1788,18 @@ function drawSection(res) {
 
   // дом
   s.push(`<rect x="${X(-400)}" y="${Y(g.postHeight + rise + g.driftH + 400)}" width="${400 * sc}" height="${(g.postHeight + rise + g.driftH + 400) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
-  s.push(`<text transform="translate(${X(-400) + 14},${Y(g.postHeight / 2)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
-  // кровля дома выше на перепад
-  s.push(`<line x1="${X(-400)}" y1="${Y(g.postHeight + rise + g.driftH)}" x2="${X(0)}" y2="${Y(g.postHeight + rise + g.driftH)}" stroke="var(--ink-2)" stroke-width="2"/>`);
-  s.push(dimV(Y(g.postHeight + rise + g.driftH), Y(g.postHeight + rise), X(0) - 12, `h ${g.driftH}`, 'var(--u-bad)'));
+  s.push(`<text transform="translate(${X(-400) + 200 * sc},${Y(g.postHeight * 0.35)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
+  // кровля дома — на перепад выше верха навеса у стены
+  const hWall = g.postHeight + rise;         // верх навеса у стены, от верха фундамента
+  const hHouse = hWall + g.driftH;           // кровля дома
+  const xDim = X(-400) - 30;                 // размерная линия слева от дома
+  s.push(`<line x1="${xDim - 6}" y1="${Y(hHouse)}" x2="${X(0)}" y2="${Y(hHouse)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  // выносные линии к размерам
+  for (const [hv, col] of [[0, 'var(--ink-3)'], [hWall, 'var(--u-warn)']]) {
+    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(60)}" y2="${Y(hv)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" opacity=".8" pointer-events="none"/>`);
+  }
+  s.push(dimV(Y(0), Y(hWall), xDim, `${Math.round(hWall)} до верха навеса`, 'var(--u-warn)'));
+  s.push(dimV(Y(hWall), Y(hHouse), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
 
   // снеговая эпюра
   const sn = res.snow, kPaToPx = 26 * sc * 40;
@@ -1814,7 +1842,7 @@ function drawSection(res) {
 
   s.push(dimH(X(0), X(g.L), Y(0) + 34, `${g.L}`));
   s.push(dimH(X(g.L), X(g.L + g.a), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
-  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 26, `${g.postHeight}`));
+  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 28, `${g.postHeight} наружный столб`));
   s.push(`<text x="${X(g.L / 2)}" y="${Y(g.postHeight + rise / 2) - 12}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">уклон ${g.alpha}°</text>`);
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
@@ -1904,6 +1932,7 @@ function load() {
   } catch { return null; }
 }
 function save() {
+  if (drag) return; // во время перетаскивания сохраняем один раз, в конце
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state.model)); } catch { /* приватный режим */ }
 }
 
@@ -2243,54 +2272,97 @@ function renderCanvas(res) {
   const out = draw(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
-  if (state.view === 'plan') wirePlan(res);
+  if (state.view === 'plan') wirePlan();
 }
 
-function wirePlan(res) {
+/** Массивы координат, которые можно таскать мышью. */
+const ARRAY_OF = {
+  rafter: (m) => m.rafters.xs,
+  post: (m) => m.posts.xs,
+  wallPost: (m) => m.wallPosts.xs,
+};
+const LABEL_OF = { rafter: 'Стропило', post: 'Столб', wallPost: 'Столб у стены' };
+const MIN_GAP = 100; // мм — соседи не могут слипнуться или поменяться местами
+
+/**
+ * Состояние перетаскивания живёт вне разметки, а слушатели висят на window:
+ * каждая перерисовка заменяет SVG целиком, вместе с элементом, который иначе
+ * держал бы захват указателя — тогда перетаскивание обрывалось бы на первом шаге.
+ */
+let drag = null;
+let dragFrame = 0;
+
+function canvasToMm(clientX) {
   const svg = $('canvas').querySelector('svg');
   const meta = state.meta;
-  const toMm = (clientX) => {
-    const r = svg.getBoundingClientRect();
-    return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
-  };
-  let drag = null;
+  if (!svg || !meta) return 0;
+  const r = svg.getBoundingClientRect();
+  return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  e.preventDefault();
+  drag.clientX = e.clientX;
+  drag.fine = e.shiftKey;
+  if (dragFrame) return; // кадры склеиваются, чтобы пересчёт не отставал от мыши
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0;
+    if (!drag) return;
+    const arr = ARRAY_OF[drag.type](state.model);
+    const step = drag.fine ? 10 : 50;
+    const x = Math.max(drag.lo, Math.min(drag.hi, Math.round(canvasToMm(drag.clientX) / step) * step));
+    if (arr[drag.index] === x) return;
+    arr[drag.index] = x;
+    drag.moved = true;
+    render(`${LABEL_OF[drag.type]} ${drag.index + 1} → ${Math.round(x)} мм`);
+  });
+}
+
+function onDragEnd() {
+  if (!drag) return;
+  if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
+  const moved = drag.moved;
+  drag = null;
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+  window.removeEventListener('pointercancel', onDragEnd);
+  if (moved) save();
+  else render(); // простой клик — только подсветить выбранный элемент
+}
+
+function wirePlan() {
+  const svg = $('canvas').querySelector('svg');
   svg.querySelectorAll('[data-pick]').forEach((g) => {
     g.addEventListener('pointerdown', (e) => {
       const type = g.getAttribute('data-pick');
+      if (!ARRAY_OF[type]) { state.sel = { type }; render(); return; }
       const index = Number(g.getAttribute('data-index'));
-      state.sel = type === 'purlin' ? { type: 'purlin' } : { type, index };
-      renderInspector(res);
-      if (type === 'purlin') { render(); return; }
-      drag = { type, index, moved: false };
-      g.setPointerCapture(e.pointerId);
+      const arr = ARRAY_OF[type](state.model);
+      state.sel = { type, index };
+      drag = {
+        type, index, moved: false, clientX: e.clientX, fine: e.shiftKey,
+        lo: index > 0 ? arr[index - 1] + MIN_GAP : 0,
+        hi: index < arr.length - 1 ? arr[index + 1] - MIN_GAP : state.model.geom.B,
+      };
+      window.addEventListener('pointermove', onDragMove);
+      window.addEventListener('pointerup', onDragEnd);
+      window.addEventListener('pointercancel', onDragEnd);
       e.preventDefault();
+      renderInspector(state.result);
     });
-    g.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      const B = state.model.geom.B;
-      let x = Math.round(toMm(e.clientX) / 50) * 50;
-      x = Math.max(0, Math.min(B, x));
-      const arr = drag.type === 'rafter' ? state.model.rafters.xs : state.model.posts.xs;
-      if (arr[drag.index] === x) return;
-      arr[drag.index] = x;
-      arr.sort((a, b) => a - b);
-      drag.index = arr.indexOf(x);
-      state.sel = { type: drag.type, index: drag.index };
-      drag.moved = true;
-      render(`${drag.type === 'rafter' ? 'Стропило' : 'Столб'} ${drag.index + 1} → ${x} мм`);
-    });
-    const end = () => { if (drag) { drag = null; save(); } };
-    g.addEventListener('pointerup', end);
-    g.addEventListener('pointercancel', end);
-  });
-  svg.addEventListener('dblclick', (e) => {
-    const x = Math.max(0, Math.min(state.model.geom.B, Math.round(toMm(e.clientX) / 50) * 50));
-    state.model.rafters.xs.push(x);
-    state.model.rafters.xs.sort((a, b) => a - b);
-    state.sel = { type: 'rafter', index: state.model.rafters.xs.indexOf(x) };
-    render(`Добавлено стропило на ${x} мм`);
   });
 }
+
+// двойной клик слушаем на контейнере, а не на SVG: SVG подменяется между кликами
+$('canvas').addEventListener('dblclick', (e) => {
+  if (state.view !== 'plan') return;
+  const x = Math.max(0, Math.min(state.model.geom.B, Math.round(canvasToMm(e.clientX) / 50) * 50));
+  state.model.rafters.xs.push(x);
+  state.model.rafters.xs.sort((a, b) => a - b);
+  state.sel = { type: 'rafter', index: state.model.rafters.xs.indexOf(x) };
+  render(`Добавлено стропило на ${x} мм`);
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -2298,10 +2370,13 @@ document.addEventListener('keydown', (e) => {
       state.model.rafters.xs.splice(state.sel.index, 1);
       state.sel.index = Math.max(0, state.sel.index - 1);
       render('Стропило удалено');
-    } else if (state.sel.type === 'post' && state.model.posts.xs.length > 2) {
-      state.model.posts.xs.splice(state.sel.index, 1);
-      state.sel.index = Math.max(0, state.sel.index - 1);
-      render('Столб удалён');
+    } else if ((state.sel.type === 'post' || state.sel.type === 'wallPost')) {
+      const arr = ARRAY_OF[state.sel.type](state.model);
+      if (arr.length > 2) {
+        arr.splice(state.sel.index, 1);
+        state.sel.index = Math.max(0, state.sel.index - 1);
+        render(`${LABEL_OF[state.sel.type]} удалён`);
+      }
     }
   }
 });
@@ -2400,14 +2475,14 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
-let hintText = 'Тяните стропила и столбы мышью · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
+let hintText = 'Тяните стропила и столбы мышью — шаг 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
 
 function render(hint) {
   if (hint) hintText = hint;
   const res = analyse(state.model);
   state.result = res;
-  const n = state.sel.type === 'rafter' ? res.rafters.length : state.sel.type === 'post' ? res.posts.length : 1;
-  if (state.sel.index >= n) state.sel.index = n - 1;
+  const rows = { rafter: res.rafters, post: res.posts, wallPost: res.wallPosts }[state.sel.type];
+  if (rows && state.sel.index >= rows.length) state.sel.index = rows.length - 1;
   syncParams();
   renderCanvas(res);
   renderInspector(res);

@@ -8,13 +8,13 @@ const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;
 const mono = 'IBM Plex Mono, ui-monospace, monospace';
 
 function dimH(x1, x2, y, text, color = 'var(--ink-3)') {
-  return `<g><line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}"/>
+  return `<g pointer-events="none"><line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${color}"/>
    <line x1="${x1}" y1="${y - 4}" x2="${x1}" y2="${y + 4}" stroke="${color}"/>
    <line x1="${x2}" y1="${y - 4}" x2="${x2}" y2="${y + 4}" stroke="${color}"/>
    <text x="${(x1 + x2) / 2}" y="${y - 5}" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
 }
 function dimV(y1, y2, x, text, color = 'var(--ink-3)') {
-  return `<g><line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="${color}"/>
+  return `<g pointer-events="none"><line x1="${x}" y1="${y1}" x2="${x}" y2="${y2}" stroke="${color}"/>
    <line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="${color}"/>
    <line x1="${x - 4}" y1="${y2}" x2="${x + 4}" y2="${y2}" stroke="${color}"/>
    <text transform="translate(${x - 5},${(y1 + y2) / 2}) rotate(-90)" font-size="10" text-anchor="middle" font-family="${mono}" fill="${color}">${text}</text></g>`;
@@ -100,7 +100,7 @@ export function drawPlan(res, sel) {
 
   if (res.snow.driftLength > 0) {
     const dl = `снеговой мешок · μ = ${f2(res.snow.muWall)} · ${f2(res.snow.muWall * res.snow.Sg)} кПа`;
-    s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4"/>`);
+    s.push(`<rect x="${X(0) + 5}" y="${Y(0) + 5}" width="${dl.length * 5.6}" height="16" fill="var(--surface)" opacity=".94" stroke="var(--u-bad)" stroke-opacity=".4" pointer-events="none"/>`);
     s.push(`<text x="${X(0) + 9}" y="${Y(0) + 17}" font-size="10" font-family="${mono}" fill="var(--u-bad)">${dl}</text>`);
   }
   s.push(dimH(X(0), X(g.B), Y(g.L + g.a) + 34, `${g.B}`));
@@ -121,7 +121,7 @@ export function drawSection(res) {
   const al = (g.alpha * Math.PI) / 180;
   const rise = g.L * Math.tan(al);
   const totalH = g.postHeight + rise + g.driftH + 600;
-  const pad = { l: 90, r: 40, t: 30, b: 56 };
+  const pad = { l: 138, r: 44, t: 30, b: 62 };
   const sc = Math.min(700 / (g.L + g.a + 600), 380 / totalH);
   const vw = (g.L + g.a + 700) * sc + pad.l + pad.r;
   const vh = totalH * sc + pad.t + pad.b;
@@ -132,10 +132,18 @@ export function drawSection(res) {
 
   // дом
   s.push(`<rect x="${X(-400)}" y="${Y(g.postHeight + rise + g.driftH + 400)}" width="${400 * sc}" height="${(g.postHeight + rise + g.driftH + 400) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
-  s.push(`<text transform="translate(${X(-400) + 14},${Y(g.postHeight / 2)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
-  // кровля дома выше на перепад
-  s.push(`<line x1="${X(-400)}" y1="${Y(g.postHeight + rise + g.driftH)}" x2="${X(0)}" y2="${Y(g.postHeight + rise + g.driftH)}" stroke="var(--ink-2)" stroke-width="2"/>`);
-  s.push(dimV(Y(g.postHeight + rise + g.driftH), Y(g.postHeight + rise), X(0) - 12, `h ${g.driftH}`, 'var(--u-bad)'));
+  s.push(`<text transform="translate(${X(-400) + 200 * sc},${Y(g.postHeight * 0.35)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
+  // кровля дома — на перепад выше верха навеса у стены
+  const hWall = g.postHeight + rise;         // верх навеса у стены, от верха фундамента
+  const hHouse = hWall + g.driftH;           // кровля дома
+  const xDim = X(-400) - 30;                 // размерная линия слева от дома
+  s.push(`<line x1="${xDim - 6}" y1="${Y(hHouse)}" x2="${X(0)}" y2="${Y(hHouse)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  // выносные линии к размерам
+  for (const [hv, col] of [[0, 'var(--ink-3)'], [hWall, 'var(--u-warn)']]) {
+    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(60)}" y2="${Y(hv)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" opacity=".8" pointer-events="none"/>`);
+  }
+  s.push(dimV(Y(0), Y(hWall), xDim, `${Math.round(hWall)} до верха навеса`, 'var(--u-warn)'));
+  s.push(dimV(Y(hWall), Y(hHouse), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
 
   // снеговая эпюра
   const sn = res.snow, kPaToPx = 26 * sc * 40;
@@ -178,7 +186,7 @@ export function drawSection(res) {
 
   s.push(dimH(X(0), X(g.L), Y(0) + 34, `${g.L}`));
   s.push(dimH(X(g.L), X(g.L + g.a), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
-  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 26, `${g.postHeight}`));
+  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 28, `${g.postHeight} наружный столб`));
   s.push(`<text x="${X(g.L / 2)}" y="${Y(g.postHeight + rise / 2) - 12}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">уклон ${g.alpha}°</text>`);
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
