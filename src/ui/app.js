@@ -430,19 +430,37 @@ function frame() {
   return { svg, w: b.width, h: b.height, rect: svg.getBoundingClientRect() };
 }
 
-function toFrame(clientX, clientY) {
-  const f = frame();
-  if (!f) return { x: 0, y: 0 };
-  return { x: ((clientX - f.rect.left) / f.rect.width) * f.w, y: ((clientY - f.rect.top) / f.rect.height) * f.h };
+/**
+ * Экранная точка → координаты SVG.
+ * Через getScreenCTM, а не вручную через viewBox и ширину элемента: при
+ * height 100 % включается центрирование по preserveAspectRatio, и ручной
+ * пересчёт начинает врать.
+ * @param {boolean} inner true — в системе координат самого рисунка,
+ *   то есть уже с учётом масштаба и сдвига.
+ */
+function toSvg(clientX, clientY, inner = false) {
+  const svg = svgEl();
+  if (!svg) return { x: 0, y: 0 };
+  const target = inner ? svg.querySelector('g[data-zoom]') || svg : svg;
+  const ctm = target.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const p = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
 }
 
-/** Не даём утащить рисунок за край: при k = 1 сдвиг запрещён вовсе. */
+const toFrame = (clientX, clientY) => toSvg(clientX, clientY, false);
+
+/**
+ * Панорама свободная — всё клеточное поле рабочее. Ограничение мягкое:
+ * не даём увести рисунок целиком из виду, кусок всегда остаётся на экране.
+ */
 function clampPan() {
   const f = frame();
   if (!f) return;
   const z = zv();
-  z.tx = Math.min(0, Math.max((1 - z.k) * f.w, z.tx));
-  z.ty = Math.min(0, Math.max((1 - z.k) * f.h, z.ty));
+  const keep = 80; // сколько единиц рисунка обязано остаться видимым
+  z.tx = Math.min(f.w - keep, Math.max(keep - z.k * f.w, z.tx));
+  z.ty = Math.min(f.h - keep, Math.max(keep - z.k * f.h, z.ty));
 }
 
 /** Всё содержимое рисунка складывается в одну группу, её и двигаем. */
@@ -513,8 +531,9 @@ canvasEl.addEventListener('pointermove', (e) => {
   const f = frame();
   if (!f) return;
   const z = zv();
-  z.tx = pan.tx + ((e.clientX - pan.x) / f.rect.width) * f.w;
-  z.ty = pan.ty + ((e.clientY - pan.y) / f.rect.height) * f.h;
+  const scale = f.rect.width > 0 ? f.w / f.rect.width : 1; // единиц рисунка в пикселе
+  z.tx = pan.tx + (e.clientX - pan.x) * scale;
+  z.ty = pan.ty + (e.clientY - pan.y) * scale;
   clampPan();
   applyZoom();
 });
@@ -526,7 +545,6 @@ const endPointer = (e) => {
 };
 canvasEl.addEventListener('pointerup', endPointer);
 canvasEl.addEventListener('pointercancel', endPointer);
-canvasEl.addEventListener('pointerleave', endPointer);
 
 $('zoom-in').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1.4); });
 $('zoom-out').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1 / 1.4); });
@@ -549,13 +567,10 @@ const MIN_GAP = 100; // мм — соседи не могут слипнутьс
 let drag = null;
 let dragFrame = 0;
 
-function canvasToMm(clientX) {
+function canvasToMm(clientX, clientY = 0) {
   const meta = state.meta;
-  const f = frame();
-  if (!f || !meta) return 0;
-  const px = ((clientX - f.rect.left) / f.rect.width) * meta.vw;
-  const z = zv();
-  return ((px - z.tx) / z.k - meta.ox) / meta.sc;
+  if (!meta) return 0;
+  return (toSvg(clientX, clientY, true).x - meta.ox) / meta.sc;
 }
 
 function onDragMove(e) {
