@@ -52,6 +52,10 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
 .btn.primary{background:var(--accent); color:var(--paper); border-color:var(--accent)}
 .btn.primary:hover{opacity:.9; color:var(--paper)}
 .verdict-pill{font-family:"IBM Plex Mono",monospace; font-size:12px; padding:4px 10px; border:1px solid; white-space:nowrap}
+.cost-pill{background:var(--surface); color:var(--ink); border-color:var(--rule-2); cursor:pointer; font:inherit;
+  font-family:"IBM Plex Mono",monospace; font-size:12px}
+.cost-pill:hover{border-color:var(--accent-2)}
+.cost-pill .delta{color:var(--ink-3); margin-left:6px}
 
 /* ── три колонки ── */
 .panes{display:grid; grid-template-columns:236px minmax(0,1fr) 260px; gap:0; align-items:start;
