@@ -122,6 +122,12 @@ g.draggable{cursor:ew-resize}
 .card .bar span{position:absolute; left:0; top:0; bottom:0}
 
 .bom{border:1px solid var(--rule-2); background:var(--surface); padding:12px}
+.opt-row td{padding-top:6px; padding-bottom:6px}
+.opt-row.best td{background:var(--accent-soft)}
+.opt-row .btn{padding:1px 9px; font-size:11.5px}
+.save{color:var(--u-ok)}
+.progress{height:4px; background:var(--sunk); margin-top:8px; position:relative; overflow:hidden}
+.progress span{position:absolute; left:0; top:0; bottom:0; background:var(--accent-2); transition:width .2s}
 .tbl{overflow-x:auto}
 .tbl table{min-width:540px}
 table{border-collapse:collapse; width:100%; font-size:12.5px}

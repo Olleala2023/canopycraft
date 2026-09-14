@@ -178,10 +178,12 @@ function analyseBattens(model, ctx) {
   checks.push(deflectionCheck(spans, 150));
   // ограничение производителя кровли по пролёту обрешётки
   checks.push({
+    // покрытие лежит на обрешётке и пролётом для него служит её шаг,
+    // а не расстояние между стропилами
     name: 'Пролёт под кровлю',
-    value: span, limit: ctx.dead.def.maxBatten, unit: 'мм',
-    U: span / ctx.dead.def.maxBatten,
-    formula: 'шаг стропил ≤ допустимого пролёта покрытия',
+    value: sp, limit: ctx.dead.def.maxBatten, unit: 'мм',
+    U: sp / ctx.dead.def.maxBatten,
+    formula: 'шаг обрешётки ≤ допустимого пролёта покрытия',
     note: ctx.dead.def.label,
   });
 

@@ -325,3 +325,57 @@ test('снег: таблица даёт нормативное значение,
   const h = heavier.rafters[Math.floor(heavier.rafters.length / 2)];
   assert.ok(sumR(h.res['ULS-1']) > sumR(qUls));
 });
+
+test('допустимый пролёт кровли меряется шагом обрешётки, а не стропил', () => {
+  const m = defaultModel();
+  const lim = (r) => r.battens.checks.find((c) => c.name === 'Пролёт под кровлю');
+
+  const dense = analyse({ ...m, battens: { ...m.battens, spacing: 400 } });
+  const sparse = analyse({ ...m, battens: { ...m.battens, spacing: 900 } });
+  assert.equal(lim(dense).value, 400);
+  assert.equal(lim(sparse).value, 900);
+  assert.ok(lim(sparse).U > lim(dense).U, 'реже обрешётка — ближе к пределу покрытия');
+
+  // шаг стропил на эту проверку не влияет
+  const wide = analyse({ ...m, rafters: { ...m.rafters, xs: spread(m.geom.B, 5) } });
+  assert.equal(lim(wide).value, m.battens.spacing);
+
+  // мягкая черепица требует куда более частой обрешётки, чем профлист
+  const soft = analyse({ ...m, roofing: 'soft' });
+  assert.ok(lim(soft).U > lim(analyse(m)).U * 2);
+});
+
+test('подбор по цене: варианты в запасе, отсортированы, не дороже текущего', async () => {
+  const { searchByCost } = await import('../src/core/search.js');
+  const m = defaultModel();
+  m.geom.B = 3000; // поменьше, чтобы тест не тянулся
+  m.geom.L = 2500;
+  m.rafters.xs = spread(3000, 6);
+  m.posts.xs = spread(3000, 3);
+  m.wallPosts.xs = spread(3000, 3);
+
+  const target = 0.9;
+  const before = billOfMaterials(analyse(m)).costs.total;
+  const stages = [];
+  const r = await searchByCost(m, { target, keep: 2, limit: 4, onProgress: (p) => stages.push(p.stage) });
+
+  assert.ok(r.options.length > 0, 'хоть один вариант должен найтись');
+  assert.ok(stages.includes('стропила') && stages.includes('опоры'), 'прогресс сообщается по этапам');
+
+  for (const o of r.options) {
+    assert.ok(o.maxU <= target + 1e-9, `вариант за ${Math.round(o.cost)} ₽ имеет U = ${o.maxU.toFixed(2)}`);
+    // каждый вариант — работоспособная модель, а не выборка полей
+    const check = analyse(o.model);
+    assert.ok(Math.abs(check.maxU - o.maxU) < 1e-9, 'модель варианта воспроизводит свой же результат');
+    assert.ok(Math.abs(billOfMaterials(check).costs.total - o.cost) < 1, 'и свою же стоимость');
+  }
+  for (let i = 1; i < r.options.length; i++) {
+    assert.ok(r.options[i].cost >= r.options[i - 1].cost, 'отсортировано по возрастанию цены');
+  }
+  assert.ok(r.options[0].cost <= before, 'лучший вариант не дороже исходного');
+
+  // геометрия не трогается
+  assert.equal(r.options[0].model.geom.B, m.geom.B);
+  assert.equal(r.options[0].model.geom.L, m.geom.L);
+  assert.equal(r.options[0].model.geom.alpha, m.geom.alpha);
+});
