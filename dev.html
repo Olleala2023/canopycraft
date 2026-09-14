@@ -13,6 +13,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="src/ui/styles.css">
+<script>
+  // тема ставится до первой отрисовки: иначе при выбранной тёмной мелькает светлый фон
+  try {
+    var t = localStorage.getItem('canopycraft.theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* приватный режим */ }
+</script>
 </head>
 <body>
 <div class="shell">
@@ -31,6 +38,7 @@
     <button class="btn" id="btn-cost-search">Подобрать по цене</button>
     <button class="btn" id="btn-report">Отчёт</button>
     <button class="btn" id="btn-link">Ссылка на расчёт</button>
+    <button class="btn icon" id="btn-theme" aria-label="Тема оформления">◐</button>
     <button class="btn" id="btn-reset">Сбросить</button>
   </div>
 
