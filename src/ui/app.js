@@ -123,9 +123,9 @@ const CONTROLS = [
       { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', type: 'check' },
   { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
-  { k: 'site.driftM', label: 'Доля переносимого снега m', type: 'select', numeric: true, options: () => [
-      { id: '0.4', label: '0,4 — плоские и сводчатые покрытия' },
-      { id: '0.3', label: '0,3 — с продольными фонарями, стреловидные' }] },
+  { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },
+  { k: 'site.crossSlope', label: 'Поперечный уклон навеса φ', type: 'range', min: 0, max: 30, step: 1, unit: '°' },
+  { k: 'site.reverseSlope', label: 'Уклон навеса к стене (обратный, k₂ = 1)', type: 'check' },
   { k: 'site.parapet', label: 'Сплошной парапет у перепада (m₁ = 0)', type: 'check' },
 
   { group: 'Материалы' },
@@ -392,7 +392,13 @@ function renderBom(res) {
       Работа, фундамент, доставка и крепёж стропил сюда не входят.
     </div>
 
-    ${res.snow.drift ? `<div class="kv" style="margin-top:10px"><span>Снеговой мешок · μ по СП 20 (Б.5)</span><span>формула ${f2(res.snow.drift.raw)} · 2h/S_g ${f2(res.snow.drift.capGeom)} · потолок ${res.snow.drift.capAbs} → принято ${f2(res.snow.muWall)} (${res.snow.drift.governs}), зона ${Math.round(res.snow.driftLength)} мм</span></div>` : ''}
+    ${res.snow.drift && res.snow.drift.applies ? `
+      <div class="kv" style="margin-top:10px"><span>Снеговой мешок · μ по СП 20 (Б.5)</span><span>формула ${f2(res.snow.drift.raw)} · 2h/S₀ ${f2(res.snow.drift.capGeom)} · потолок ${f2(res.snow.drift.capAbs)} → принято ${f2(res.snow.muWall)} (${res.snow.drift.governs})</span></div>
+      <div class="kv"><span>Зона b (Б.6) и μ₁ (перечисление «е»)</span><span>b = ${Math.round(res.snow.driftLength)} мм${res.snow.drift.spread ? ' (ветвь с растеканием)' : ''} · μ₁ = ${f2(res.snow.drift.mu1)}</span></div>
+      <div class="kv"><span>m₂ по перечислению «в»</span><span>${res.snow.drift.m2parts
+        ? `0,5·k₁·k₂·k₃ = 0,5·${f2(res.snow.drift.m2parts.k1)}·${f2(res.snow.drift.m2parts.k2)}·${f2(res.snow.drift.m2parts.k3)} = ${f2(res.snow.drift.m2)} (a = ${f2(res.snow.drift.a)} м)`
+        : `${f2(res.snow.drift.m2)} — ширина покрытия ≥ 21 м`}</span></div>`
+      : res.snow.drift ? `<div class="kv" style="margin-top:10px"><span>Снеговой мешок</span><span>не учитывается: ${res.snow.drift.governs}</span></div>` : ''}
     <div class="kv"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
     <div class="kv"><span>Наружный столб: вниз / отрыв</span><span>${f2(res.foundation.maxDown / 1000)} кН / ${f2(res.foundation.uplift / 1000)} кН → фундамент ≥ ${Math.round(res.foundation.cubeSide)} мм куб</span></div>`;
 }
@@ -655,12 +661,14 @@ function buildReport(res) {
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
       <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
-      <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift
+      <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift && res.snow.drift.applies
         ? `перепад h = ${(res.snow.drift.h).toFixed(2)} м, l₁ = ${res.snow.drift.l1.toFixed(1)} м, l₂ = ${res.snow.drift.l2.toFixed(1)} м, m₁ = ${res.snow.drift.m1}, m₂ = ${res.snow.drift.m2}.
            По формуле (Б.5) μ = ${f2(res.snow.drift.raw)}; ограничения: 2h/S_g = ${f2(res.snow.drift.capGeom)}, потолок ${res.snow.drift.capAbs}.
            Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}.
-           Зона повышенных отложений b = ${res.snow.drift.spread ? '5h (перечисление «г», ветвь с растеканием)' : '2h'} = ${Math.round(res.snow.driftLength)} мм.`
-        : 'не учитывается'}</td></tr>
+           m₂ по перечислению «в» = ${f2(res.snow.drift.m2)}${res.snow.drift.m2parts ? ` (k₁ = ${f2(res.snow.drift.m2parts.k1)}, k₂ = ${f2(res.snow.drift.m2parts.k2)}, k₃ = ${f2(res.snow.drift.m2parts.k3)})` : ''}.
+           Зона b ${res.snow.drift.spread ? 'по формуле (Б.6)' : '= 2h'} = ${Math.round(res.snow.driftLength)} мм, μ₁ по перечислению «е» = ${f2(res.snow.drift.mu1)}.
+           Нижнее покрытие рассчитано в двух вариантах загружения — равномерном и с мешком (схема Б.8), принята огибающая.`
+        : (res.snow.drift ? `не учитывается: ${res.snow.drift.governs}` : 'не учитывается')}</td></tr>
       <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
     </table>
     <h2>2. Нагрузки</h2>
@@ -722,14 +730,14 @@ function buildReport(res) {
     <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
     температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
-    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016, формула (Б.5),
-    эпюра — по профилю «в» рисунка Б.11 (навес): линейный спад от μ у стены до μ₁ на длине b,
-    обрезанный длиной навеса. Длина зоны по перечислению «г»: пока μ по формуле не упёрся
-    в 2h/S₀, b = 2h; после этого снег растекается и b определяется формулой (Б.6) с потолком 5h.
-    Текст (Б.6) взять не удалось, поэтому принята её верхняя граница 5h — это в запас.</p>
-    <p>Не учтены, и оба в запас: снижение m₂ по перечислению «в» для пониженных покрытий
-    шириной менее 21 м и уточнение μ₁ по перечислению «е» — там μ₁ принято равным
-    коэффициенту обычного покрытия. Потолок μ ≤ 8 из онлайн-калькуляторов в СП отсутствует.</p>
+    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016: формула (Б.5),
+    перечисление «в» для m₂, перечисление «г» с формулой (Б.6) для длины зоны, перечисление «д»
+    для потолка μ, перечисление «е» для μ₁, примечание 3 (при h &lt; S₀/2 мешок не учитывается).
+    Эпюра — по профилю «в» рисунка Б.11 (навес): линейный спад от μ у стены до μ₁ на длине b.
+    Нижнее покрытие рассчитано в двух вариантах загружения, как требует перечисление «а».</p>
+    <p>Не реализованы: схемы с продольными фонарями и ступенчатыми перепадами (l′ = l* − 2h′),
+    вариант с парапетом на нижнем покрытии проверен не полностью, разрыв между покрытием
+    и стенкой перепада (перечисление «ж»). Потолок μ ≤ 8 из онлайн-калькуляторов в СП отсутствует.</p>
     <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
     (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
     на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность

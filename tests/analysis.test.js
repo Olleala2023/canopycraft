@@ -12,61 +12,56 @@ test('грузовые ширины покрывают всю ширину на�
   assert.equal(Math.round(t.reduce((a, b) => a + b, 0)), 6000);
 });
 
-test('снеговой мешок по формуле (Б.5) СП 20', () => {
-  // μ = 1 + (m₁l₁ + m₂l₂)/(2h)
-  const d = snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 4.8 });
-  assert.equal(d.raw.toFixed(3), (1 + (0.4 * 6 + 0.4 * 4.8) / (2 * 1.2)).toFixed(3));
+test('снеговой мешок: схема Б.8, формулы (Б.5) и (Б.6), перечисления «в», «г», «д», «е»', () => {
+  const base = { h: 1.2, Sg: 1.5, l1: 6, l2: 4.8, a: 6, beta: 8, phi: 0, m1: 0.4, lowerIsCanopy: true };
+  const d = snowDrift(base);
 
-  // ограничение μ ≤ 2h/S_g обычно и определяет результат при малом перепаде
-  assert.equal(d.capGeom.toFixed(3), (2 * 1.2 / 1.5).toFixed(3));
-  assert.equal(d.mu, d.capGeom);
-  assert.match(d.governs, /2h/);
-  // там, где правит это ограничение, в мешке лежит снег толщиной h при
-  // плотности 2 кН/м³ — и нагрузка у стены не зависит от снегового района
-  for (const Sg of [1.0, 1.5, 2.0]) {
-    const x = snowDrift({ h: 1.2, Sg, l1: 6, l2: 4.8 });
-    assert.equal(x.mu, x.capGeom, `при S_g = ${Sg} должно править 2h/S_g`);
-    assert.ok(Math.abs(x.mu * Sg - 2 * 1.2) < 1e-9, `${Sg} кПа → ${(x.mu * Sg).toFixed(3)}`);
-  }
-  // в малоснежном районе ограничение перестаёт работать и правит сама формула
-  const light = snowDrift({ h: 1.2, Sg: 0.5, l1: 6, l2: 4.8 });
-  assert.equal(light.mu, light.raw);
-  assert.match(light.governs, /Б.5/);
+  // перечисление «в»: m₂ = 0,5·k₁·k₂·k₃ при ширине покрытия меньше 21 м
+  assert.equal(d.m2parts.k1.toFixed(4), Math.sqrt(6 / 21).toFixed(4));
+  assert.equal(d.m2parts.k2.toFixed(4), (1 - 8 / 35).toFixed(4));
+  assert.equal(d.m2parts.k3, 1);
+  assert.equal(d.m2.toFixed(4), (0.5 * Math.sqrt(6 / 21) * (1 - 8 / 35)).toFixed(4));
+  assert.equal(snowDrift({ ...base, reverseSlope: true }).m2parts.k2, 1, 'обратный уклон → k₂ = 1');
+  assert.ok(snowDrift({ ...base, a: 0.5 }).m2 >= 0.1, 'm₂ не менее 0,1');
+  assert.equal(snowDrift({ ...base, a: 30 }).m2, 0.4, 'при a ≥ 21 м перечисление «в» не применяется');
 
-  // а в очень снежном обычный покров уже глубже ступеньки — мешку неоткуда взяться
-  const deep = snowDrift({ h: 1.2, Sg: 4.0, l1: 6, l2: 4.8 });
-  assert.equal(deep.mu, 1, 'μ не может быть меньше единицы');
+  // формула (Б.5): делитель h, а не 2h
+  assert.equal(d.raw.toFixed(4), (1 + (0.4 * 6 + d.m2 * 4.8) / 1.2).toFixed(4));
 
-  // потолок 6 для навеса и 4 для обычного нижнего покрытия
-  const tall = { h: 8, Sg: 0.5, l1: 100, l2: 100 };
-  assert.equal(snowDrift({ ...tall, lowerIsCanopy: true }).mu, 6);
-  assert.equal(snowDrift({ ...tall, lowerIsCanopy: false }).mu, 4);
+  // перечисление «д»
+  assert.equal(d.capGeom.toFixed(4), (2 * 1.2 / 1.5).toFixed(4));
+  assert.equal(d.capAbs, 6, 'для навеса потолок 6');
+  assert.equal(snowDrift({ ...base, lowerIsCanopy: false, l1: 20, l2: 20 }).capAbs, 4, 'для здания при l′ ≤ 48 м — 4');
+  assert.equal(snowDrift({ ...base, lowerIsCanopy: false, l1: 90, l2: 20 }).capAbs, 6, 'при l′ > 72 м — 6');
+  assert.equal(snowDrift({ ...base, lowerIsCanopy: false, l1: 60, l2: 20 }).capAbs, 5, 'между — интерполяция');
+  assert.equal(d.mu, d.capGeom, 'у навеса у стены обычно правит 2h/S₀');
 
-  // при h > 8 м в расчёт идёт 8 м, длины участков не более 100 м
-  assert.equal(snowDrift({ h: 20, Sg: 4, l1: 500, l2: 500 }).h, 8);
-  assert.equal(snowDrift({ h: 20, Sg: 4, l1: 500, l2: 500 }).l1, 100);
-
-  // парапет снимает перенос с верхнего покрытия
-  const noParapet = snowDrift({ h: 3, Sg: 4, l1: 20, l2: 5 });
-  const parapet = snowDrift({ h: 3, Sg: 4, l1: 20, l2: 5, parapet: true });
-  assert.ok(parapet.raw < noParapet.raw);
-  assert.equal(parapet.m1, 0);
-
-  // перечисление «г»: пока μ по формуле не упёрся в 2h/S_g — зона b = 2h;
-  // после этого снег растекается и зона доходит до 5h, но не более 16 м
-  const tight = snowDrift({ h: 1.2, Sg: 0.5, l1: 2, l2: 2 }); // формула ниже потолка
-  assert.ok(tight.raw < tight.capGeom);
+  // перечисление «г» и формула (Б.6)
+  const tight = snowDrift({ ...base, l1: 0.5, l2: 0.5, Sg: 0.5 });
+  assert.ok(tight.raw <= tight.capGeom);
   assert.equal(tight.spread, false);
   assert.equal(tight.length, 2400, 'b = 2h');
 
-  const spread = snowDrift({ h: 1.2, Sg: 1.5, l1: 6, l2: 5 }); // упёрлись в 2h/S_g
-  assert.ok(spread.raw > spread.capGeom);
-  assert.equal(spread.spread, true);
-  assert.equal(spread.length, 6000, 'b = 5h');
+  assert.equal(d.spread, true);
+  const bExact = (2 * 1.2 * (d.raw - 1 + 2 * d.m2)) / (d.capGeom - 1 + 2 * d.m2);
+  assert.ok(bExact > 5 * 1.2, 'здесь формула (Б.6) упирается в потолок 5h');
+  assert.equal(d.length, 6000, 'b = 5h');
+  assert.equal(snowDrift({ ...base, h: 8, Sg: 1.5 }).length, 16000, 'не более 16 м');
 
-  assert.equal(snowDrift({ h: 8, Sg: 1.5, l1: 6, l2: 5 }).length, 16000, 'не более 16 м');
+  // перечисление «е»: при b ≥ l′₂ и без парапета μ₁ = 1 − 2m₂
+  assert.equal(d.mu1.toFixed(4), (1 - 2 * d.m2).toFixed(4));
+  assert.ok(d.mu1 >= 0.2, 'μ₁ не менее 0,2');
 
-  assert.equal(snowDrift({ h: 0, Sg: 1.5, l1: 6, l2: 5 }).mu, 1);
+  // примечание 3: при h < S₀/2 мешок не учитывается
+  assert.equal(snowDrift({ ...base, h: 0.6, Sg: 1.5 }).applies, false);
+  assert.equal(snowDrift({ ...base, h: 0.8, Sg: 1.5 }).applies, true);
+
+  // примечание 4: парапет снимает перенос с верхнего покрытия
+  assert.equal(snowDrift({ ...base, parapet: true }).m1, 0);
+  assert.ok(snowDrift({ ...base, parapet: true }).raw < d.raw);
+
+  // l′₂ не более утроенной ширины покрытия
+  assert.equal(snowDrift({ ...base, a: 1, l2: 50 }).l2, 3);
 });
 
 test('μ односкатного покрытия по прил. Б.1', () => {
@@ -76,16 +71,20 @@ test('μ односкатного покрытия по прил. Б.1', () => {
   assert.equal(snowMu(60), 0);
 });
 
-test('эпюра снега убывает от стены и выходит на обычную за зоной мешка', () => {
-  const site = { snowRegion: 'IV', drift: true, houseRoofLength: 6000 };
-  const p = snowProfile(site, 8, { driftH: 1200, depth: 4800 });
-  assert.equal(p.at(0).toFixed(3), '2.400', 'нормативное значение у стены');
-  assert.ok(p.at(0) > p.at(1200));
-  assert.ok(p.at(1200) > p.at(3000));
-  // зона 6000 мм длиннее навеса 4800 — эпюра обрезана, до μ₁ она не доходит
-  assert.ok(p.at(4800) > SNOW_REGIONS.IV, 'на краю навеса ещё остаток мешка');
-  const wide = snowProfile(site, 8, { driftH: 400, depth: 4800 });
-  assert.equal(wide.at(4800), SNOW_REGIONS.IV, 'за зоной b — обычный снег');
+test('нижнее покрытие считается в двух вариантах загружения (схема Б.8, «а»)', () => {
+  const site = { snowRegion: 'IV', drift: true, houseRoofLength: 6000, houseRoofSlope: 20 };
+  const p = snowProfile(site, 8, { driftH: 1200, depth: 4800, width: 6000, alpha: 8 });
+  assert.equal(p.variants.length, 2, 'равномерный и мешок');
+
+  const [uniform, bag] = p.variants;
+  assert.equal(uniform.at(0), SNOW_REGIONS.IV, 'равномерный — просто S₀ при α ≤ 30°');
+  assert.ok(bag.at(0) > uniform.at(0), 'у стены мешок тяжелее');
+  assert.ok(bag.at(0) > bag.at(2000) && bag.at(2000) > bag.at(4800), 'эпюра мешка убывает от стены');
+  assert.ok(bag.at(4800) < uniform.at(0), 'в дальней части правит уже равномерный вариант');
+
+  // без перепада остаётся один вариант
+  const flat = snowProfile({ ...site, drift: false }, 8, { driftH: 1200, depth: 4800, width: 6000 });
+  assert.equal(flat.variants.length, 1);
 });
 
 test('φ совпадает с табл. 7 СП 16 в пределах 4 %', () => {
