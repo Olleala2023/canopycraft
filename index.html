@@ -88,11 +88,18 @@ select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3p
 .row2{display:grid; grid-template-columns:1fr 1fr; gap:8px}
 
 /* ── сцена ── */
-.stage{padding:0; display:flex; flex-direction:column}
+.stage{padding:0; display:flex; flex-direction:column; position:relative}
+.zoombar{position:absolute; right:10px; top:10px; display:flex; gap:4px; align-items:center;
+  background:var(--surface); border:1px solid var(--rule-2); padding:3px 5px; z-index:2}
+.zoombar .btn{padding:0 9px; font-size:14px; line-height:1.5}
+.zoomval{font-size:11px; color:var(--ink-3); min-width:46px; text-align:right}
 .canvas{flex:1; padding:10px; background:
   linear-gradient(var(--grid) 1px, transparent 1px) 0 0/20px 20px,
   linear-gradient(90deg,var(--grid) 1px, transparent 1px) 0 0/20px 20px, var(--surface-2)}
 .canvas svg{display:block; width:100%; height:auto; touch-action:none}
+.canvas{cursor:grab; touch-action:none; overflow:hidden}
+.canvas:active{cursor:grabbing}
+g.pickable, g.draggable{cursor:pointer}
 .hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
 .legend{display:flex; flex-wrap:wrap; gap:4px 14px; padding:7px 13px; border-top:1px solid var(--rule); font-size:11px; color:var(--ink-2)}
 .legend i{display:inline-block; width:15px; height:8px; margin-right:5px; vertical-align:1px}
@@ -175,6 +182,12 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     <aside class="pane" id="params"></aside>
     <section class="pane stage">
       <div class="canvas" id="canvas"></div>
+      <div class="zoombar">
+        <button class="btn" id="zoom-out" title="Отдалить" aria-label="Отдалить">−</button>
+        <button class="btn" id="zoom-in" title="Приблизить" aria-label="Приблизить">+</button>
+        <button class="btn" id="zoom-reset" title="Вписать целиком">⌂</button>
+        <span class="zoomval mono" id="zoom-val">100 %</span>
+      </div>
       <div class="legend">
         <span><i style="background:var(--u-low)"></i>U &lt; 0,5 запас</span>
         <span><i style="background:var(--u-ok)"></i>0,5–0,85 норма</span>
@@ -1031,7 +1044,7 @@ function defaultModel() {
       L,                // от оси стеновых столбов до оси наружных
       a,                // свес за наружные столбы
       alpha: 8,         // уклон, °
-      postHeight: 2500, // от верха фундамента до низа наружного прогона
+      postHeight: 2500, // верх наружного столба от верха фундамента (на него ложится прогон)
       driftH: 1200,     // перепад высот кровля дома / навес
     },
     site: {
@@ -1106,6 +1119,39 @@ function tributaries(xs, B) {
     const edgeRight = i === s.length - 1 ? Math.max(0, B - x) : 0;
     return left + right + edgeLeft + edgeRight;
   });
+}
+
+/**
+ * Высотные отметки, мм от верха фундамента.
+ *
+ * Один источник и для расчёта, и для чертежа, и для спецификации: иначе
+ * разрез показывает одну длину столба, а смета другую.
+ *
+ *   прогон лежит на наружном столбе, стропила лежат на прогоне;
+ *   у стены стропила лежат на обвязке, обвязка — на стеновом столбе,
+ *   поэтому стеновой столб ниже отметки стропил на высоту обвязки.
+ */
+function levels(m) {
+  const rise = m.geom.L * Math.tan((m.geom.alpha * Math.PI) / 180);
+  const purlinH = section(m.purlin.sectionId).h;
+  const wallPurlinH = section(m.wallPurlin.sectionId).h;
+  const rafterH = section(m.rafters.sectionId).h;
+
+  const postTop = m.geom.postHeight;
+  const rafterBottomOuter = postTop + purlinH;
+  const rafterBottomWall = rafterBottomOuter + rise;
+  const wallPostTop = rafterBottomWall - wallPurlinH;
+  const canopyTopWall = rafterBottomWall + rafterH;
+
+  return {
+    rise, purlinH, wallPurlinH, rafterH,
+    postTop, wallPostTop,
+    rafterBottomOuter, rafterBottomWall, canopyTopWall,
+    houseRoof: canopyTopWall + m.geom.driftH,
+    /** длины для спецификации: +300 мм на заделку в фундамент */
+    postLength: postTop + 300,
+    wallPostLength: wallPostTop + 300,
+  };
 }
 
 /* ── src/core/share.js ── */
@@ -1452,7 +1498,7 @@ function analyseRoof(model) {
   const { geom } = model;
   const dead = roofDead(model);
   const snow = snowProfile(model.site, geom.alpha);
-  const zTop = geom.postHeight + geom.L * Math.tan(deg(geom.alpha));
+  const zTop = levels(model).canopyTopWall;
   const wind = windPressure(model.site, zTop);
   const ctx = { dead, snow, wind };
 
@@ -1573,8 +1619,9 @@ function billOfMaterials(result) {
   add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
   add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);
   add('Прогон наружный', section(m.purlin.sectionId), m.geom.B, 1);
-  add('Столбы наружные', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
-  add('Столбы у стены', section(m.wallPosts.sectionId), m.geom.postHeight + 300, m.wallPosts.xs.length);
+  const lv = levels(m);
+  add('Столбы наружные', section(m.posts.sectionId), lv.postLength, m.posts.xs.length);
+  add('Столбы у стены', section(m.wallPosts.sectionId), lv.wallPostLength, m.wallPosts.xs.length);
 
   // кровля
   const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату
@@ -1734,6 +1781,7 @@ function pickAll(model, target = 0.9) {
 /* ── src/ui/views.js ── */
 /** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
 
+
 const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
 
@@ -1852,76 +1900,92 @@ function drawPlan(res, sel) {
 
 function drawSection(res) {
   const m = res.model, g = m.geom;
-  const al = (g.alpha * Math.PI) / 180;
-  const rise = g.L * Math.tan(al);
-  const totalH = g.postHeight + rise + g.driftH + 600;
-  const pad = { l: 138, r: 44, t: 30, b: 62 };
-  const sc = Math.min(700 / (g.L + g.a + 600), 380 / totalH);
-  const vw = (g.L + g.a + 700) * sc + pad.l + pad.r;
+  const lv = levels(m);
+  const al = (g.alpha * Math.PI) / 180, tg = Math.tan(al);
+  const total = g.L + g.a;
+  const totalH = lv.houseRoof + 700;
+  const pad = { l: 142, r: 48, t: 30, b: 66 };
+  const sc = Math.min(680 / (total + 700), 380 / totalH);
+  const vw = (total + 800) * sc + pad.l + pad.r;
   const vh = totalH * sc + pad.t + pad.b;
-  const X = (x) => pad.l + (x + 400) * sc;
+  const X = (x) => pad.l + (x + 420) * sc;
   const Y = (y) => pad.t + (totalH - y) * sc; // y — высота от верха фундамента
   const s = [];
+  const sec = (id) => section(id);
   s.push(`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Разрез навеса">`);
 
-  // дом
-  s.push(`<rect x="${X(-400)}" y="${Y(g.postHeight + rise + g.driftH + 400)}" width="${400 * sc}" height="${(g.postHeight + rise + g.driftH + 400) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
-  s.push(`<text transform="translate(${X(-400) + 200 * sc},${Y(g.postHeight * 0.35)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
-  // кровля дома — на перепад выше верха навеса у стены
-  const hWall = g.postHeight + rise;         // верх навеса у стены, от верха фундамента
-  const hHouse = hWall + g.driftH;           // кровля дома
-  const xDim = X(-400) - 30;                 // размерная линия слева от дома
-  s.push(`<line x1="${xDim - 6}" y1="${Y(hHouse)}" x2="${X(0)}" y2="${Y(hHouse)}" stroke="var(--ink-2)" stroke-width="2"/>`);
-  // выносные линии к размерам
-  for (const [hv, col] of [[0, 'var(--ink-3)'], [hWall, 'var(--u-warn)']]) {
-    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(60)}" y2="${Y(hv)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" opacity=".8" pointer-events="none"/>`);
-  }
-  s.push(dimV(Y(0), Y(hWall), xDim, `${Math.round(hWall)} до верха навеса`, 'var(--u-warn)'));
-  s.push(dimV(Y(hWall), Y(hHouse), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+  // ── дом
+  s.push(`<rect x="${X(-420)}" y="${Y(lv.houseRoof + 500)}" width="${420 * sc}" height="${(lv.houseRoof + 500) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  s.push(`<text transform="translate(${X(-210)},${Y(lv.postTop * 0.3)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
 
-  // снеговая эпюра
-  const sn = res.snow, kPaToPx = 26 * sc * 40;
+  // ── размерная цепочка слева
+  const xDim = X(-420) - 30;
+  s.push(`<line x1="${xDim - 6}" y1="${Y(lv.houseRoof)}" x2="${X(0)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  for (const hv of [0, lv.canopyTopWall]) {
+    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(120)}" y2="${Y(hv)}" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="4 3" opacity=".7" pointer-events="none"/>`);
+  }
+  s.push(dimV(Y(0), Y(lv.canopyTopWall), xDim, `${Math.round(lv.canopyTopWall)} до верха навеса`, 'var(--u-warn)'));
+  s.push(dimV(Y(lv.canopyTopWall), Y(lv.houseRoof), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+
+  // ── снег: эпюра лежит на верхней кромке стропил
+  const kPa = 1000 * sc * 0.9;
+  const top = (x) => lv.canopyTopWall - x * tg;
   const pts = [];
-  for (let i = 0; i <= 20; i++) {
-    const y = ((g.L + g.a) * i) / 20;
-    const h = g.postHeight + rise - y * Math.tan(al);
-    pts.push(`${X(y)},${Y(h + sn.at(y) * kPaToPx)}`);
+  for (let i = 0; i <= 24; i++) {
+    const x = (total * i) / 24;
+    pts.push(`${X(x)},${Y(top(x) + res.snow.at(x) * kPa)}`);
   }
-  s.push(`<polygon points="${X(0)},${Y(g.postHeight + rise)} ${pts.join(' ')} ${X(g.L + g.a)},${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1"/>`);
-  s.push(`<text x="${X(120)}" y="${Y(g.postHeight + rise + sn.at(0) * kPaToPx) - 6}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(sn.at(0))} → ${f2(sn.at(g.L + g.a))} кПа</text>`);
+  s.push(`<polygon points="${X(0)},${Y(top(0))} ${pts.join(' ')} ${X(total)},${Y(top(total))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1" pointer-events="none"/>`);
+  s.push(`<text x="${X(150)}" y="${Y(top(0) + res.snow.at(0) * kPa) - 7}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(res.snow.at(0))} → ${f2(res.snow.at(total))} кПа</text>`);
 
-  // стропило
+  // ── ветер
+  s.push('<g stroke="var(--accent-2)" fill="var(--accent-2)" pointer-events="none">');
+  for (let i = 1; i <= 4; i++) {
+    const x = (total * i) / 5, y0 = Y(top(x));
+    s.push(`<line x1="${X(x)}" y1="${y0 - 5}" x2="${X(x)}" y2="${y0 - 26}"/><polygon points="${X(x) - 3},${y0 - 24} ${X(x) + 3},${y0 - 24} ${X(x)},${y0 - 31}"/>`);
+  }
+  s.push(`</g><text x="${X(total)}" y="${Y(lv.canopyTopWall) - 36}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--accent-2)">ветровой отрыв ${f2(res.wind.up)} кПа</text>`);
+
+  // ── стропило: наклонный брус по нижней кромке от обвязки до конца свеса
+  const rH = lv.rafterH * sc;
   const rU = Math.max(...res.rafters.map((r) => r.U));
-  s.push(`<line x1="${X(0)}" y1="${Y(g.postHeight + rise)}" x2="${X(g.L + g.a)}" y2="${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" stroke="${uColor(rU)}" stroke-width="${Math.max(3, res.rafters[0].sec.h * sc)}" stroke-linecap="butt"/>`);
-  // стеновой столб и сквозные шпильки
-  const wps = res.wallPosts[0].sec;
-  s.push(`<rect x="${X(0) - (wps.b * sc) / 2}" y="${Y(g.postHeight + rise)}" width="${Math.max(4, wps.b * sc)}" height="${(g.postHeight + rise) * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9"/>`);
+  const x1 = X(0), y1 = Y(lv.rafterBottomWall), x2 = X(total), y2 = Y(lv.rafterBottomWall - total * tg);
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  s.push(`<rect x="${x1}" y="${y1 - rH}" width="${len}" height="${rH}" fill="${uColor(rU)}" opacity=".92" stroke="var(--surface)" stroke-width="1"
+     transform="rotate(${(Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI} ${x1} ${y1})"/>`);
+  // подпись уклона — под стропилом, чтобы не налезала на снег
+  s.push(`<text x="${X(total * 0.45)}" y="${Y(lv.rafterBottomWall - total * 0.45 * tg) + 24}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-2)">уклон ${g.alpha}° · стропило ${sec(m.rafters.sectionId).label}</text>`);
+
+  // ── обвязка у стены и стеновой столб
+  const wpS = sec(m.wallPosts.sectionId), wbS = sec(m.wallPurlin.sectionId);
+  s.push(`<rect x="${X(0)}" y="${Y(lv.rafterBottomWall)}" width="${Math.max(3, wbS.b * sc)}" height="${lv.wallPurlinH * sc}" fill="${uColor(res.wallPurlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<rect x="${X(0)}" y="${Y(lv.wallPostTop)}" width="${Math.max(4, wpS.b * sc)}" height="${lv.wallPostTop * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
   const nb = m.wallPosts.boltCount;
   for (let i = 0; i < nb; i++) {
-    const hy = ((g.postHeight + rise) * (i + 0.6)) / (nb + 0.2);
-    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(50)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
+    const hy = (lv.wallPostTop * (i + 0.6)) / (nb + 0.2);
+    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(90)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
     s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
   }
-  s.push(`<text x="${X(80)}" y="${Y((g.postHeight + rise) * 0.5) - 12}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} насквозь через газоблок ${m.wallPosts.wallThickness} мм</text>`);
-  // столб
-  s.push(`<rect x="${X(g.L) - (res.posts[0].sec.b * sc) / 2}" y="${Y(g.postHeight)}" width="${Math.max(4, res.posts[0].sec.b * sc)}" height="${g.postHeight * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9"/>`);
-  // фундамент
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62)}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} сквозь газоблок ${m.wallPosts.wallThickness}</text>`);
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62) + 13}" font-size="9.5" font-family="${mono}" fill="var(--ink-3)">столб ${wpS.label} · ${Math.round(lv.wallPostLength)} мм</text>`);
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62) + 26}" font-size="9.5" font-family="${mono}" fill="var(--ink-3)">обвязка ${wbS.label}</text>`);
+
+  // ── наружный прогон и столб
+  const pS = sec(m.purlin.sectionId), poS = sec(m.posts.sectionId);
+  s.push(`<rect x="${X(g.L) - (pS.b * sc) / 2}" y="${Y(lv.rafterBottomOuter)}" width="${Math.max(3, pS.b * sc)}" height="${lv.purlinH * sc}" fill="${uColor(res.purlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<rect x="${X(g.L) - (poS.b * sc) / 2}" y="${Y(lv.postTop)}" width="${Math.max(4, poS.b * sc)}" height="${lv.postTop * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<text x="${X(g.L) - 14}" y="${Y(lv.postTop * 0.3)}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">столб ${poS.label} · ${Math.round(lv.postLength)} мм</text>`);
+  s.push(`<text x="${X(g.L) - 14}" y="${Y(lv.postTop * 0.3) + 13}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">прогон ${pS.label}</text>`);
+
+  // ── фундамент
   const fs = Math.max(300, res.foundation.cubeSide);
   s.push(`<rect x="${X(g.L) - (fs * sc) / 2}" y="${Y(0)}" width="${fs * sc}" height="${fs * sc * 0.55}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
   s.push(`<text x="${X(g.L)}" y="${Y(0) + fs * sc * 0.55 + 26}" font-size="9.5" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">фундамент ≈ ${Math.round(fs)} мм</text>`);
-  // ветер
-  s.push(`<g stroke="var(--accent-2)" fill="var(--accent-2)">`);
-  for (let i = 1; i <= 4; i++) {
-    const x = X(((g.L + g.a) * i) / 5);
-    const y0 = Y(g.postHeight + rise - ((g.L + g.a) * i * Math.tan(al)) / 5);
-    s.push(`<line x1="${x}" y1="${y0 - 6}" x2="${x}" y2="${y0 - 24}"/><polygon points="${x - 3},${y0 - 22} ${x + 3},${y0 - 22} ${x},${y0 - 29}"/>`);
-  }
-  s.push(`</g><text x="${X(g.L + g.a)}" y="${Y(g.postHeight + rise) - 34}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--accent-2)">ветровой отрыв ${f2(res.wind.up)} кПа</text>`);
 
+  // ── размеры
   s.push(dimH(X(0), X(g.L), Y(0) + 34, `${g.L}`));
-  s.push(dimH(X(g.L), X(g.L + g.a), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
-  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 28, `${g.postHeight} наружный столб`));
-  s.push(`<text x="${X(g.L / 2)}" y="${Y(g.postHeight + rise / 2) - 12}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">уклон ${g.alpha}°</text>`);
+  s.push(dimH(X(g.L), X(total), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
+  s.push(dimV(Y(0), Y(lv.postTop), X(total) + 30, `${Math.round(lv.postTop)} наружный столб`));
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
 }
@@ -2379,8 +2443,127 @@ function renderCanvas(res) {
   const out = draw(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
+  wrapForZoom();
   if (state.view === 'plan') wirePlan();
 }
+
+/* ─────────────────── масштаб и панорама ─────────────────── */
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const zoom = { plan: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 } };
+const zv = () => zoom[state.view];
+
+function svgEl() { return $('canvas').querySelector('svg'); }
+
+/** Размеры системы координат рисунка и его положение на экране. */
+function frame() {
+  const svg = svgEl();
+  if (!svg) return null;
+  const b = svg.viewBox.baseVal;
+  return { svg, w: b.width, h: b.height, rect: svg.getBoundingClientRect() };
+}
+
+function toFrame(clientX, clientY) {
+  const f = frame();
+  if (!f) return { x: 0, y: 0 };
+  return { x: ((clientX - f.rect.left) / f.rect.width) * f.w, y: ((clientY - f.rect.top) / f.rect.height) * f.h };
+}
+
+/** Не даём утащить рисунок за край: при k = 1 сдвиг запрещён вовсе. */
+function clampPan() {
+  const f = frame();
+  if (!f) return;
+  const z = zv();
+  z.tx = Math.min(0, Math.max((1 - z.k) * f.w, z.tx));
+  z.ty = Math.min(0, Math.max((1 - z.k) * f.h, z.ty));
+}
+
+/** Всё содержимое рисунка складывается в одну группу, её и двигаем. */
+function wrapForZoom() {
+  const svg = svgEl();
+  if (!svg) return;
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('data-zoom', '');
+  while (svg.firstChild) g.appendChild(svg.firstChild);
+  svg.appendChild(g);
+  applyZoom();
+}
+
+function applyZoom() {
+  const svg = svgEl();
+  const g = svg && svg.querySelector('g[data-zoom]');
+  const z = zv();
+  if (g) g.setAttribute('transform', `translate(${z.tx.toFixed(2)} ${z.ty.toFixed(2)}) scale(${z.k.toFixed(4)})`);
+  const out = $('zoom-val');
+  if (out) out.textContent = `${Math.round(z.k * 100)} %`;
+}
+
+/** Масштабирование вокруг точки: она остаётся под курсором. */
+function zoomAt(point, factor) {
+  const z = zv();
+  const k = Math.min(14, Math.max(1, z.k * factor));
+  if (k === z.k) return;
+  z.tx = point.x - (point.x - z.tx) * (k / z.k);
+  z.ty = point.y - (point.y - z.ty) * (k / z.k);
+  z.k = k;
+  clampPan();
+  applyZoom();
+}
+
+const canvasEl = $('canvas');
+canvasEl.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(toFrame(e.clientX, e.clientY), e.deltaY < 0 ? 1.18 : 1 / 1.18);
+}, { passive: false });
+
+let pan = null;
+const pointers = new Map();
+let pinch = null;
+
+canvasEl.addEventListener('pointerdown', (e) => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) { // щипок на сенсорном экране
+    pan = null;
+    const [a, b] = [...pointers.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) };
+    return;
+  }
+  if (e.target.closest && e.target.closest('[data-pick]')) return; // тянут элемент схемы
+  pan = { x: e.clientX, y: e.clientY, tx: zv().tx, ty: zv().ty };
+  canvasEl.setPointerCapture(e.pointerId);
+});
+
+canvasEl.addEventListener('pointermove', (e) => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinch.dist > 0) zoomAt(toFrame((a.x + b.x) / 2, (a.y + b.y) / 2), dist / pinch.dist);
+    pinch.dist = dist;
+    return;
+  }
+  if (!pan) return;
+  const f = frame();
+  if (!f) return;
+  const z = zv();
+  z.tx = pan.tx + ((e.clientX - pan.x) / f.rect.width) * f.w;
+  z.ty = pan.ty + ((e.clientY - pan.y) / f.rect.height) * f.h;
+  clampPan();
+  applyZoom();
+});
+
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) pan = null;
+};
+canvasEl.addEventListener('pointerup', endPointer);
+canvasEl.addEventListener('pointercancel', endPointer);
+canvasEl.addEventListener('pointerleave', endPointer);
+
+$('zoom-in').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1.4); });
+$('zoom-out').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1 / 1.4); });
+$('zoom-reset').addEventListener('click', () => { const z = zv(); z.k = 1; z.tx = 0; z.ty = 0; applyZoom(); });
 
 /** Массивы координат, которые можно таскать мышью. */
 const ARRAY_OF = {
@@ -2400,11 +2583,12 @@ let drag = null;
 let dragFrame = 0;
 
 function canvasToMm(clientX) {
-  const svg = $('canvas').querySelector('svg');
   const meta = state.meta;
-  if (!svg || !meta) return 0;
-  const r = svg.getBoundingClientRect();
-  return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
+  const f = frame();
+  if (!f || !meta) return 0;
+  const px = ((clientX - f.rect.left) / f.rect.width) * meta.vw;
+  const z = zv();
+  return ((px - z.tx) / z.k - meta.ox) / meta.sc;
 }
 
 function onDragMove(e) {
@@ -2582,7 +2766,7 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
-let hintText = 'Тяните стропила и столбы мышью — шаг 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
+let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
 
 function render(hint) {
   if (hint) hintText = hint;

@@ -394,8 +394,127 @@ function renderCanvas(res) {
   const out = draw(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
+  wrapForZoom();
   if (state.view === 'plan') wirePlan();
 }
+
+/* ─────────────────── масштаб и панорама ─────────────────── */
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const zoom = { plan: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 } };
+const zv = () => zoom[state.view];
+
+function svgEl() { return $('canvas').querySelector('svg'); }
+
+/** Размеры системы координат рисунка и его положение на экране. */
+function frame() {
+  const svg = svgEl();
+  if (!svg) return null;
+  const b = svg.viewBox.baseVal;
+  return { svg, w: b.width, h: b.height, rect: svg.getBoundingClientRect() };
+}
+
+function toFrame(clientX, clientY) {
+  const f = frame();
+  if (!f) return { x: 0, y: 0 };
+  return { x: ((clientX - f.rect.left) / f.rect.width) * f.w, y: ((clientY - f.rect.top) / f.rect.height) * f.h };
+}
+
+/** Не даём утащить рисунок за край: при k = 1 сдвиг запрещён вовсе. */
+function clampPan() {
+  const f = frame();
+  if (!f) return;
+  const z = zv();
+  z.tx = Math.min(0, Math.max((1 - z.k) * f.w, z.tx));
+  z.ty = Math.min(0, Math.max((1 - z.k) * f.h, z.ty));
+}
+
+/** Всё содержимое рисунка складывается в одну группу, её и двигаем. */
+function wrapForZoom() {
+  const svg = svgEl();
+  if (!svg) return;
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('data-zoom', '');
+  while (svg.firstChild) g.appendChild(svg.firstChild);
+  svg.appendChild(g);
+  applyZoom();
+}
+
+function applyZoom() {
+  const svg = svgEl();
+  const g = svg && svg.querySelector('g[data-zoom]');
+  const z = zv();
+  if (g) g.setAttribute('transform', `translate(${z.tx.toFixed(2)} ${z.ty.toFixed(2)}) scale(${z.k.toFixed(4)})`);
+  const out = $('zoom-val');
+  if (out) out.textContent = `${Math.round(z.k * 100)} %`;
+}
+
+/** Масштабирование вокруг точки: она остаётся под курсором. */
+function zoomAt(point, factor) {
+  const z = zv();
+  const k = Math.min(14, Math.max(1, z.k * factor));
+  if (k === z.k) return;
+  z.tx = point.x - (point.x - z.tx) * (k / z.k);
+  z.ty = point.y - (point.y - z.ty) * (k / z.k);
+  z.k = k;
+  clampPan();
+  applyZoom();
+}
+
+const canvasEl = $('canvas');
+canvasEl.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(toFrame(e.clientX, e.clientY), e.deltaY < 0 ? 1.18 : 1 / 1.18);
+}, { passive: false });
+
+let pan = null;
+const pointers = new Map();
+let pinch = null;
+
+canvasEl.addEventListener('pointerdown', (e) => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) { // щипок на сенсорном экране
+    pan = null;
+    const [a, b] = [...pointers.values()];
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) };
+    return;
+  }
+  if (e.target.closest && e.target.closest('[data-pick]')) return; // тянут элемент схемы
+  pan = { x: e.clientX, y: e.clientY, tx: zv().tx, ty: zv().ty };
+  canvasEl.setPointerCapture(e.pointerId);
+});
+
+canvasEl.addEventListener('pointermove', (e) => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinch.dist > 0) zoomAt(toFrame((a.x + b.x) / 2, (a.y + b.y) / 2), dist / pinch.dist);
+    pinch.dist = dist;
+    return;
+  }
+  if (!pan) return;
+  const f = frame();
+  if (!f) return;
+  const z = zv();
+  z.tx = pan.tx + ((e.clientX - pan.x) / f.rect.width) * f.w;
+  z.ty = pan.ty + ((e.clientY - pan.y) / f.rect.height) * f.h;
+  clampPan();
+  applyZoom();
+});
+
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) pan = null;
+};
+canvasEl.addEventListener('pointerup', endPointer);
+canvasEl.addEventListener('pointercancel', endPointer);
+canvasEl.addEventListener('pointerleave', endPointer);
+
+$('zoom-in').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1.4); });
+$('zoom-out').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1 / 1.4); });
+$('zoom-reset').addEventListener('click', () => { const z = zv(); z.k = 1; z.tx = 0; z.ty = 0; applyZoom(); });
 
 /** Массивы координат, которые можно таскать мышью. */
 const ARRAY_OF = {
@@ -415,11 +534,12 @@ let drag = null;
 let dragFrame = 0;
 
 function canvasToMm(clientX) {
-  const svg = $('canvas').querySelector('svg');
   const meta = state.meta;
-  if (!svg || !meta) return 0;
-  const r = svg.getBoundingClientRect();
-  return (((clientX - r.left) / r.width) * meta.vw - meta.ox) / meta.sc;
+  const f = frame();
+  if (!f || !meta) return 0;
+  const px = ((clientX - f.rect.left) / f.rect.width) * meta.vw;
+  const z = zv();
+  return ((px - z.tx) / z.k - meta.ox) / meta.sc;
 }
 
 function onDragMove(e) {
@@ -597,7 +717,7 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
-let hintText = 'Тяните стропила и столбы мышью — шаг 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · клик по элементу — проверки справа';
+let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
 
 function render(hint) {
   if (hint) hintText = hint;

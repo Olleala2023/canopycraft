@@ -1,4 +1,5 @@
 /** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
+import { section } from './sections.js';
 
 /**
  * Схема опирания:
@@ -17,7 +18,7 @@ export function defaultModel() {
       L,                // от оси стеновых столбов до оси наружных
       a,                // свес за наружные столбы
       alpha: 8,         // уклон, °
-      postHeight: 2500, // от верха фундамента до низа наружного прогона
+      postHeight: 2500, // верх наружного столба от верха фундамента (на него ложится прогон)
       driftH: 1200,     // перепад высот кровля дома / навес
     },
     site: {
@@ -92,4 +93,37 @@ export function tributaries(xs, B) {
     const edgeRight = i === s.length - 1 ? Math.max(0, B - x) : 0;
     return left + right + edgeLeft + edgeRight;
   });
+}
+
+/**
+ * Высотные отметки, мм от верха фундамента.
+ *
+ * Один источник и для расчёта, и для чертежа, и для спецификации: иначе
+ * разрез показывает одну длину столба, а смета другую.
+ *
+ *   прогон лежит на наружном столбе, стропила лежат на прогоне;
+ *   у стены стропила лежат на обвязке, обвязка — на стеновом столбе,
+ *   поэтому стеновой столб ниже отметки стропил на высоту обвязки.
+ */
+export function levels(m) {
+  const rise = m.geom.L * Math.tan((m.geom.alpha * Math.PI) / 180);
+  const purlinH = section(m.purlin.sectionId).h;
+  const wallPurlinH = section(m.wallPurlin.sectionId).h;
+  const rafterH = section(m.rafters.sectionId).h;
+
+  const postTop = m.geom.postHeight;
+  const rafterBottomOuter = postTop + purlinH;
+  const rafterBottomWall = rafterBottomOuter + rise;
+  const wallPostTop = rafterBottomWall - wallPurlinH;
+  const canopyTopWall = rafterBottomWall + rafterH;
+
+  return {
+    rise, purlinH, wallPurlinH, rafterH,
+    postTop, wallPostTop,
+    rafterBottomOuter, rafterBottomWall, canopyTopWall,
+    houseRoof: canopyTopWall + m.geom.driftH,
+    /** длины для спецификации: +300 мм на заделку в фундамент */
+    postLength: postTop + 300,
+    wallPostLength: wallPostTop + 300,
+  };
 }
