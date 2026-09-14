@@ -149,3 +149,19 @@ test('тяжёлая кровля увеличивает и массу, и за�
   const U = (r) => Math.max(...r.rafters.map((x) => x.U));
   assert.ok(U(heavy) > U(light), 'вес кровли участвует в расчёте, а не только в смете');
 });
+
+test('стоимость считается по заданным ценам и линейна по ним', () => {
+  const m = defaultModel();
+  const b = billOfMaterials(analyse(m));
+  const c = b.costs;
+  assert.ok(Math.abs(c.timber - b.weights.timber.volume * m.prices.timberM3) < 1, 'дерево по объёму');
+  assert.ok(Math.abs(c.steel - b.weights.steel.mass * m.prices.steelKg) < 1, 'металл по массе');
+  assert.ok(Math.abs(c.total - (c.timber + c.steel + c.roofing + c.fasteners)) < 1, 'итог сходится');
+
+  const double = billOfMaterials(analyse({ ...m, prices: { ...m.prices, steelKg: m.prices.steelKg * 2 } }));
+  assert.ok(Math.abs(double.costs.steel - c.steel * 2) < 1, 'удвоение цены удваивает стоимость металла');
+  assert.ok(Math.abs(double.costs.timber - c.timber) < 1, 'цена металла не влияет на дерево');
+
+  const free = billOfMaterials(analyse({ ...m, prices: { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' } }));
+  assert.equal(free.costs.total, 0, 'нулевые цены дают нулевую смету, а не NaN');
+});

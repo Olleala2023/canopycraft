@@ -21,7 +21,7 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return null;
     const m = JSON.parse(raw);
-    return m && m.geom && m.wallPosts && m.wallPurlin ? m : null;
+    return m && m.geom && m.wallPosts && m.wallPurlin && m.prices ? m : null;
   } catch { return null; }
 }
 function save() {
@@ -97,10 +97,16 @@ const CONTROLS = [
     options: () => [{ id: '1', label: '1 сорт' }, { id: '2', label: '2 сорт' }, { id: '3', label: '3 сорт' }] },
   { k: 'opts.timber.serviceClass', label: 'Условия эксплуатации', type: 'select', numeric: true,
     options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
-  { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
-    options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
   { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
     options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
+  { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
+    options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
+
+  { group: 'Цены — подставьте свои' },
+  { k: 'prices.timberM3', label: 'Доска обрезная, ₽/м³', type: 'number', min: 0, step: 500 },
+  { k: 'prices.steelKg', label: 'Профильная труба, ₽/кг', type: 'number', min: 0, step: 5 },
+  { k: 'prices.roofingM2', label: 'Кровля, ₽/м²', type: 'number', min: 0, step: 50 },
+  { k: 'prices.fastenerPc', label: 'Комплект шпилька+пластина, ₽/шт', type: 'number', min: 0, step: 10 },
 ];
 
 const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
@@ -140,6 +146,8 @@ function buildParams() {
     const id = 'c_' + c.k.replace(/[.#]/g, '_');
     if (c.type === 'check') {
       wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}</span></label>`;
+    } else if (c.type === 'number') {
+      wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
     } else if (c.type === 'range') {
       const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(' ');
       wrap.innerHTML = `<label for="${id}">${c.label} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
@@ -151,7 +159,7 @@ function buildParams() {
     const input = wrap.querySelector('input,select');
     input.addEventListener('input', () => {
       let v = c.type === 'check' ? input.checked : input.value;
-      if (c.type === 'range' || c.numeric) v = Number(v);
+      if (c.type === 'range' || c.type === 'number' || c.numeric) v = Number(v) || 0;
       writeVirtual(c.k, v);
       if (c.k === 'geom.B') {
         state.model.rafters.xs = spread(state.model.geom.B, state.model.rafters.xs.length);
@@ -297,19 +305,22 @@ function renderSummary(res) {
 function renderBom(res) {
   const b = billOfMaterials(res);
   const w = b.weights;
+  const c = b.costs;
+  const money = (x) => Math.round(x).toLocaleString('ru-RU');
   const rows = b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.material}</td>
     <td class="n">${i.count}</td><td class="n">${i.length}</td><td class="n">${i.totalLength.toFixed(1)}</td>
     <td class="n">${i.stockPieces ?? '—'}</td><td class="n">${i.volume ? i.volume.toFixed(3) : '—'}</td>
-    <td class="n">${i.mass.toFixed(1)}</td></tr>`).join('');
+    <td class="n">${i.mass.toFixed(1)}</td><td class="n">${money(i.cost)}</td></tr>`).join('');
   const fast = b.fasteners.map((f) => `<tr><td>${f.name}</td><td colspan="2">${f.note}</td>
-    <td class="n">${f.count}</td><td colspan="3"></td><td class="n">—</td><td class="n">${f.mass.toFixed(1)}</td></tr>`).join('');
+    <td class="n">${f.count}</td><td colspan="3"></td><td class="n">—</td><td class="n">${f.mass.toFixed(1)}</td>
+    <td class="n">${f.cost ? money(f.cost) : '—'}</td></tr>`).join('');
   const groups = w.groups.map((g) => `<div class="kv"><span>${g.name} <i style="color:var(--ink-3);font-style:normal">· ${g.note}</i></span><span>${g.mass.toFixed(0)} кг</span></div>`).join('');
 
   $('bom').innerHTML = `<div class="pane-title">Спецификация · закупка хлыстами по ${(b.stock / 1000).toFixed(0)} м</div>
     <div class="tbl"><table>
-    <tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Купить</th><th>Объём, м³</th><th>Масса, кг</th></tr>
+    <tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Купить</th><th>Объём, м³</th><th>Масса, кг</th><th>Стоимость, ${c.currency}</th></tr>
     ${rows}${fast}
-    <tr><td colspan="7"><b>Итого</b></td><td class="n"><b>${w.timber.volume.toFixed(3)}</b></td><td class="n"><b>${w.total.toFixed(0)}</b></td></tr></table></div>
+    <tr><td colspan="7"><b>Итого</b></td><td class="n"><b>${w.timber.volume.toFixed(3)}</b></td><td class="n"><b>${w.total.toFixed(0)}</b></td><td class="n"><b>${money(c.total - c.roofing)}</b></td></tr></table></div>
 
     <div class="pane-title" style="margin-top:14px">Масса конструкции</div>
     <div class="row2" style="gap:14px">
@@ -326,6 +337,20 @@ function renderBom(res) {
     <div class="hint" style="border:0;padding:8px 0 0">
       m = V·ρ для дерева (ρ = 500 кг/м³, сухая сосна) и m = A·L·ρ для стали (ρ = 7850 кг/м³).
       Этот вес уже учтён в расчёте нагрузок, а не добавлен задним числом.
+    </div>
+
+    <div class="pane-title" style="margin-top:14px">Стоимость материалов</div>
+    <div class="row2" style="gap:14px">
+      <div>${c.groups.map((g) => `<div class="kv"><span>${g.name} <i style="color:var(--ink-3);font-style:normal">· ${g.base}</i></span><span>${money(g.cost)} ${c.currency}</span></div>`).join('')}</div>
+      <div>
+        <div class="kv"><span><b>Всего материалов</b></span><span><b>${money(c.total)} ${c.currency}</b></span></div>
+        <div class="kv"><span>На 1 м² навеса</span><span>${money(c.perSqm)} ${c.currency}/м²</span></div>
+        <div class="kv"><span>Доля дерева / металла</span><span>${c.total > 0 ? `${Math.round((c.timber / c.total) * 100)} % / ${Math.round((c.steel / c.total) * 100)} %` : '—'}</span></div>
+      </div>
+    </div>
+    <div class="hint" style="border:0;padding:8px 0 0">
+      Цены задаются в панели слева: дерево по объёму, металл по массе, кровля по площади, метизы поштучно.
+      Работа, фундамент, доставка и крепёж стропил сюда не входят.
     </div>
 
     <div class="kv" style="margin-top:10px"><span>Ветровой распор на стеновой ряд</span><span>${f2(res.thrust.total / 1000)} кН (скат ${f2(res.thrust.roof / 1000)} + кромка ${f2(res.thrust.fascia / 1000)})</span></div>
@@ -468,12 +493,20 @@ function buildReport(res) {
       <tr><td>Собственный вес кровельной части</td><td>${f2(b.weights.deadPressure)} кПа — это ${(b.weights.deadShareWall * 100).toFixed(0)} % полной нагрузки у стены и ${(b.weights.deadShareField * 100).toFixed(0)} % в поле</td></tr>
     </table>
 
-    <h2>6. Спецификация</h2>
-    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Хлыстов по ${(b.stock / 1000).toFixed(0)} м</th><th>Объём</th><th>Масса</th></tr>
-      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : '—'}</td><td>${i.mass.toFixed(1)} кг</td></tr>`).join('')}
-      <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³</b></td><td><b>${b.weights.total.toFixed(0)} кг</b></td></tr></table>
+    <h2>6. Стоимость материалов</h2>
+    <p>Цены — те, что заданы в расчёте; работа, фундамент, доставка и крепёж стропил не учтены.</p>
+    <table><tr><th>Группа</th><th>Расчёт</th><th>Стоимость, ${b.costs.currency}</th></tr>
+      ${b.costs.groups.map((g) => `<tr><td>${g.name}</td><td>${g.base}</td><td>${Math.round(g.cost).toLocaleString('ru-RU')}</td></tr>`).join('')}
+      <tr><td colspan="2"><b>Всего</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')}</b></td></tr>
+      <tr><td colspan="2">На 1 м² навеса</td><td>${Math.round(b.costs.perSqm).toLocaleString('ru-RU')}</td></tr>
+    </table>
+
+    <h2>7. Спецификация</h2>
+    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Хлыстов по ${(b.stock / 1000).toFixed(0)} м</th><th>Объём</th><th>Масса</th><th>Стоимость</th></tr>
+      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : '—'}</td><td>${i.mass.toFixed(1)} кг</td><td>${Math.round(i.cost).toLocaleString('ru-RU')} ${b.costs.currency}</td></tr>`).join('')}
+      <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³</b></td><td><b>${b.weights.total.toFixed(0)} кг</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')} ${b.costs.currency}</b></td></tr></table>
     <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
-    <h2>7. Ограничения</h2>
+    <h2>8. Ограничения</h2>
     <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
     температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>

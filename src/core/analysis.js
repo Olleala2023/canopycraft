@@ -345,6 +345,9 @@ export function analyse(model) {
  *   кровля   m = g·S/g₀,             g — кН/м² по скату, S — площадь ската
  *   шпилька  m = π/4·d²·L·ρ_ст,      пластина m = a²·t·ρ_ст
  *
+ * Стоимость: дерево — по объёму (V·цена за м³), металл — по массе (m·цена за кг),
+ * кровля — по площади ската, метизы — поштучно. Цены задаёт пользователь.
+ *
  * Собственный вес всех этих элементов уже входит в расчёт нагрузок:
  * стропила и прогоны — погонным весом сечения, обрешётка — весом на 1 м²,
  * столбы — весом ствола в осевой силе.
@@ -352,12 +355,14 @@ export function analyse(model) {
 export function billOfMaterials(result) {
   const m = result.model;
   const stock = m.opts.stockLength ?? 6000;
+  const pr = m.prices ?? { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' };
   const G0 = 9.80665;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
     const isT = sec.material === 'timber';
     const perStock = Math.max(1, Math.floor(stock / lengthMm));
     const volume = (sec.props.A * lengthMm * count) / 1e9; // м³
+    const mass = (sec.massPerM * lengthMm * count) / 1000;
     items.push({
       name,
       section: sec.label,
@@ -367,7 +372,10 @@ export function billOfMaterials(result) {
       totalLength: (lengthMm * count) / 1000,
       stockPieces: lengthMm > stock ? null : Math.ceil(count / perStock),
       volume: isT ? volume : null,
-      mass: (sec.massPerM * lengthMm * count) / 1000,
+      mass,
+      unitPrice: isT ? pr.timberM3 : pr.steelKg,
+      unit: isT ? '₽/м³' : '₽/кг',
+      cost: isT ? volume * pr.timberM3 : mass * pr.steelKg,
     });
   };
   const ca = Math.cos(deg(m.geom.alpha));
@@ -391,9 +399,9 @@ export function billOfMaterials(result) {
   const plateMass = wp.plateSize ** 2 * 8 * boltCount * 7.85e-6;
   const fasteners = [
     { name: `Шпилька М${wp.boltDiameter} класса ${wp.boltGrade}`, count: boltCount,
-      note: `длина ≥ ${boltLen} мм`, mass: boltMass },
+      note: `длина ≥ ${boltLen} мм`, mass: boltMass, cost: boltCount * pr.fastenerPc },
     { name: `Пластина-шайба ${wp.plateSize}×${wp.plateSize}×8 мм`, count: boltCount,
-      note: 'с внутренней стороны стены, под гайку с шайбой', mass: plateMass },
+      note: 'с внутренней стороны стены, под гайку с шайбой', mass: plateMass, cost: 0 },
   ];
 
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
@@ -437,5 +445,26 @@ export function billOfMaterials(result) {
   weights.deadShareWall = dp / (dp + result.snow.at(0));
   weights.deadShareField = dp / (dp + result.snow.at(m.geom.L + m.geom.a));
 
-  return { items, fasteners, weights, timberVolume, timberMass, steelMass, steelLength, stock, total };
+  const costTimber = items.filter((i) => i.material === 'сосна').reduce((a, i) => a + i.cost, 0);
+  const costSteel = items.filter((i) => i.material === 'сталь').reduce((a, i) => a + i.cost, 0);
+  const costRoofing = roofArea * pr.roofingM2;
+  const costFasteners = fasteners.reduce((a, f) => a + (f.cost ?? 0), 0);
+  const costs = {
+    currency: pr.currency ?? '₽',
+    prices: pr,
+    timber: costTimber,
+    steel: costSteel,
+    roofing: costRoofing,
+    fasteners: costFasteners,
+    total: costTimber + costSteel + costRoofing + costFasteners,
+    perSqm: (costTimber + costSteel + costRoofing + costFasteners) / planArea,
+    groups: [
+      { name: 'Кровельное покрытие', cost: costRoofing, base: `${roofArea.toFixed(1)} м² × ${pr.roofingM2} ₽/м²` },
+      { name: 'Сосна', cost: costTimber, base: `${timberVolume.toFixed(3)} м³ × ${pr.timberM3} ₽/м³` },
+      { name: 'Сталь', cost: costSteel, base: `${steelMass.toFixed(0)} кг × ${pr.steelKg} ₽/кг` },
+      { name: 'Метизы', cost: costFasteners, base: `${boltCount} компл. × ${pr.fastenerPc} ₽` },
+    ],
+  };
+
+  return { items, fasteners, weights, costs, timberVolume, timberMass, steelMass, steelLength, stock, total };
 }
