@@ -1915,20 +1915,24 @@ function drawSection(res) {
   s.push(`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Разрез навеса">`);
 
   // ── дом
-  s.push(`<rect x="${X(-420)}" y="${Y(lv.houseRoof + 500)}" width="${420 * sc}" height="${(lv.houseRoof + 500) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  const eave = 260; // свес кровли дома над стеной — снег сходит именно отсюда
+  s.push(`<rect x="${X(-420)}" y="${Y(lv.houseRoof)}" width="${420 * sc}" height="${lv.houseRoof * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  s.push(`<line x1="${X(-420)}" y1="${Y(lv.houseRoof + 620)}" x2="${X(eave)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="1.5"/>`);
+  s.push(`<line x1="${X(-420)}" y1="${Y(lv.houseRoof)}" x2="${X(eave)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="3"/>`);
+  s.push(`<text x="${X(eave) + 8}" y="${Y(lv.houseRoof) - 6}" font-size="10" font-family="${mono}" fill="var(--ink-2)">кровля дома — снег сходит отсюда</text>`);
   s.push(`<text transform="translate(${X(-210)},${Y(lv.postTop * 0.3)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
 
   // ── размерная цепочка слева
   const xDim = X(-420) - 30;
-  s.push(`<line x1="${xDim - 6}" y1="${Y(lv.houseRoof)}" x2="${X(0)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  s.push(`<line x1="${xDim - 6}" y1="${Y(lv.houseRoof)}" x2="${X(-420)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="1" stroke-dasharray="4 3" opacity=".7" pointer-events="none"/>`);
   for (const hv of [0, lv.canopyTopWall]) {
     s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(120)}" y2="${Y(hv)}" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="4 3" opacity=".7" pointer-events="none"/>`);
   }
   s.push(dimV(Y(0), Y(lv.canopyTopWall), xDim, `${Math.round(lv.canopyTopWall)} до верха навеса`, 'var(--u-warn)'));
-  s.push(dimV(Y(lv.canopyTopWall), Y(lv.houseRoof), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+  s.push(dimV(Y(lv.canopyTopWall), Y(lv.houseRoof), xDim, `перепад ${g.driftH} до кровли дома`, 'var(--u-bad)'));
 
   // ── снег: эпюра лежит на верхней кромке стропил
-  const kPa = 1000 * sc * 0.9;
+  const kPa = 70; // мм чертежа на 1 кПа снега
   const top = (x) => lv.canopyTopWall - x * tg;
   const pts = [];
   for (let i = 0; i <= 24; i++) {
