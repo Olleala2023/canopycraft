@@ -132,6 +132,12 @@ g.draggable{cursor:ew-resize}
 .card .bar span{position:absolute; left:0; top:0; bottom:0}
 
 .bom{border:1px solid var(--rule-2); background:var(--surface); padding:12px}
+.opt-row td{padding-top:6px; padding-bottom:6px}
+.opt-row.best td{background:var(--accent-soft)}
+.opt-row .btn{padding:1px 9px; font-size:11.5px}
+.save{color:var(--u-ok)}
+.progress{height:4px; background:var(--sunk); margin-top:8px; position:relative; overflow:hidden}
+.progress span{position:absolute; left:0; top:0; bottom:0; background:var(--accent-2); transition:width .2s}
 .tbl{overflow-x:auto}
 .tbl table{min-width:540px}
 table{border-collapse:collapse; width:100%; font-size:12.5px}
@@ -173,6 +179,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     <span class="verdict-pill" id="verdict-pill">—</span>
     <button class="verdict-pill cost-pill" id="cost-pill" hidden title="Показать спецификацию и смету"></button>
     <button class="btn" id="btn-pick-all">Подобрать всё</button>
+    <button class="btn" id="btn-cost-search">Подобрать по цене</button>
     <button class="btn" id="btn-report">Отчёт</button>
     <button class="btn" id="btn-link">Ссылка на расчёт</button>
     <button class="btn" id="btn-reset">Сбросить</button>
@@ -200,6 +207,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
   </div>
 
   <div class="summary" id="summary"></div>
+  <div class="bom" id="search" hidden></div>
   <div class="bom" id="bom"></div>
 
   <div class="foot">
@@ -1549,10 +1557,12 @@ function analyseBattens(model, ctx) {
   checks.push(deflectionCheck(spans, 150));
   // ограничение производителя кровли по пролёту обрешётки
   checks.push({
+    // покрытие лежит на обрешётке и пролётом для него служит её шаг,
+    // а не расстояние между стропилами
     name: 'Пролёт под кровлю',
-    value: span, limit: ctx.dead.def.maxBatten, unit: 'мм',
-    U: span / ctx.dead.def.maxBatten,
-    formula: 'шаг стропил ≤ допустимого пролёта покрытия',
+    value: sp, limit: ctx.dead.def.maxBatten, unit: 'мм',
+    U: sp / ctx.dead.def.maxBatten,
+    formula: 'шаг обрешётки ≤ допустимого пролёта покрытия',
     note: ctx.dead.def.label,
   });
 
@@ -1906,6 +1916,7 @@ const PATH = {
   posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
 };
 
+/** Коэффициент использования по группе элементов. */
 const U_OF = {
   rafters: (r) => Math.max(...r.rafters.map((x) => x.U)),
   battens: (r) => r.battens.U,
@@ -1963,6 +1974,215 @@ function pickAll(model, target = 0.9) {
     }
   }
   return { model: m, log };
+}
+
+/* ── src/core/search.js ── */
+/**
+ * Подбор конструкции по минимальной стоимости материалов.
+ *
+ * Полный перебор — десятки тысяч сочетаний, это минуты. Но цепочка почти
+ * однонаправленная: стропила грузят прогоны, прогоны грузят столбы. Отсюда
+ * поэтапный поиск с отсевом:
+ *
+ *   1. по каждому числу стропил двоичным поиском по сортаменту находится
+ *      самое дешёвое проходящее сечение;
+ *   2. лучшие по цене варианты кровельной части идут дальше, для каждого
+ *      перебираются число столбов и сечения прогонов и стоек;
+ *   3. в конце подбирается сечение обрешётки.
+ *
+ * Сортаменты отсортированы по расходу материала, а внутри одного материала
+ * порядок по цене тот же — поэтому двоичный поиск ищет именно дешёвое.
+ */
+
+
+
+
+const clone = (m) => JSON.parse(JSON.stringify(m));
+
+/**
+ * Уступить управление интерфейсу, чтобы страница не замирала. Не на каждом
+ * расчёте: setTimeout(0) сам по себе стоит миллисекунду-другую, и на тысяче
+ * вызовов это складывается в секунды ожидания на ровном месте.
+ */
+const breathe = () => new Promise((r) => setTimeout(r, 0));
+const maybeBreathe = (budget) => (budget.n % 25 === 0 ? breathe() : null);
+
+/**
+ * Двоичный поиск самого дешёвого проходящего сечения.
+ * Предполагается почти монотонность: крупнее сечение — меньше загрузка.
+ * Если даже самое крупное не проходит, возвращается null.
+ */
+async function cheapest(list, evaluate, target, budget) {
+  if (!list.length) return null;
+  budget.n++;
+  await maybeBreathe(budget);
+  if (await evaluate(list[list.length - 1]) > target) return null;
+  let lo = 0, hi = list.length - 1, best = list[hi];
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    budget.n++;
+    await maybeBreathe(budget);
+    if (await evaluate(list[mid]) <= target) { best = list[mid]; hi = mid - 1; } else lo = mid + 1;
+  }
+  return best;
+}
+
+/**
+ * Перебор снизу вверх с ранним выходом. Для обрешётки это дешевле двоичного
+ * поиска: самое лёгкое сечение обычно проходит сразу, и хватает одного расчёта.
+ */
+async function cheapestFromBottom(list, evaluate, target, budget) {
+  for (const s of list) {
+    budget.n++;
+    await maybeBreathe(budget);
+    if (await evaluate(s) <= target) return s;
+  }
+  return null;
+}
+
+/** Сортамент того же материала, что выбран сейчас, с разумным отсевом. */
+function ladderFor(currentId, opts = {}) {
+  const cur = section(currentId);
+  return ladder(cur.material).filter((s) => {
+    if (opts.minH && s.h < opts.minH) return false;
+    if (opts.square && s.h !== s.b) return false;
+    return true;
+  });
+}
+
+/**
+ * @param {object} model исходная модель
+ * @param {object} [opts]
+ * @param {number} [opts.target] целевой запас: подбираются варианты с U ≤ target
+ * @param {number} [opts.limit] сколько вариантов вернуть
+ * @param {number} [opts.keep] сколько кровельных вариантов пускать на второй этап
+ * @param {(p:{done:number,total:number,stage:string})=>void} [opts.onProgress]
+ */
+async function searchByCost(model, opts = {}) {
+  const target = opts.target ?? 0.9;
+  const limit = opts.limit ?? 10;
+  const keep = opts.keep ?? 6;
+  const started = Date.now();
+  const budget = { n: 0 };
+  const report = (stage, done, total) => opts.onProgress?.({ stage, done, total });
+
+  const B = model.geom.B;
+  const rafterList = ladderFor(model.rafters.sectionId, { minH: 100 });
+  const battenList = ladderFor(model.battens.sectionId);
+  const purlinList = ladderFor(model.purlin.sectionId);
+  const wallPurlinList = ladderFor(model.wallPurlin.sectionId);
+  const postList = ladderFor(model.posts.sectionId, { square: true });
+  const wallPostList = ladderFor(model.wallPosts.sectionId, { square: true });
+
+  // разумный диапазон шага стропил: от 1200 до 300 мм
+  const counts = [];
+  for (let n = Math.max(3, Math.ceil(B / 1200) + 1); n <= Math.min(25, Math.ceil(B / 300) + 1); n++) counts.push(n);
+
+  /* ── этап 1: стропила ── */
+  const roofs = [];
+  for (let i = 0; i < counts.length; i++) {
+    const n = counts[i];
+    const m = clone(model);
+    m.rafters.xs = spread(B, n);
+    const sec = await cheapest(rafterList, async (s) => {
+      m.rafters.sectionId = s.id;
+      await breathe();
+      return U_OF.rafters(analyse(m));
+    }, target, budget);
+    report('стропила', i + 1, counts.length);
+    if (!sec) continue;
+    m.rafters.sectionId = sec.id;
+    // обрешётка проверяется здесь же: её пролёт — это шаг стропил, и при
+    // редкой расстановке она может не пройти, каким бы ни было стропило
+    const bat = await cheapestFromBottom(battenList, async (b) => {
+      m.battens.sectionId = b.id;
+      return U_OF.battens(analyse(m));
+    }, target, budget);
+    if (!bat) continue;
+    m.battens.sectionId = bat.id;
+    const bom = billOfMaterials(analyse(m));
+    const cost = bom.items.find((it) => it.name === 'Стропила').cost
+      + bom.items.find((it) => it.name === 'Обрешётка').cost;
+    roofs.push({ model: m, count: n, cost });
+  }
+  if (!roofs.length) return { options: [], evaluated: budget.n, ms: Date.now() - started };
+  roofs.sort((a, b) => a.cost - b.cost);
+  const finalists = roofs.slice(0, keep);
+
+  /* ── этап 2: опоры ──
+     наружный ряд и стеновой независимы: первый несёт реакции стропил на
+     прогон, второй — реакции на обвязку. Поэтому они перебираются порознь,
+     а не всеми сочетаниями: 6 + 6 вариантов вместо 36. */
+  const options = [];
+  const pickRow = async (m, cfg) => {
+    let best = null;
+    for (const n of [2, 3, 4, 5, 6, 7]) {
+      const t = clone(m);
+      t[cfg.postsKey].xs = spread(B, n);
+      const beam = await cheapest(cfg.beamList, async (s) => {
+        t[cfg.beamKey].sectionId = s.id;
+        return U_OF[cfg.beamU](analyse(t));
+      }, target, budget);
+      if (!beam) continue;
+      t[cfg.beamKey].sectionId = beam.id;
+      const post = await cheapest(cfg.postList, async (s) => {
+        t[cfg.postsKey].sectionId = s.id;
+        return U_OF[cfg.postsU](analyse(t));
+      }, target, budget);
+      if (!post) continue;
+      t[cfg.postsKey].sectionId = post.id;
+      const bom = billOfMaterials(analyse(t));
+      const cost = cfg.items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
+      if (!best || cost < best.cost) best = { cost, beam: beam.id, post: post.id, n };
+    }
+    return best;
+  };
+
+  for (let i = 0; i < finalists.length; i++) {
+    const base = finalists[i].model;
+    const outer = await pickRow(base, {
+      postsKey: 'posts', beamKey: 'purlin', beamList: purlinList, postList,
+      beamU: 'purlin', postsU: 'posts', items: ['Прогон наружный', 'Столбы наружные'],
+    });
+    const wall = await pickRow(base, {
+      postsKey: 'wallPosts', beamKey: 'wallPurlin', beamList: wallPurlinList, postList: wallPostList,
+      beamU: 'wallPurlin', postsU: 'wallPosts', items: ['Обвязка у стены', 'Столбы у стены'],
+    });
+    report('опоры', i + 1, finalists.length);
+    if (!outer || !wall) continue;
+
+    const m = clone(base);
+    m.posts.xs = spread(B, outer.n);
+    m.posts.sectionId = outer.post;
+    m.purlin.sectionId = outer.beam;
+    m.wallPosts.xs = spread(B, wall.n);
+    m.wallPosts.sectionId = wall.post;
+    m.wallPurlin.sectionId = wall.beam;
+
+    const res = analyse(m);
+    // сборка из независимо подобранных рядов проверяется целиком:
+    // отдельные проверки могли пройти, а огибающая — нет
+    if (!(res.maxU <= target)) continue;
+    const bom = billOfMaterials(res);
+    options.push({ model: m, cost: bom.costs.total, res, bom });
+  }
+
+  options.sort((a, b) => a.cost - b.cost);
+  const out = options.slice(0, limit).map((o) => ({
+    model: o.model,
+    cost: o.cost,
+    maxU: o.res.maxU,
+    mass: o.bom.weights.total,
+    parts: {
+      rafters: `${section(o.model.rafters.sectionId).label} × ${o.model.rafters.xs.length}`,
+      battens: `${section(o.model.battens.sectionId).label} / ${o.model.battens.spacing}`,
+      purlin: section(o.model.purlin.sectionId).label,
+      wallPurlin: section(o.model.wallPurlin.sectionId).label,
+      posts: `${section(o.model.posts.sectionId).label} × ${o.model.posts.xs.length}`,
+      wallPosts: `${section(o.model.wallPosts.sectionId).label} × ${o.model.wallPosts.xs.length}`,
+    },
+  }));
+  return { options: out, evaluated: budget.n, ms: Date.now() - started };
 }
 
 /* ── src/ui/views.js ── */
@@ -2251,6 +2471,7 @@ function pickElement(res, sel) {
 
 
 /* ── src/ui/app.js ── */
+
 
 
 
@@ -2692,6 +2913,114 @@ function renderCost(bom) {
 $('cost-pill').addEventListener('click', () => {
   $('bom').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+
+/* ─────────────────── подбор по цене ─────────────────── */
+
+let searchTarget = 0.9;
+let searchBusy = false;
+
+function money(x) { return Math.round(x).toLocaleString('ru-RU'); }
+
+async function runCostSearch() {
+  if (searchBusy) return;
+  searchBusy = true;
+  const host = $('search');
+  const btn = $('btn-cost-search');
+  btn.disabled = true;
+  btn.textContent = 'Считаю…';
+  host.hidden = false;
+  host.innerHTML = `<div class="pane-title">Подбор по цене</div>
+    <div class="hint" id="search-note" style="border:0;padding:0">Перебираю сочетания…</div>
+    <div class="progress"><span id="search-bar" style="width:0%"></span></div>`;
+  host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  const before = billOfMaterials(state.result).costs.total;
+  try {
+    const r = await searchByCost(state.model, {
+      target: searchTarget,
+      onProgress: ({ stage, done, total }) => {
+        const note = $('search-note'), bar = $('search-bar');
+        if (note) note.textContent = `${stage}: ${done} из ${total}`;
+        if (bar) bar.style.width = `${Math.round((done / total) * 100)}%`;
+      },
+    });
+    renderSearch(r, before);
+  } catch (e) {
+    host.innerHTML = `<div class="pane-title">Подбор по цене</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Подобрать по цене';
+  searchBusy = false;
+}
+
+function renderSearch(r, before) {
+  const host = $('search');
+  const cur = billOfMaterials(state.result);
+  if (!r.options.length) {
+    host.innerHTML = `<div class="pane-title">Подбор по цене</div>
+      <div class="hint" style="border:0;padding:0">Ни одно сочетание не уложилось в запас U ≤ ${f2(searchTarget)}.
+      Сортамента не хватает — уменьшите пролёт или свес, либо ослабьте запас.</div>`;
+    return;
+  }
+  const rows = r.options.map((o, i) => {
+    const save = before - o.cost;
+    return `<tr class="opt-row${i === 0 ? ' best' : ''}">
+      <td class="n">${money(o.cost)} ${cur.costs.currency}</td>
+      <td class="n ${save > 0 ? 'save' : ''}">${save > 0 ? '−' + money(save) : save < 0 ? '+' + money(-save) : '—'}</td>
+      <td class="n">${f2(o.maxU)}</td>
+      <td class="n">${Math.round(o.mass)} кг</td>
+      <td>${o.parts.rafters}</td><td>${o.parts.battens}</td>
+      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td>
+      <td>${o.parts.wallPurlin}</td><td>${o.parts.wallPosts}</td>
+      <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
+  }).join('');
+
+  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с</div>
+    <div class="tbl"><table>
+      <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
+        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
+      <tr><td class="n"><b>${money(before)} ${cur.costs.currency}</b></td><td class="n">текущий</td>
+        <td class="n">${f2(state.result.maxU)}</td><td class="n">${Math.round(cur.weights.total)} кг</td>
+        <td>${o2(state.model.rafters.sectionId)} × ${state.model.rafters.xs.length}</td>
+        <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
+        <td>${o2(state.model.purlin.sectionId)}</td>
+        <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
+        <td>${o2(state.model.wallPurlin.sectionId)}</td>
+        <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
+      ${rows}
+    </table></div>
+    <div class="row2" style="gap:14px;margin-top:10px">
+      <div class="hint" style="border:0;padding:0">
+        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки.
+        Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
+      </div>
+      <div class="hint" style="border:0;padding:0">
+        Работа, фундамент и крепёж не считаются: вариант с частыми стропилами дешевле по материалу,
+        но дороже по монтажу. Оптимум зависит от ваших цен — перебор имеет смысл после того,
+        как вы подставили свои.
+      </div>
+    </div>
+    <div class="field" style="max-width:260px;margin-top:8px">
+      <label for="search-target">Целевой запас — подбирать до U ≤ <b>${f2(searchTarget)}</b></label>
+      <input type="range" id="search-target" min="0.7" max="1" step="0.05" value="${searchTarget}">
+    </div>`;
+
+  host.querySelectorAll('[data-apply]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const o = r.options[Number(b.getAttribute('data-apply'))];
+      state.model = JSON.parse(JSON.stringify(o.model));
+      resetCostBaseline();
+      $('search').hidden = true;
+      render(`Применён вариант за ${money(o.cost)} ${cur.costs.currency}`);
+    }));
+  const t = $('search-target');
+  t.addEventListener('change', () => { searchTarget = Number(t.value); runCostSearch(); });
+}
+
+/** Подпись сечения по его идентификатору. */
+const o2 = (id) => section(id).label;
+
+$('btn-cost-search').addEventListener('click', runCostSearch);
 
 /* ─────────────────── сцена и перетаскивание ─────────────────── */
 

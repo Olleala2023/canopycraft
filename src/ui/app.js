@@ -3,6 +3,7 @@ import { analyse, billOfMaterials } from '../core/analysis.js';
 import { SECTIONS, section } from '../core/sections.js';
 import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
+import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel } from '../core/share.js';
 import { drawPlan, drawSection, drawDiagrams, pickElement, uColor, f2 } from './views.js';
 
@@ -440,6 +441,114 @@ function renderCost(bom) {
 $('cost-pill').addEventListener('click', () => {
   $('bom').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+
+/* ─────────────────── подбор по цене ─────────────────── */
+
+let searchTarget = 0.9;
+let searchBusy = false;
+
+function money(x) { return Math.round(x).toLocaleString('ru-RU'); }
+
+async function runCostSearch() {
+  if (searchBusy) return;
+  searchBusy = true;
+  const host = $('search');
+  const btn = $('btn-cost-search');
+  btn.disabled = true;
+  btn.textContent = 'Считаю…';
+  host.hidden = false;
+  host.innerHTML = `<div class="pane-title">Подбор по цене</div>
+    <div class="hint" id="search-note" style="border:0;padding:0">Перебираю сочетания…</div>
+    <div class="progress"><span id="search-bar" style="width:0%"></span></div>`;
+  host.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  const before = billOfMaterials(state.result).costs.total;
+  try {
+    const r = await searchByCost(state.model, {
+      target: searchTarget,
+      onProgress: ({ stage, done, total }) => {
+        const note = $('search-note'), bar = $('search-bar');
+        if (note) note.textContent = `${stage}: ${done} из ${total}`;
+        if (bar) bar.style.width = `${Math.round((done / total) * 100)}%`;
+      },
+    });
+    renderSearch(r, before);
+  } catch (e) {
+    host.innerHTML = `<div class="pane-title">Подбор по цене</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Подобрать по цене';
+  searchBusy = false;
+}
+
+function renderSearch(r, before) {
+  const host = $('search');
+  const cur = billOfMaterials(state.result);
+  if (!r.options.length) {
+    host.innerHTML = `<div class="pane-title">Подбор по цене</div>
+      <div class="hint" style="border:0;padding:0">Ни одно сочетание не уложилось в запас U ≤ ${f2(searchTarget)}.
+      Сортамента не хватает — уменьшите пролёт или свес, либо ослабьте запас.</div>`;
+    return;
+  }
+  const rows = r.options.map((o, i) => {
+    const save = before - o.cost;
+    return `<tr class="opt-row${i === 0 ? ' best' : ''}">
+      <td class="n">${money(o.cost)} ${cur.costs.currency}</td>
+      <td class="n ${save > 0 ? 'save' : ''}">${save > 0 ? '−' + money(save) : save < 0 ? '+' + money(-save) : '—'}</td>
+      <td class="n">${f2(o.maxU)}</td>
+      <td class="n">${Math.round(o.mass)} кг</td>
+      <td>${o.parts.rafters}</td><td>${o.parts.battens}</td>
+      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td>
+      <td>${o.parts.wallPurlin}</td><td>${o.parts.wallPosts}</td>
+      <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
+  }).join('');
+
+  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с</div>
+    <div class="tbl"><table>
+      <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
+        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
+      <tr><td class="n"><b>${money(before)} ${cur.costs.currency}</b></td><td class="n">текущий</td>
+        <td class="n">${f2(state.result.maxU)}</td><td class="n">${Math.round(cur.weights.total)} кг</td>
+        <td>${o2(state.model.rafters.sectionId)} × ${state.model.rafters.xs.length}</td>
+        <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
+        <td>${o2(state.model.purlin.sectionId)}</td>
+        <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
+        <td>${o2(state.model.wallPurlin.sectionId)}</td>
+        <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
+      ${rows}
+    </table></div>
+    <div class="row2" style="gap:14px;margin-top:10px">
+      <div class="hint" style="border:0;padding:0">
+        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки.
+        Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
+      </div>
+      <div class="hint" style="border:0;padding:0">
+        Работа, фундамент и крепёж не считаются: вариант с частыми стропилами дешевле по материалу,
+        но дороже по монтажу. Оптимум зависит от ваших цен — перебор имеет смысл после того,
+        как вы подставили свои.
+      </div>
+    </div>
+    <div class="field" style="max-width:260px;margin-top:8px">
+      <label for="search-target">Целевой запас — подбирать до U ≤ <b>${f2(searchTarget)}</b></label>
+      <input type="range" id="search-target" min="0.7" max="1" step="0.05" value="${searchTarget}">
+    </div>`;
+
+  host.querySelectorAll('[data-apply]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const o = r.options[Number(b.getAttribute('data-apply'))];
+      state.model = JSON.parse(JSON.stringify(o.model));
+      resetCostBaseline();
+      $('search').hidden = true;
+      render(`Применён вариант за ${money(o.cost)} ${cur.costs.currency}`);
+    }));
+  const t = $('search-target');
+  t.addEventListener('change', () => { searchTarget = Number(t.value); runCostSearch(); });
+}
+
+/** Подпись сечения по его идентификатору. */
+const o2 = (id) => section(id).label;
+
+$('btn-cost-search').addEventListener('click', runCostSearch);
 
 /* ─────────────────── сцена и перетаскивание ─────────────────── */
 

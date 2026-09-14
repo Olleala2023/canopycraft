@@ -12,7 +12,8 @@ const PATH = {
   posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
 };
 
-const U_OF = {
+/** Коэффициент использования по группе элементов. */
+export const U_OF = {
   rafters: (r) => Math.max(...r.rafters.map((x) => x.U)),
   battens: (r) => r.battens.U,
   purlin: (r) => r.purlin.U,

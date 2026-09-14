@@ -19,6 +19,7 @@ const ORDER = [
   'src/core/share.js',
   'src/core/analysis.js',
   'src/core/optimize.js',
+  'src/core/search.js',
   'src/ui/views.js',
   'src/ui/app.js',
 ];
@@ -30,7 +31,35 @@ function strip(src) {
     .replace(/^export\s+(const|let|var|function|class|async)/gm, '$1');
 }
 
-const bundle = ORDER.map((f) => `/* ── ${f} ── */\n${strip(readFileSync(join(root, f), 'utf8'))}`).join('\n');
+/**
+ * Склейка не даёт модулям своей области видимости, поэтому одинаковые имена
+ * верхнего уровня в разных файлах ломают бандл молча — браузер падает на
+ * «Identifier has already been declared». Ловим это на сборке.
+ */
+function topLevelNames(src) {
+  const names = [];
+  for (const line of src.split('\n')) {
+    const m = /^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/.exec(line);
+    if (m) names.push(m[1]);
+  }
+  return names;
+}
+
+const pieces = ORDER.map((f) => ({ f, src: strip(readFileSync(join(root, f), 'utf8')) }));
+const seen = new Map();
+const clashes = [];
+for (const { f, src } of pieces) {
+  for (const n of topLevelNames(src)) {
+    if (seen.has(n) && seen.get(n) !== f) clashes.push(`${n}: ${seen.get(n)} и ${f}`);
+    else seen.set(n, f);
+  }
+}
+if (clashes.length) {
+  console.error('Одинаковые имена верхнего уровня в разных модулях:\n  ' + clashes.join('\n  '));
+  process.exit(1);
+}
+
+const bundle = pieces.map(({ f, src }) => `/* ── ${f} ── */\n${src}`).join('\n');
 const css = readFileSync(join(root, 'src/ui/styles.css'), 'utf8');
 let html = readFileSync(join(root, 'dev.html'), 'utf8');
 
