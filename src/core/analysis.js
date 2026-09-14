@@ -54,27 +54,34 @@ function analyseRafter(model, x, trib, ctx) {
   const deadPerpN = (lineRoofN + lineBattenN + lineSelfN) * ca;
   const deadPerpD = (GAMMA_F.roofing * lineRoofN + gammaDead * (lineBattenN + lineSelfN)) * ca;
 
-  const snowAt = (xs) => (ctx.snow.at(xs * ca) * trib) / 1000 * ca * ca;
   const windUpPerp = (ctx.wind.up * trib) / 1000;
   const windDownPerp = (ctx.wind.down * trib) / 1000;
 
-  const combos = {
-    'ULS-1': (xs) => deadPerpD + snowAt(xs),
-    'ULS-2': (xs) => deadPerpD + snowAt(xs) + 0.9 * windDownPerp,
-    'ULS-3': () => GAMMA_F.relieving * deadPerpN - windUpPerp,
-    SLS: (xs) => deadPerpN + 0.7 * snowAt(xs),
-  };
+  // Схема Б.8 требует считать нижнее покрытие в двух вариантах — равномерном
+  // и со снеговым мешком. За расчётное принимается худшее из них, причём
+  // поэлементно: у стены правит мешок, в дальней части — равномерный снег.
+  const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, nEl: 120 });
+  const byVariant = ctx.snow.variants.map((v) => {
+    const snowAt = (xs) => (v.at(xs * ca) * trib) / 1000 * ca * ca;
+    return {
+      variant: v,
+      'ULS-1': solve((xs) => deadPerpD + GAMMA_F.snow * snowAt(xs)),
+      'ULS-2': solve((xs) => deadPerpD + GAMMA_F.snow * snowAt(xs) + 0.9 * windDownPerp),
+      SLS: solve((xs) => deadPerpN + snowAt(xs)),
+    };
+  });
+  const uplift = solve(() => GAMMA_F.relieving * deadPerpN - windUpPerp);
 
-  const res = {};
-  for (const [id, q] of Object.entries(combos)) {
-    res[id] = solveBeam({ length: Ls, supports, EI, GAs, q, nEl: 120 });
-  }
+  // определяющий вариант — тот, где больше момент в пролёте
+  const peak = (r) => r.M.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const lead = byVariant.reduce((a, b) => (peak(b['ULS-1']) > peak(a['ULS-1']) ? b : a));
+  const res = { 'ULS-1': lead['ULS-1'], 'ULS-2': lead['ULS-2'], 'ULS-3': uplift, SLS: lead.SLS };
 
-  // огибающая по ULS
+  // огибающая по всем вариантам и сочетаниям
   let Mmax = 0, Vmax = 0, Mcant = 0;
-  const iSup = Math.round((xSup / Ls) * (res['ULS-1'].x.length - 1));
-  for (const id of ['ULS-1', 'ULS-2', 'ULS-3']) {
-    const r = res[id];
+  const iSup = Math.round((xSup / Ls) * (uplift.x.length - 1));
+  const envelope = byVariant.flatMap((g) => [g['ULS-1'], g['ULS-2']]).concat([uplift]);
+  for (const r of envelope) {
     for (let i = 0; i < r.M.length; i++) {
       if (Math.abs(r.M[i]) > Math.abs(Mmax)) Mmax = r.M[i];
       if (Math.abs(r.V[i]) > Math.abs(Vmax)) Vmax = r.V[i];
@@ -84,10 +91,16 @@ function analyseRafter(model, x, trib, ctx) {
 
   // осевое сжатие вдоль стропила: вертикальная нагрузка × sin α, накапливается
   // к нижней опоре (внешние реакции при этом вертикальные — распора нет)
-  const totalPerp = res['ULS-1'].reactions.reduce((sum, r) => sum + r.R, 0);
+  const totalPerp = Math.max(...byVariant.map((g) => g['ULS-1'].reactions.reduce((sum, r) => sum + r.R, 0)));
   const N = totalPerp * (sa / ca);
 
-  const spans = deflectionSpans(res.SLS, Ls, supports).spans;
+  // прогибы — тоже огибающая по вариантам загружения
+  const spans = deflectionSpans(byVariant[0].SLS, Ls, supports).spans;
+  for (const g of byVariant.slice(1)) {
+    deflectionSpans(g.SLS, Ls, supports).spans.forEach((sp, i) => {
+      if (sp.f > spans[i].f) spans[i] = sp;
+    });
+  }
   const cantLen = Ls - xSup;
   const lambda = xSup / (sec.material === 'timber' ? sec.h / Math.sqrt(12) : sec.props.ix);
 
@@ -97,7 +110,7 @@ function analyseRafter(model, x, trib, ctx) {
     checks.push(timberShear(Vmax, sec, mat));
     checks.push(timberCombined(N, Mmax, sec, mat, lambda));
     if (cantLen > 200) checks.push(timberLateral(Mcant, sec, mat, cantLen));
-    checks.push(timberBearing(res['ULS-1'].reactions[1].R, sec, mat, model.opts.bearingLength));
+    checks.push(timberBearing(Math.max(...byVariant.map((g) => g['ULS-1'].reactions[1].R)), sec, mat, model.opts.bearingLength));
   } else {
     checks.push(steelBending(Mmax, sec.props.Wx, mat));
     checks.push(steelShear(Vmax, sec.props, mat));
@@ -110,13 +123,14 @@ function analyseRafter(model, x, trib, ctx) {
   return {
     x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans,
     res,
+    variant: lead.variant.label,
     reactions: {
-      wall: res['ULS-1'].reactions[0].R,
-      purlin: res['ULS-1'].reactions[1].R,
-      wallUplift: res['ULS-3'].reactions[0].R,
-      purlinUplift: res['ULS-3'].reactions[1].R,
-      wallSls: res.SLS.reactions[0].R,
-      purlinSls: res.SLS.reactions[1].R,
+      wall: Math.max(...byVariant.map((g) => g['ULS-1'].reactions[0].R)),
+      purlin: Math.max(...byVariant.map((g) => g['ULS-1'].reactions[1].R)),
+      wallUplift: uplift.reactions[0].R,
+      purlinUplift: uplift.reactions[1].R,
+      wallSls: Math.max(...byVariant.map((g) => g.SLS.reactions[0].R)),
+      purlinSls: Math.max(...byVariant.map((g) => g.SLS.reactions[1].R)),
     },
     ...w,
   };
@@ -137,10 +151,10 @@ function analyseBattens(model, ctx) {
   const sp = model.battens.spacing;
   const deadN = ((ctx.dead.roof * sp) / 1000 + sec.weight) * ca;
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
-  const snowD = (ctx.snow.at(0) * sp) / 1000 * ca * ca;
+  const snowD = (Math.max(...ctx.snow.variants.map((v) => v.at(0))) * sp) / 1000 * ca * ca;
 
-  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + snowD, nEl: 160 });
-  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + 0.7 * snowD, nEl: 160 });
+  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, nEl: 160 });
+  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, nEl: 160 });
 
   // сосредоточенная 1 кН (СП 20 п. 8.3.4) в середине наибольшего пролёта
   let span = 0, mid = B / 2;
@@ -299,7 +313,7 @@ function analyseRoof(model) {
 
   const { geom } = model;
   const dead = roofDead(model);
-  const snow = snowProfile(model.site, geom.alpha, { driftH: geom.driftH, depth: geom.L + geom.a });
+  const snow = snowProfile(model.site, geom.alpha, { driftH: geom.driftH, depth: geom.L + geom.a, width: geom.B, alpha: geom.alpha });
   const zTop = levels(model).canopyTopWall;
   const wind = windPressure(model.site, zTop);
   const ctx = { dead, snow, wind };
