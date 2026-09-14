@@ -165,3 +165,33 @@ test('стоимость считается по заданным ценам и 
   const free = billOfMaterials(analyse({ ...m, prices: { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' } }));
   assert.equal(free.costs.total, 0, 'нулевые цены дают нулевую смету, а не NaN');
 });
+
+test('ссылка на расчёт: короткая, восстанавливает модель, переживает мусор', async () => {
+  const { encodeModel, decodeModel, diffModel, mergeModel } = await import('../src/core/share.js');
+  const base = defaultModel();
+
+  assert.deepEqual(diffModel(base), {}, 'умолчания не занимают места в ссылке');
+  assert.ok(encodeModel(base).length < 8, `пустая ссылка: ${encodeModel(base).length} символов`);
+
+  const changed = structuredClone(base);
+  changed.geom.L = 5200;
+  changed.rafters.sectionId = 't50x200';
+  changed.prices.steelKg = 190;
+  changed.posts.xs = [0, 2500, 5000, 6000];
+  const code = encodeModel(changed);
+  assert.ok(code.length < 200, `ссылка на изменённый расчёт: ${code.length} символов`);
+
+  const back = decodeModel(code);
+  assert.deepEqual(back, changed, 'модель восстанавливается один в один');
+  assert.equal(analyse(back).maxU.toFixed(4), analyse(changed).maxU.toFixed(4));
+
+  assert.equal(decodeModel('это не base64!!!'), null);
+  assert.equal(decodeModel(''), null);
+
+  // ссылка со старым или чужим ключом не ломает модель
+  const patched = mergeModel({ geom: { L: 3000, чужое: 1 }, несуществующее: 42 }, base);
+  assert.equal(patched.geom.L, 3000);
+  assert.equal(patched.несуществующее, undefined);
+  assert.equal(patched.geom.чужое, undefined);
+  assert.equal(patched.geom.B, base.geom.B, 'остальное берётся из умолчаний');
+});

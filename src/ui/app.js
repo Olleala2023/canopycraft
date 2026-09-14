@@ -3,13 +3,21 @@ import { analyse, billOfMaterials } from '../core/analysis.js';
 import { SECTIONS, section } from '../core/sections.js';
 import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
+import { encodeModel, decodeModel } from '../core/share.js';
 import { drawPlan, drawSection, drawDiagrams, pickElement, uColor, f2 } from './views.js';
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'canopycraft.model.v2';
 
+/** Расчёт из ссылки важнее сохранённого: по ссылке приходят делиться конкретным вариантом. */
+function initialModel() {
+  const h = typeof location !== 'undefined' ? location.hash : '';
+  const fromLink = h && h.startsWith('#p=') ? decodeModel(h.slice(3)) : null;
+  return fromLink ?? load() ?? defaultModel();
+}
+
 const state = {
-  model: load() ?? defaultModel(),
+  model: initialModel(),
   sel: { type: 'rafter', index: 0 },
   view: 'plan',
   result: null,
@@ -27,6 +35,27 @@ function load() {
 function save() {
   if (drag) return; // во время перетаскивания сохраняем один раз, в конце
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state.model)); } catch { /* приватный режим */ }
+  syncUrl();
+}
+
+/** Адресная строка всегда показывает текущий расчёт — её можно скопировать в любой момент. */
+let urlTimer = 0;
+function syncUrl() {
+  if (urlTimer) return;
+  urlTimer = setTimeout(() => {
+    urlTimer = 0;
+    try {
+      const code = encodeModel(state.model);
+      const base = location.href.split('#')[0];
+      history.replaceState(null, '', code ? `${base}#p=${code}` : base);
+    } catch { /* внутри фрейма адресная строка недоступна — не беда */ }
+  }, 400);
+}
+
+/** Ссылка на текущий расчёт. */
+function shareUrl() {
+  const code = encodeModel(state.model);
+  return location.href.split('#')[0] + (code ? `#p=${code}` : '');
 }
 
 /* ─────────────────── панель параметров ─────────────────── */
@@ -610,12 +639,30 @@ $('btn-pick-all').addEventListener('click', () => {
   }, 10);
 });
 $('btn-report').addEventListener('click', () => { buildReport(state.result); window.print(); });
-$('btn-json').addEventListener('click', async () => {
-  const text = JSON.stringify(state.model, null, 2);
-  try { await navigator.clipboard.writeText(text); render('Модель скопирована в буфер обмена'); }
-  catch { window.prompt('Скопируйте JSON модели:', text); }
+$('btn-link').addEventListener('click', async () => {
+  const url = shareUrl();
+  try {
+    await navigator.clipboard.writeText(url);
+    render(`Ссылка на расчёт скопирована · ${url.length} символов`);
+  } catch {
+    window.prompt('Ссылка на расчёт:', url);
+  }
 });
-$('btn-reset').addEventListener('click', () => { state.model = defaultModel(); state.sel = { type: 'rafter', index: 0 }; render('Сброшено к значениям по умолчанию'); });
+$('btn-reset').addEventListener('click', () => {
+  state.model = defaultModel();
+  state.sel = { type: 'rafter', index: 0 };
+  render('Сброшено к значениям по умолчанию');
+});
+// открыли ссылку на другой расчёт в той же вкладке
+window.addEventListener('hashchange', () => {
+  const h = location.hash;
+  if (!h.startsWith('#p=')) return;
+  if (h.slice(3) === encodeModel(state.model)) return;
+  const m = decodeModel(h.slice(3));
+  if (!m) return;
+  state.model = m;
+  render('Загружен расчёт из ссылки');
+});
 
 function selectWorst(res) {
   state.sel = selectRow(res, res.summary.reduce((a, b) => (a.U > b.U ? a : b)).key);

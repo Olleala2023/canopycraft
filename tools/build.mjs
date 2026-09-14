@@ -16,6 +16,7 @@ const ORDER = [
   'src/core/beam.js',
   'src/core/checks.js',
   'src/core/model.js',
+  'src/core/share.js',
   'src/core/analysis.js',
   'src/core/optimize.js',
   'src/ui/views.js',

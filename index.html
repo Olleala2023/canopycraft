@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CanopyCraft</title>
+<meta name="description" content="Расчёт односкатного навеса, пристроенного к дому: стропила, обрешётка, прогоны, столбы. Сосна и профильная труба по СП 20, СП 64, СП 16. Карта загрузки, эпюры, массы и смета.">
+<meta name="theme-color" content="#12405E">
+<meta property="og:type" content="website">
+<meta property="og:title" content="CanopyCraft — расчёт навеса">
+<meta property="og:description" content="Карта загрузки, эпюры и подбор сечений для навеса у дома. Сосна и профильная труба.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -162,7 +167,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     <span class="verdict-pill" id="verdict-pill">—</span>
     <button class="btn" id="btn-pick-all">Подобрать всё</button>
     <button class="btn" id="btn-report">Отчёт</button>
-    <button class="btn" id="btn-json">Копировать JSON</button>
+    <button class="btn" id="btn-link">Ссылка на расчёт</button>
     <button class="btn" id="btn-reset">Сбросить</button>
   </div>
 
@@ -1103,6 +1108,73 @@ function tributaries(xs, B) {
   });
 }
 
+/* ── src/core/share.js ── */
+/**
+ * Упаковка модели в ссылку.
+ *
+ * В URL кладётся не вся модель, а только отличия от значений по умолчанию —
+ * тогда ссылка на слегка изменённый расчёт остаётся короткой, а новые поля,
+ * появившиеся в программе позже, подставятся из текущих умолчаний.
+ */
+
+const isPlain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** Разница между моделью и эталоном: только изменённые листья и массивы целиком. */
+function diffModel(model, base = defaultModel()) {
+  const out = {};
+  for (const [k, v] of Object.entries(model)) {
+    const b = base?.[k];
+    if (isPlain(v) && isPlain(b)) {
+      const d = diffModel(v, b);
+      if (Object.keys(d).length) out[k] = d;
+    } else if (JSON.stringify(v) !== JSON.stringify(b)) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/** Накладывает разницу на эталон. Неизвестные ключи игнорируются. */
+function mergeModel(patch, base = defaultModel()) {
+  const out = Array.isArray(base) ? [...base] : { ...base };
+  if (!isPlain(patch)) return out;
+  for (const [k, v] of Object.entries(patch)) {
+    if (!(k in out)) continue;
+    out[k] = isPlain(v) && isPlain(out[k]) ? mergeModel(v, out[k]) : v;
+  }
+  return out;
+}
+
+function toBase64Url(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromBase64Url(code) {
+  const b64 = code.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/** Модель → строка для адресной строки. */
+function encodeModel(model) {
+  return toBase64Url(JSON.stringify(diffModel(model)));
+}
+
+/** Строка из адресной строки → модель. null, если строка испорчена. */
+function decodeModel(code) {
+  try {
+    const patch = JSON.parse(fromBase64Url(code));
+    if (!isPlain(patch)) return null;
+    return mergeModel(patch);
+  } catch {
+    return null;
+  }
+}
+
 /* ── src/core/analysis.js ── */
 /**
  * Сборка расчёта: передача нагрузок по цепочке и проверки всех элементов.
@@ -1918,11 +1990,19 @@ function pickElement(res, sel) {
 
 
 
+
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'canopycraft.model.v2';
 
+/** Расчёт из ссылки важнее сохранённого: по ссылке приходят делиться конкретным вариантом. */
+function initialModel() {
+  const h = typeof location !== 'undefined' ? location.hash : '';
+  const fromLink = h && h.startsWith('#p=') ? decodeModel(h.slice(3)) : null;
+  return fromLink ?? load() ?? defaultModel();
+}
+
 const state = {
-  model: load() ?? defaultModel(),
+  model: initialModel(),
   sel: { type: 'rafter', index: 0 },
   view: 'plan',
   result: null,
@@ -1940,6 +2020,27 @@ function load() {
 function save() {
   if (drag) return; // во время перетаскивания сохраняем один раз, в конце
   try { localStorage.setItem(STORE_KEY, JSON.stringify(state.model)); } catch { /* приватный режим */ }
+  syncUrl();
+}
+
+/** Адресная строка всегда показывает текущий расчёт — её можно скопировать в любой момент. */
+let urlTimer = 0;
+function syncUrl() {
+  if (urlTimer) return;
+  urlTimer = setTimeout(() => {
+    urlTimer = 0;
+    try {
+      const code = encodeModel(state.model);
+      const base = location.href.split('#')[0];
+      history.replaceState(null, '', code ? `${base}#p=${code}` : base);
+    } catch { /* внутри фрейма адресная строка недоступна — не беда */ }
+  }, 400);
+}
+
+/** Ссылка на текущий расчёт. */
+function shareUrl() {
+  const code = encodeModel(state.model);
+  return location.href.split('#')[0] + (code ? `#p=${code}` : '');
 }
 
 /* ─────────────────── панель параметров ─────────────────── */
@@ -2523,12 +2624,30 @@ $('btn-pick-all').addEventListener('click', () => {
   }, 10);
 });
 $('btn-report').addEventListener('click', () => { buildReport(state.result); window.print(); });
-$('btn-json').addEventListener('click', async () => {
-  const text = JSON.stringify(state.model, null, 2);
-  try { await navigator.clipboard.writeText(text); render('Модель скопирована в буфер обмена'); }
-  catch { window.prompt('Скопируйте JSON модели:', text); }
+$('btn-link').addEventListener('click', async () => {
+  const url = shareUrl();
+  try {
+    await navigator.clipboard.writeText(url);
+    render(`Ссылка на расчёт скопирована · ${url.length} символов`);
+  } catch {
+    window.prompt('Ссылка на расчёт:', url);
+  }
 });
-$('btn-reset').addEventListener('click', () => { state.model = defaultModel(); state.sel = { type: 'rafter', index: 0 }; render('Сброшено к значениям по умолчанию'); });
+$('btn-reset').addEventListener('click', () => {
+  state.model = defaultModel();
+  state.sel = { type: 'rafter', index: 0 };
+  render('Сброшено к значениям по умолчанию');
+});
+// открыли ссылку на другой расчёт в той же вкладке
+window.addEventListener('hashchange', () => {
+  const h = location.hash;
+  if (!h.startsWith('#p=')) return;
+  if (h.slice(3) === encodeModel(state.model)) return;
+  const m = decodeModel(h.slice(3));
+  if (!m) return;
+  state.model = m;
+  render('Загружен расчёт из ссылки');
+});
 
 function selectWorst(res) {
   state.sel = selectRow(res, res.summary.reduce((a, b) => (a.U > b.U ? a : b)).key);
