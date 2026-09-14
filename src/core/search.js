@@ -5,19 +5,20 @@
  * однонаправленная: стропила грузят прогоны, прогоны грузят столбы. Отсюда
  * поэтапный поиск с отсевом:
  *
- *   1. по каждому числу стропил двоичным поиском по сортаменту находится
- *      самое дешёвое проходящее сечение;
+ *   1. по каждому числу стропил подбирается самое дешёвое проходящее сечение
+ *      стропила и под него — обрешётка;
  *   2. лучшие по цене варианты кровельной части идут дальше, для каждого
  *      перебираются число столбов и сечения прогонов и стоек;
- *   3. в конце подбирается сечение обрешётки.
+ *   3. собранный вариант проверяется целиком.
  *
- * Сортаменты отсортированы по расходу материала, а внутри одного материала
- * порядок по цене тот же — поэтому двоичный поиск ищет именно дешёвое.
+ * Внутри одного материала стоимость пропорциональна площади сечения (дерево
+ * считается по объёму, металл по массе), поэтому сортамент, упорядоченный по A,
+ * упорядочен и по цене: первое прошедшее сечение при переборе снизу и есть
+ * самое дешёвое.
  */
-import { analyse, billOfMaterials } from './analysis.js';
+import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from './analysis.js';
 import { ladder, section } from './sections.js';
 import { spread } from './model.js';
-import { U_OF } from './optimize.js';
 
 const clone = (m) => JSON.parse(JSON.stringify(m));
 
@@ -27,37 +28,36 @@ const clone = (m) => JSON.parse(JSON.stringify(m));
  * вызовов это складывается в секунды ожидания на ровном месте.
  */
 const breathe = () => new Promise((r) => setTimeout(r, 0));
-const maybeBreathe = (budget) => (budget.n % 25 === 0 ? breathe() : null);
+const maybeBreathe = (budget) => (budget.n % 40 === 0 ? breathe() : null);
 
 /**
- * Двоичный поиск самого дешёвого проходящего сечения.
- * Предполагается почти монотонность: крупнее сечение — меньше загрузка.
- * Если даже самое крупное не проходит, возвращается null.
+ * Характеристики, по которым одно сечение может быть «не хуже» другого:
+ * моменты сопротивления и инерции в обеих плоскостях, радиусы инерции,
+ * сдвиговая площадь. Если сечение не лучше ни по одной из них, оно не может
+ * пройти там, где не прошло второе.
+ */
+const CAPACITY = ['Wx', 'Wy', 'Ix', 'Iy', 'ix', 'iy', 'As'];
+const dominates = (a, b) => CAPACITY.every((k) => a.props[k] >= b.props[k] * (1 - 1e-9));
+
+/**
+ * Самое дешёвое проходящее сечение — перебором снизу, с отсевом заведомо
+ * слабых.
+ *
+ * Двоичный поиск здесь неприменим: сортамент упорядочен по расходу материала,
+ * а несущая способность вдоль него не монотонна. 40×40×3 дороже 50×50×2, но
+ * хуже её и по моменту сопротивления, и по радиусу инерции; у 60×60×3 радиус
+ * инерции меньше, чем у более дешёвой 60×60×2. На такой «пиле» двоичный поиск
+ * перешагивает через проходящие дешёвые сечения — так столбы у стены
+ * получались 100×100×3 там, где хватало 60×60×2.
  */
 async function cheapest(list, evaluate, target, budget) {
-  if (!list.length) return null;
-  budget.n++;
-  await maybeBreathe(budget);
-  if (await evaluate(list[list.length - 1]) > target) return null;
-  let lo = 0, hi = list.length - 1, best = list[hi];
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    budget.n++;
-    await maybeBreathe(budget);
-    if (await evaluate(list[mid]) <= target) { best = list[mid]; hi = mid - 1; } else lo = mid + 1;
-  }
-  return best;
-}
-
-/**
- * Перебор снизу вверх с ранним выходом. Для обрешётки это дешевле двоичного
- * поиска: самое лёгкое сечение обычно проходит сразу, и хватает одного расчёта.
- */
-async function cheapestFromBottom(list, evaluate, target, budget) {
+  const failed = [];
   for (const s of list) {
+    if (failed.some((f) => dominates(f, s))) continue;
     budget.n++;
     await maybeBreathe(budget);
     if (await evaluate(s) <= target) return s;
+    failed.push(s);
   }
   return null;
 }
@@ -100,28 +100,30 @@ export async function searchByCost(model, opts = {}) {
   const counts = [];
   for (let n = Math.max(3, Math.ceil(B / 1200) + 1); n <= Math.min(25, Math.ceil(B / 300) + 1); n++) counts.push(n);
 
-  /* ── этап 1: стропила ── */
+  /* ── этап 1: стропила и обрешётка ──
+     считается только кровельная часть: положение и сечения опор на неё не
+     влияют, а расчёт стропил — самая дорогая часть полного анализа */
   const roofs = [];
   for (let i = 0; i < counts.length; i++) {
     const n = counts[i];
     const m = clone(model);
     m.rafters.xs = spread(B, n);
+    // сначала обрешётка: её пролёт — это шаг стропил, а сечение стропила на неё
+    // не влияет. При редкой расстановке она может не пройти вовсе
+    const bat = await cheapest(battenList, async (b) => {
+      m.battens.sectionId = b.id;
+      return analyseRoof(m).battens.U;
+    }, target, budget);
+    if (!bat) continue;
+    m.battens.sectionId = bat.id;
+    // стропила считаются уже под собственным весом выбранной обрешётки
     const sec = await cheapest(rafterList, async (s) => {
       m.rafters.sectionId = s.id;
-      await breathe();
-      return U_OF.rafters(analyse(m));
+      return Math.max(...analyseRoof(m).rafters.map((r) => r.U));
     }, target, budget);
     report('стропила', i + 1, counts.length);
     if (!sec) continue;
     m.rafters.sectionId = sec.id;
-    // обрешётка проверяется здесь же: её пролёт — это шаг стропил, и при
-    // редкой расстановке она может не пройти, каким бы ни было стропило
-    const bat = await cheapestFromBottom(battenList, async (b) => {
-      m.battens.sectionId = b.id;
-      return U_OF.battens(analyse(m));
-    }, target, budget);
-    if (!bat) continue;
-    m.battens.sectionId = bat.id;
     const bom = billOfMaterials(analyse(m));
     const cost = bom.items.find((it) => it.name === 'Стропила').cost
       + bom.items.find((it) => it.name === 'Обрешётка').cost;
@@ -134,42 +136,43 @@ export async function searchByCost(model, opts = {}) {
   /* ── этап 2: опоры ──
      наружный ряд и стеновой независимы: первый несёт реакции стропил на
      прогон, второй — реакции на обвязку. Поэтому они перебираются порознь,
-     а не всеми сочетаниями: 6 + 6 вариантов вместо 36. */
+     а не всеми сочетаниями: 6 + 6 вариантов вместо 36.
+     Считается только сам ряд — балка и стойки под ней; кровля к этому моменту
+     уже посчитана и её результат переиспользуется. */
   const options = [];
-  const pickRow = async (m, cfg) => {
+  const pickRow = async (m, side, beamList, postList, items) => {
+    const sl = supportLoads(m);
+    const cfg = sl[side];
     let best = null;
     for (const n of [2, 3, 4, 5, 6, 7]) {
+      const xs = spread(B, n);
+      const beamSec = await cheapest(beamList, async (s) =>
+        analyseLineBeam(m, s.id, xs, cfg.loads, cfg.label).U, target, budget);
+      if (!beamSec) continue;
+      const beam = analyseLineBeam(m, beamSec.id, xs, cfg.loads, cfg.label);
+      const postCfg = m[cfg.postsKey];
+      const postSec = await cheapest(postList, async (s) => {
+        const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+        return Math.max(...row.map((p) => p.U));
+      }, target, budget);
+      if (!postSec) continue;
       const t = clone(m);
-      t[cfg.postsKey].xs = spread(B, n);
-      const beam = await cheapest(cfg.beamList, async (s) => {
-        t[cfg.beamKey].sectionId = s.id;
-        return U_OF[cfg.beamU](analyse(t));
-      }, target, budget);
-      if (!beam) continue;
-      t[cfg.beamKey].sectionId = beam.id;
-      const post = await cheapest(cfg.postList, async (s) => {
-        t[cfg.postsKey].sectionId = s.id;
-        return U_OF[cfg.postsU](analyse(t));
-      }, target, budget);
-      if (!post) continue;
-      t[cfg.postsKey].sectionId = post.id;
+      t[cfg.postsKey].xs = xs;
+      t[cfg.postsKey].sectionId = postSec.id;
+      t[cfg.beamKey].sectionId = beamSec.id;
       const bom = billOfMaterials(analyse(t));
-      const cost = cfg.items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
-      if (!best || cost < best.cost) best = { cost, beam: beam.id, post: post.id, n };
+      const cost = items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
+      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n };
     }
     return best;
   };
 
   for (let i = 0; i < finalists.length; i++) {
     const base = finalists[i].model;
-    const outer = await pickRow(base, {
-      postsKey: 'posts', beamKey: 'purlin', beamList: purlinList, postList,
-      beamU: 'purlin', postsU: 'posts', items: ['Прогон наружный', 'Столбы наружные'],
-    });
-    const wall = await pickRow(base, {
-      postsKey: 'wallPosts', beamKey: 'wallPurlin', beamList: wallPurlinList, postList: wallPostList,
-      beamU: 'wallPurlin', postsU: 'wallPosts', items: ['Обвязка у стены', 'Столбы у стены'],
-    });
+    const outer = await pickRow(base, 'outer', purlinList, postList,
+      ['Прогон наружный', 'Столбы наружные']);
+    const wall = await pickRow(base, 'wall', wallPurlinList, wallPostList,
+      ['Обвязка у стены', 'Столбы у стены']);
     report('опоры', i + 1, finalists.length);
     if (!outer || !wall) continue;
 

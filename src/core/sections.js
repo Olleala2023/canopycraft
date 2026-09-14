@@ -156,5 +156,7 @@ export function ladder(material, opts = {}) {
   const { minH = 0, maxH = 1e9 } = opts;
   return SECTIONS
     .filter((s) => s.material === material && s.h >= minH && s.h <= maxH)
-    .sort((a, b) => a.props.A - b.props.A || a.props.Wx - b.props.Wx);
+    // при равном расходе материала (а значит и цене) впереди идёт сечение
+    // с большим моментом сопротивления: 25×100 не дороже 50×50, но вдвое сильнее
+    .sort((a, b) => a.props.A - b.props.A || b.props.Wx - a.props.Wx);
 }

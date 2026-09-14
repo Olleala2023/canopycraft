@@ -192,7 +192,7 @@ function analyseBattens(model, ctx) {
 
 /* ───────────────────── ПРОГОН И БРУС У СТЕНЫ ───────────────────── */
 
-function analyseLineBeam(model, sectionId, supports, loads, label) {
+export function analyseLineBeam(model, sectionId, supports, loads, label) {
   const sec = section(sectionId);
   const mat = propsFor(sec, model.opts);
   const { EI, GAs } = stiffness(sec, mat);
@@ -228,7 +228,7 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
  *   thrust — суммарный горизонтальный распор от ската и ветра на весь ряд, Н;
  *   alongWall — ветровая сила вдоль стены на весь ряд, Н.
  */
-function analysePostRow(model, cfg, purlin, ctx, extra) {
+export function analysePostRow(model, cfg, purlin, ctx, extra) {
   const sec = section(cfg.sectionId);
   const mat = propsFor(sec, model.opts);
   const lv = levels(model);
@@ -309,7 +309,7 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
  */
 let roofMemo = { key: null, value: null };
 
-function analyseRoof(model) {
+export function analyseRoof(model) {
   const key = JSON.stringify([model.geom, model.site, model.roofing, model.rafters, model.battens, model.opts]);
   if (roofMemo.key === key) return roofMemo.value;
 
@@ -334,19 +334,16 @@ function analyseRoof(model) {
   return roofMemo.value;
 }
 
-export function analyse(model) {
+/**
+ * Нагрузки и схемы, которые кровля передаёт опорной части.
+ *
+ * Вынесено отдельно, чтобы подбор сечений мог считать один прогон или один ряд
+ * столбов, не пересчитывая всю конструкцию: формулы распора при этом остаются
+ * в одном месте и не расходятся с полным расчётом.
+ */
+export function supportLoads(model, roof = analyseRoof(model)) {
   const { geom } = model;
-  const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
-
-  const pick = (key) => rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
-
-  const outerXs = [...model.posts.xs].sort((a, b) => a - b);
-  const purlin = analyseLineBeam(model, model.purlin.sectionId, outerXs,
-    { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') }, 'Прогон по столбам');
-
-  const wallXs = [...model.wallPosts.xs].sort((a, b) => a - b);
-  const wallPurlin = analyseLineBeam(model, model.wallPurlin.sectionId, wallXs,
-    { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') }, 'Обвязка у стены');
+  const pick = (key) => roof.rafters.map((r) => ({ x: r.x, P: r.reactions[key] }));
 
   // ── горизонтальные силы, которые должен принять стеновой ряд.
   // Сила тяжести распора не даёт: опоры вертикальные, ΣH = 0. Горизонталь — только ветер:
@@ -354,13 +351,39 @@ export function analyse(model) {
   const al = deg(geom.alpha);
   const roofArea = (geom.B * (geom.L + geom.a)) / 1e6; // м²
   const fasciaH = section(model.rafters.sectionId).h + 200;
-  const thrustRoof = wind.up * roofArea * Math.sin(al) * 1000;
-  const thrustFascia = wind.lateral * ((fasciaH * geom.B) / 1e6) * 1000;
+  const thrustRoof = roof.wind.up * roofArea * Math.sin(al) * 1000;
+  const thrustFascia = roof.wind.lateral * ((fasciaH * geom.B) / 1e6) * 1000;
   const thrust = thrustRoof + thrustFascia;
-  const alongWall = wind.lateral * ((fasciaH * geom.L) / 1e6) * 1000;
+  const alongWall = roof.wind.lateral * ((fasciaH * geom.L) / 1e6) * 1000;
 
-  const posts = analysePostRow(model, model.posts, purlin, ctx, { braced: false, thrust: 0, alongWall: 0 });
-  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { braced: true, thrust, alongWall });
+  return {
+    roof,
+    ctx: roof.ctx,
+    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall },
+    outer: {
+      beamKey: 'purlin', postsKey: 'posts', label: 'Прогон по столбам',
+      supports: [...model.posts.xs].sort((a, b) => a - b),
+      loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') },
+      extra: { braced: false, thrust: 0, alongWall: 0 },
+    },
+    wall: {
+      beamKey: 'wallPurlin', postsKey: 'wallPosts', label: 'Обвязка у стены',
+      supports: [...model.wallPosts.xs].sort((a, b) => a - b),
+      loads: { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') },
+      extra: { braced: true, thrust, alongWall },
+    },
+  };
+}
+
+export function analyse(model) {
+  const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
+  const sl = supportLoads(model, { ctx, dead, snow, wind, rafters, battens });
+
+  const purlin = analyseLineBeam(model, model.purlin.sectionId, sl.outer.supports, sl.outer.loads, sl.outer.label);
+  const wallPurlin = analyseLineBeam(model, model.wallPurlin.sectionId, sl.wall.supports, sl.wall.loads, sl.wall.label);
+
+  const posts = analysePostRow(model, model.posts, purlin, ctx, sl.outer.extra);
+  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -383,7 +406,7 @@ export function analyse(model) {
   return {
     model, ctx, dead, snow, wind,
     rafters, battens, purlin, wallPurlin, posts, wallPosts, foundation,
-    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall },
+    thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
   };
