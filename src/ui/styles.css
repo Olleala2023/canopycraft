@@ -66,9 +66,25 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
   text-transform:uppercase; color:var(--ink-3); margin-bottom:9px}
 .pane-title + .pane-title{margin-top:16px}
 
+/* ── сворачивающиеся блоки панелей ── */
+.grp{border-top:1px solid var(--rule)}
+.grp:first-child{border-top:0}
+.grp > summary{display:flex; align-items:center; gap:6px; cursor:pointer; list-style:none;
+  padding:9px 0; margin:0; user-select:none}
+.grp:first-child > summary{padding-top:0}
+.grp > summary::-webkit-details-marker{display:none}
+.grp > summary::after{content:''; margin-left:auto; width:6px; height:6px; border:solid var(--ink-3);
+  border-width:0 1.5px 1.5px 0; transform:translateY(-2px) rotate(45deg); transition:transform .12s}
+.grp[open] > summary::after{transform:translateY(1px) rotate(-135deg)}
+.grp > summary:hover{color:var(--ink-2)}
+.grp > summary:hover::after{border-color:var(--ink-2)}
+.grp-body{padding-bottom:4px}
+.grp-body > .field:last-child, .grp-body > .field:last-child .check{margin-bottom:0}
+
 .field{display:flex; flex-direction:column; gap:2px; margin-bottom:8px}
 .field label{font-size:11.5px; color:var(--ink-2); display:flex; justify-content:space-between; gap:8px}
 .field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
+.field label .btn{white-space:nowrap; flex:0 0 auto}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}
