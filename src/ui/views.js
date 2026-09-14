@@ -1,4 +1,6 @@
 /** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
+import { levels } from '../core/model.js';
+import { section } from '../core/sections.js';
 
 export const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
@@ -118,76 +120,92 @@ export function drawPlan(res, sel) {
 
 export function drawSection(res) {
   const m = res.model, g = m.geom;
-  const al = (g.alpha * Math.PI) / 180;
-  const rise = g.L * Math.tan(al);
-  const totalH = g.postHeight + rise + g.driftH + 600;
-  const pad = { l: 138, r: 44, t: 30, b: 62 };
-  const sc = Math.min(700 / (g.L + g.a + 600), 380 / totalH);
-  const vw = (g.L + g.a + 700) * sc + pad.l + pad.r;
+  const lv = levels(m);
+  const al = (g.alpha * Math.PI) / 180, tg = Math.tan(al);
+  const total = g.L + g.a;
+  const totalH = lv.houseRoof + 700;
+  const pad = { l: 142, r: 48, t: 30, b: 66 };
+  const sc = Math.min(680 / (total + 700), 380 / totalH);
+  const vw = (total + 800) * sc + pad.l + pad.r;
   const vh = totalH * sc + pad.t + pad.b;
-  const X = (x) => pad.l + (x + 400) * sc;
+  const X = (x) => pad.l + (x + 420) * sc;
   const Y = (y) => pad.t + (totalH - y) * sc; // y — высота от верха фундамента
   const s = [];
+  const sec = (id) => section(id);
   s.push(`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Разрез навеса">`);
 
-  // дом
-  s.push(`<rect x="${X(-400)}" y="${Y(g.postHeight + rise + g.driftH + 400)}" width="${400 * sc}" height="${(g.postHeight + rise + g.driftH + 400) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
-  s.push(`<text transform="translate(${X(-400) + 200 * sc},${Y(g.postHeight * 0.35)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
-  // кровля дома — на перепад выше верха навеса у стены
-  const hWall = g.postHeight + rise;         // верх навеса у стены, от верха фундамента
-  const hHouse = hWall + g.driftH;           // кровля дома
-  const xDim = X(-400) - 30;                 // размерная линия слева от дома
-  s.push(`<line x1="${xDim - 6}" y1="${Y(hHouse)}" x2="${X(0)}" y2="${Y(hHouse)}" stroke="var(--ink-2)" stroke-width="2"/>`);
-  // выносные линии к размерам
-  for (const [hv, col] of [[0, 'var(--ink-3)'], [hWall, 'var(--u-warn)']]) {
-    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(60)}" y2="${Y(hv)}" stroke="${col}" stroke-width="1" stroke-dasharray="4 3" opacity=".8" pointer-events="none"/>`);
-  }
-  s.push(dimV(Y(0), Y(hWall), xDim, `${Math.round(hWall)} до верха навеса`, 'var(--u-warn)'));
-  s.push(dimV(Y(hWall), Y(hHouse), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+  // ── дом
+  s.push(`<rect x="${X(-420)}" y="${Y(lv.houseRoof + 500)}" width="${420 * sc}" height="${(lv.houseRoof + 500) * sc}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
+  s.push(`<text transform="translate(${X(-210)},${Y(lv.postTop * 0.3)}) rotate(-90)" font-size="11" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">ДОМ</text>`);
 
-  // снеговая эпюра
-  const sn = res.snow, kPaToPx = 26 * sc * 40;
+  // ── размерная цепочка слева
+  const xDim = X(-420) - 30;
+  s.push(`<line x1="${xDim - 6}" y1="${Y(lv.houseRoof)}" x2="${X(0)}" y2="${Y(lv.houseRoof)}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  for (const hv of [0, lv.canopyTopWall]) {
+    s.push(`<line x1="${xDim - 6}" y1="${Y(hv)}" x2="${X(120)}" y2="${Y(hv)}" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="4 3" opacity=".7" pointer-events="none"/>`);
+  }
+  s.push(dimV(Y(0), Y(lv.canopyTopWall), xDim, `${Math.round(lv.canopyTopWall)} до верха навеса`, 'var(--u-warn)'));
+  s.push(dimV(Y(lv.canopyTopWall), Y(lv.houseRoof), xDim, `перепад ${g.driftH}`, 'var(--u-bad)'));
+
+  // ── снег: эпюра лежит на верхней кромке стропил
+  const kPa = 1000 * sc * 0.9;
+  const top = (x) => lv.canopyTopWall - x * tg;
   const pts = [];
-  for (let i = 0; i <= 20; i++) {
-    const y = ((g.L + g.a) * i) / 20;
-    const h = g.postHeight + rise - y * Math.tan(al);
-    pts.push(`${X(y)},${Y(h + sn.at(y) * kPaToPx)}`);
+  for (let i = 0; i <= 24; i++) {
+    const x = (total * i) / 24;
+    pts.push(`${X(x)},${Y(top(x) + res.snow.at(x) * kPa)}`);
   }
-  s.push(`<polygon points="${X(0)},${Y(g.postHeight + rise)} ${pts.join(' ')} ${X(g.L + g.a)},${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1"/>`);
-  s.push(`<text x="${X(120)}" y="${Y(g.postHeight + rise + sn.at(0) * kPaToPx) - 6}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(sn.at(0))} → ${f2(sn.at(g.L + g.a))} кПа</text>`);
+  s.push(`<polygon points="${X(0)},${Y(top(0))} ${pts.join(' ')} ${X(total)},${Y(top(total))}" fill="var(--u-bad)" fill-opacity=".18" stroke="var(--u-bad)" stroke-width="1" pointer-events="none"/>`);
+  s.push(`<text x="${X(150)}" y="${Y(top(0) + res.snow.at(0) * kPa) - 7}" font-size="10" font-family="${mono}" fill="var(--u-bad)">снег ${f2(res.snow.at(0))} → ${f2(res.snow.at(total))} кПа</text>`);
 
-  // стропило
+  // ── ветер
+  s.push('<g stroke="var(--accent-2)" fill="var(--accent-2)" pointer-events="none">');
+  for (let i = 1; i <= 4; i++) {
+    const x = (total * i) / 5, y0 = Y(top(x));
+    s.push(`<line x1="${X(x)}" y1="${y0 - 5}" x2="${X(x)}" y2="${y0 - 26}"/><polygon points="${X(x) - 3},${y0 - 24} ${X(x) + 3},${y0 - 24} ${X(x)},${y0 - 31}"/>`);
+  }
+  s.push(`</g><text x="${X(total)}" y="${Y(lv.canopyTopWall) - 36}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--accent-2)">ветровой отрыв ${f2(res.wind.up)} кПа</text>`);
+
+  // ── стропило: наклонный брус по нижней кромке от обвязки до конца свеса
+  const rH = lv.rafterH * sc;
   const rU = Math.max(...res.rafters.map((r) => r.U));
-  s.push(`<line x1="${X(0)}" y1="${Y(g.postHeight + rise)}" x2="${X(g.L + g.a)}" y2="${Y(g.postHeight + rise - (g.L + g.a) * Math.tan(al))}" stroke="${uColor(rU)}" stroke-width="${Math.max(3, res.rafters[0].sec.h * sc)}" stroke-linecap="butt"/>`);
-  // стеновой столб и сквозные шпильки
-  const wps = res.wallPosts[0].sec;
-  s.push(`<rect x="${X(0) - (wps.b * sc) / 2}" y="${Y(g.postHeight + rise)}" width="${Math.max(4, wps.b * sc)}" height="${(g.postHeight + rise) * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9"/>`);
+  const x1 = X(0), y1 = Y(lv.rafterBottomWall), x2 = X(total), y2 = Y(lv.rafterBottomWall - total * tg);
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  s.push(`<rect x="${x1}" y="${y1 - rH}" width="${len}" height="${rH}" fill="${uColor(rU)}" opacity=".92" stroke="var(--surface)" stroke-width="1"
+     transform="rotate(${(Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI} ${x1} ${y1})"/>`);
+  // подпись уклона — под стропилом, чтобы не налезала на снег
+  s.push(`<text x="${X(total * 0.45)}" y="${Y(lv.rafterBottomWall - total * 0.45 * tg) + 24}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-2)">уклон ${g.alpha}° · стропило ${sec(m.rafters.sectionId).label}</text>`);
+
+  // ── обвязка у стены и стеновой столб
+  const wpS = sec(m.wallPosts.sectionId), wbS = sec(m.wallPurlin.sectionId);
+  s.push(`<rect x="${X(0)}" y="${Y(lv.rafterBottomWall)}" width="${Math.max(3, wbS.b * sc)}" height="${lv.wallPurlinH * sc}" fill="${uColor(res.wallPurlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<rect x="${X(0)}" y="${Y(lv.wallPostTop)}" width="${Math.max(4, wpS.b * sc)}" height="${lv.wallPostTop * sc}" fill="${uColor(res.wallPosts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
   const nb = m.wallPosts.boltCount;
   for (let i = 0; i < nb; i++) {
-    const hy = ((g.postHeight + rise) * (i + 0.6)) / (nb + 0.2);
-    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(50)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
+    const hy = (lv.wallPostTop * (i + 0.6)) / (nb + 0.2);
+    s.push(`<line x1="${X(-m.wallPosts.wallThickness)}" y1="${Y(hy)}" x2="${X(90)}" y2="${Y(hy)}" stroke="var(--ink)" stroke-width="1.6"/>`);
     s.push(`<rect x="${X(-m.wallPosts.wallThickness) - 4}" y="${Y(hy) - 6}" width="5" height="12" fill="var(--ink)"/>`);
   }
-  s.push(`<text x="${X(80)}" y="${Y((g.postHeight + rise) * 0.5) - 12}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} насквозь через газоблок ${m.wallPosts.wallThickness} мм</text>`);
-  // столб
-  s.push(`<rect x="${X(g.L) - (res.posts[0].sec.b * sc) / 2}" y="${Y(g.postHeight)}" width="${Math.max(4, res.posts[0].sec.b * sc)}" height="${g.postHeight * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9"/>`);
-  // фундамент
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62)}" font-size="9.5" font-family="${mono}" fill="var(--ink-2)">${nb} × М${m.wallPosts.boltDiameter} сквозь газоблок ${m.wallPosts.wallThickness}</text>`);
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62) + 13}" font-size="9.5" font-family="${mono}" fill="var(--ink-3)">столб ${wpS.label} · ${Math.round(lv.wallPostLength)} мм</text>`);
+  s.push(`<text x="${X(130)}" y="${Y(lv.wallPostTop * 0.62) + 26}" font-size="9.5" font-family="${mono}" fill="var(--ink-3)">обвязка ${wbS.label}</text>`);
+
+  // ── наружный прогон и столб
+  const pS = sec(m.purlin.sectionId), poS = sec(m.posts.sectionId);
+  s.push(`<rect x="${X(g.L) - (pS.b * sc) / 2}" y="${Y(lv.rafterBottomOuter)}" width="${Math.max(3, pS.b * sc)}" height="${lv.purlinH * sc}" fill="${uColor(res.purlin.U)}" opacity=".95" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<rect x="${X(g.L) - (poS.b * sc) / 2}" y="${Y(lv.postTop)}" width="${Math.max(4, poS.b * sc)}" height="${lv.postTop * sc}" fill="${uColor(res.posts[0].U)}" opacity=".9" stroke="var(--surface)" stroke-width="1"/>`);
+  s.push(`<text x="${X(g.L) - 14}" y="${Y(lv.postTop * 0.3)}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">столб ${poS.label} · ${Math.round(lv.postLength)} мм</text>`);
+  s.push(`<text x="${X(g.L) - 14}" y="${Y(lv.postTop * 0.3) + 13}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">прогон ${pS.label}</text>`);
+
+  // ── фундамент
   const fs = Math.max(300, res.foundation.cubeSide);
   s.push(`<rect x="${X(g.L) - (fs * sc) / 2}" y="${Y(0)}" width="${fs * sc}" height="${fs * sc * 0.55}" fill="var(--sunk)" stroke="var(--rule-2)"/>`);
   s.push(`<text x="${X(g.L)}" y="${Y(0) + fs * sc * 0.55 + 26}" font-size="9.5" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">фундамент ≈ ${Math.round(fs)} мм</text>`);
-  // ветер
-  s.push(`<g stroke="var(--accent-2)" fill="var(--accent-2)">`);
-  for (let i = 1; i <= 4; i++) {
-    const x = X(((g.L + g.a) * i) / 5);
-    const y0 = Y(g.postHeight + rise - ((g.L + g.a) * i * Math.tan(al)) / 5);
-    s.push(`<line x1="${x}" y1="${y0 - 6}" x2="${x}" y2="${y0 - 24}"/><polygon points="${x - 3},${y0 - 22} ${x + 3},${y0 - 22} ${x},${y0 - 29}"/>`);
-  }
-  s.push(`</g><text x="${X(g.L + g.a)}" y="${Y(g.postHeight + rise) - 34}" font-size="10" text-anchor="end" font-family="${mono}" fill="var(--accent-2)">ветровой отрыв ${f2(res.wind.up)} кПа</text>`);
 
+  // ── размеры
   s.push(dimH(X(0), X(g.L), Y(0) + 34, `${g.L}`));
-  s.push(dimH(X(g.L), X(g.L + g.a), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
-  s.push(dimV(Y(0), Y(g.postHeight), X(g.L + g.a) + 28, `${g.postHeight} наружный столб`));
-  s.push(`<text x="${X(g.L / 2)}" y="${Y(g.postHeight + rise / 2) - 12}" font-size="10" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">уклон ${g.alpha}°</text>`);
+  s.push(dimH(X(g.L), X(total), Y(0) + 34, `${g.a}`, 'var(--u-warn)'));
+  s.push(dimV(Y(0), Y(lv.postTop), X(total) + 30, `${Math.round(lv.postTop)} наружный столб`));
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
 }

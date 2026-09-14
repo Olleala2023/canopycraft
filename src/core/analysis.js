@@ -9,7 +9,7 @@ import { section } from './sections.js';
 import { propsFor } from './materials.js';
 import { ROOFING, snowProfile, windPressure, GAMMA_F } from './loads.js';
 import { solveBeam, deflectionSpans } from './beam.js';
-import { tributaries } from './model.js';
+import { tributaries, levels } from './model.js';
 import {
   timberBending, timberShear, timberCombined, timberLateral, timberBearing,
   steelBending, steelShear, steelStability, steelBeamColumn, steelSlenderness,
@@ -280,7 +280,7 @@ function analyseRoof(model) {
   const { geom } = model;
   const dead = roofDead(model);
   const snow = snowProfile(model.site, geom.alpha);
-  const zTop = geom.postHeight + geom.L * Math.tan(deg(geom.alpha));
+  const zTop = levels(model).canopyTopWall;
   const wind = windPressure(model.site, zTop);
   const ctx = { dead, snow, wind };
 
@@ -401,8 +401,9 @@ export function billOfMaterials(result) {
   add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
   add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);
   add('Прогон наружный', section(m.purlin.sectionId), m.geom.B, 1);
-  add('Столбы наружные', section(m.posts.sectionId), m.geom.postHeight + 300, m.posts.xs.length);
-  add('Столбы у стены', section(m.wallPosts.sectionId), m.geom.postHeight + 300, m.wallPosts.xs.length);
+  const lv = levels(m);
+  add('Столбы наружные', section(m.posts.sectionId), lv.postLength, m.posts.xs.length);
+  add('Столбы у стены', section(m.wallPosts.sectionId), lv.wallPostLength, m.wallPosts.xs.length);
 
   // кровля
   const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату

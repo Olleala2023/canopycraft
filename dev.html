@@ -36,6 +36,12 @@
     <aside class="pane" id="params"></aside>
     <section class="pane stage">
       <div class="canvas" id="canvas"></div>
+      <div class="zoombar">
+        <button class="btn" id="zoom-out" title="Отдалить" aria-label="Отдалить">−</button>
+        <button class="btn" id="zoom-in" title="Приблизить" aria-label="Приблизить">+</button>
+        <button class="btn" id="zoom-reset" title="Вписать целиком">⌂</button>
+        <span class="zoomval mono" id="zoom-val">100 %</span>
+      </div>
       <div class="legend">
         <span><i style="background:var(--u-low)"></i>U &lt; 0,5 запас</span>
         <span><i style="background:var(--u-ok)"></i>0,5–0,85 норма</span>
