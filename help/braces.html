@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Раскрепление столбов · CanopyCraft</title>
+<meta name="description" content="Что такое связь, чем она отличается от жёсткого узла и во что обходится её отсутствие: три случая μ со схемами и числами.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="help.css">
+<script>
+  // тема выбирается в калькуляторе и хранится на том же домене
+  try {
+    var t = localStorage.getItem('canopycraft.theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* приватный режим */ }
+</script>
+</head>
+<body>
+<div class="sheet">
+<div class="inner">
+
+  <nav class="crumbs">
+    <a href="../index.html">← Калькулятор</a>
+    <span>·</span>
+    <a href="index.html">Справка</a>
+    <span>·</span>
+    <span>Раскрепление столбов</span>
+  </nav>
+
+  <header class="head">
+    <h1>Раскрепление столбов</h1>
+    <p class="lead">
+      Что такое связь, чем она отличается от жёсткого узла и во что обходится её отсутствие.
+      Все числа — для столба 100×100×3 высотой 2500 мм под навесом 6×4 м, снег IV район.
+    </p>
+  </header>
+
+  <section class="stack">
+    <h2>Столб держит не нагрузка, а длина</h2>
+    <p style="max-width:62ch; color:var(--ink-2)">
+      На столб навеса приходит около 6 кН — вес кровли со снегом. Труба 100×100×3 выдерживает
+      104 кН даже в самом невыгодном случае. Запас двадцатикратный, и прочность здесь ни при чём.
+      Сечение столба определяет <b>гибкость</b> — норма ограничивает саму «длинноту» стойки,
+      потому что длинная тонкая труба теряет устойчивость задолго до того, как металл дойдёт
+      до предела.
+    </p>
+    <div class="key">
+      <div><b>6,1 кН</b><span>приходит на столб</span></div>
+      <div><b>104 кН</b><span>он способен нести</span></div>
+      <div><b>U = 0,06</b><span>загрузка по прочности</span></div>
+      <div><b>U = 0,85</b><span>загрузка по гибкости</span></div>
+    </div>
+    <div class="formula">l_ef = μ · H &nbsp;&nbsp;→&nbsp;&nbsp; λ = l_ef / i &nbsp;&nbsp;→&nbsp;&nbsp; λ ≤ 180 − 60·α &nbsp;&nbsp;(СП 16, табл. 32)</div>
+    <p style="max-width:62ch; color:var(--ink-2)">
+      μ — во сколько раз расчётная длина больше самого столба. Это единственное место, где
+      закрепление концов входит в расчёт, и оно решает всё: <i>i</i> у трубы 100×100×3 — 3,94 см,
+      и при μ = 2 гибкость λ = 127 при пределе 150, а при μ = 1 — всего 63.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section class="stack">
+    <h2>Три случая закрепления</h2>
+    <p style="max-width:62ch; color:var(--ink-2)">
+      Пунктиром показано, как столб выгибается, теряя устойчивость. Чем длиннее эта дуга,
+      тем меньше нагрузка, при которой она возникает.
+    </p>
+
+    <div class="schemes">
+
+      <!-- μ = 2 -->
+      <div class="scheme">
+        <figure>
+          <svg viewBox="0 0 200 250" role="img" aria-label="Столб защемлён в фундаменте, верх свободен: выгибается как консоль">
+            <defs>
+              <pattern id="hA" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="6" stroke="var(--ink-3)" stroke-width="1"/>
+              </pattern>
+              <marker id="arA" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill="var(--u-bad)"/>
+              </marker>
+            </defs>
+            <!-- грунт -->
+            <line x1="15" y1="212" x2="185" y2="212" stroke="var(--ink)" stroke-width="1.5"/>
+            <rect x="15" y="212" width="170" height="8" fill="url(#hA)" opacity=".7" stroke="none"/>
+            <!-- фундамент: заделка -->
+            <rect x="74" y="190" width="52" height="22" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.2"/>
+            <!-- столб -->
+            <rect x="94" y="62" width="12" height="128" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.5"/>
+            <!-- прогон -->
+            <rect x="36" y="48" width="128" height="14" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+            <!-- выгиб -->
+            <path d="M100,190 C100,150 112,100 138,56" fill="none" stroke="var(--u-bad)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <!-- стрелка сноса -->
+            <line x1="112" y1="38" x2="152" y2="38" stroke="var(--u-bad)" stroke-width="1.4" marker-end="url(#arA)"/>
+            <text x="112" y="30" font-size="9.5" fill="var(--u-bad)">верх едет</text>
+            <!-- размер H -->
+            <line x1="26" y1="62" x2="26" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="62" x2="30" y2="62" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="190" x2="30" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <text x="32" y="130" font-size="10" fill="var(--ink-3)">H</text>
+            <text x="100" y="238" font-size="10.5" fill="var(--ink-2)" text-anchor="middle">l_ef = 2·H = 5000 мм</text>
+          </svg>
+        </figure>
+        <div class="cap">
+          <div class="mu">μ = 2,0<small>низ защемлён, верх свободен</small></div>
+          <p>Ничто не мешает верхушке уехать вбок вместе с прогоном. Дуга выгиба вдвое длиннее
+             самого столба. Это состояние по умолчанию для любого ряда столбов без связей.</p>
+        </div>
+      </div>
+
+      <!-- μ = 1 -->
+      <div class="scheme">
+        <figure>
+          <svg viewBox="0 0 200 250" role="img" aria-label="Верх удержан связью, низ шарнир: выгибается дугой во всю высоту">
+            <defs>
+              <pattern id="hB" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="6" stroke="var(--ink-3)" stroke-width="1"/>
+              </pattern>
+            </defs>
+            <line x1="15" y1="212" x2="185" y2="212" stroke="var(--ink)" stroke-width="1.5"/>
+            <rect x="15" y="212" width="170" height="8" fill="url(#hB)" opacity=".7" stroke="none"/>
+            <!-- шарнирная база -->
+            <path d="M100,190 L88,212 L112,212 z" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.2"/>
+            <rect x="94" y="62" width="12" height="128" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.5"/>
+            <rect x="36" y="48" width="128" height="14" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+            <!-- связь -->
+            <line x1="100" y1="66" x2="170" y2="205" stroke="var(--accent-2)" stroke-width="2.4"/>
+            <rect x="158" y="205" width="26" height="7" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1"/>
+            <circle cx="100" cy="66" r="3" fill="var(--accent-2)"/>
+            <text x="124" y="112" font-size="9.5" fill="var(--accent-2)">связь</text>
+            <!-- выгиб -->
+            <path d="M100,190 C128,158 128,96 100,62" fill="none" stroke="var(--u-warn)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <line x1="26" y1="62" x2="26" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="62" x2="30" y2="62" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="190" x2="30" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <text x="32" y="130" font-size="10" fill="var(--ink-3)">H</text>
+            <text x="100" y="238" font-size="10.5" fill="var(--ink-2)" text-anchor="middle">l_ef = 1·H = 2500 мм</text>
+          </svg>
+        </figure>
+        <div class="cap">
+          <div class="mu">μ = 1,0<small>верх удержан от смещения</small></div>
+          <p>Связь не даёт верху уехать вбок. Столб выгибается дугой во всю высоту — вдвое
+             короче, чем в первом случае. Низ при этом может быть хоть шарниром.</p>
+        </div>
+      </div>
+
+      <!-- μ = 0,7 -->
+      <div class="scheme">
+        <figure>
+          <svg viewBox="0 0 200 250" role="img" aria-label="Низ защемлён и верх удержан: короткая дуга с перегибом">
+            <defs>
+              <pattern id="hC" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="6" stroke="var(--ink-3)" stroke-width="1"/>
+              </pattern>
+            </defs>
+            <line x1="15" y1="212" x2="185" y2="212" stroke="var(--ink)" stroke-width="1.5"/>
+            <rect x="15" y="212" width="170" height="8" fill="url(#hC)" opacity=".7" stroke="none"/>
+            <rect x="74" y="190" width="52" height="22" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.2"/>
+            <rect x="94" y="62" width="12" height="128" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.5"/>
+            <rect x="36" y="48" width="128" height="14" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+            <line x1="100" y1="66" x2="170" y2="205" stroke="var(--accent-2)" stroke-width="2.4"/>
+            <rect x="158" y="205" width="26" height="7" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1"/>
+            <circle cx="100" cy="66" r="3" fill="var(--accent-2)"/>
+            <text x="124" y="112" font-size="9.5" fill="var(--accent-2)">связь</text>
+            <path d="M100,190 C100,164 122,140 112,110 C104,86 100,76 100,62" fill="none" stroke="var(--u-ok)" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <line x1="26" y1="62" x2="26" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="62" x2="30" y2="62" stroke="var(--ink-3)" stroke-width="1"/>
+            <line x1="22" y1="190" x2="30" y2="190" stroke="var(--ink-3)" stroke-width="1"/>
+            <text x="32" y="130" font-size="10" fill="var(--ink-3)">H</text>
+            <text x="100" y="238" font-size="10.5" fill="var(--ink-2)" text-anchor="middle">l_ef = 0,7·H = 1750 мм</text>
+          </svg>
+        </figure>
+        <div class="cap">
+          <div class="mu">μ = 0,7<small>защемление внизу + связь вверху</small></div>
+          <p>Оба конца держат. Дуга ещё короче, но выигрыш против 1,0 уже невелик: гибкость
+             к этому моменту перестаёт определять сечение.</p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="tbl">
+      <table>
+        <thead>
+          <tr><th>μ</th><th>l_ef</th><th>λ</th><th>φ</th><th>Что определяет сечение</th><th>Самое лёгкое проходящее</th><th>На 3 столба</th></tr>
+        </thead>
+        <tbody>
+          <tr class="hi">
+            <td class="n">2,0</td><td class="n">5000 мм</td><td class="n">127</td><td class="n">0,38</td>
+            <td>гибкость <span class="pill warn">U 0,85</span></td><td class="n">100×100×3</td><td class="n">100 кг</td>
+          </tr>
+          <tr>
+            <td class="n">1,0</td><td class="n">2500 мм</td><td class="n">63</td><td class="n">0,80</td>
+            <td>местная устойчивость <span class="pill ok">U 0,56</span></td><td class="n">60×60×3</td><td class="n">58 кг</td>
+          </tr>
+          <tr>
+            <td class="n">0,7</td><td class="n">1750 мм</td><td class="n">44</td><td class="n">0,89</td>
+            <td>местная устойчивость <span class="pill ok">U 0,62</span></td><td class="n">60×60×3</td><td class="n">58 кг</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13px; color:var(--ink-3)">
+      Разница между первой и второй строкой — 42 кг металла на три столба. Это и есть цена
+      отсутствия связей: не за снег, а за то, что верх ряда ничем не держится.
+    </p>
+  </section>
+
+  <hr class="rule">
+
+  <section class="stack">
+    <h2>Что считается связью</h2>
+    <p style="max-width:62ch; color:var(--ink-2)">
+      Связь — это элемент, который не даёт верху столба сместиться вбок. Не «усилить узел»,
+      а именно <b>удержать точку от перемещения</b>. Годится любой из трёх способов.
+    </p>
+
+    <div class="braces">
+
+      <div class="brace">
+        <figure>
+          <svg viewBox="0 0 320 180" role="img" aria-label="Крест из связей между двумя соседними столбами">
+            <line x1="10" y1="152" x2="310" y2="152" stroke="var(--ink)" stroke-width="1.4"/>
+            <rect x="20" y="28" width="280" height="12" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+            <rect x="64" y="40" width="11" height="112" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.4"/>
+            <rect x="244" y="40" width="11" height="112" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.4"/>
+            <line x1="70" y1="44" x2="250" y2="148" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <line x1="250" y1="44" x2="70" y2="148" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <text x="160" y="172" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">уголок 50×5 или труба 40×20</text>
+          </svg>
+        </figure>
+        <h3>Крест между столбами</h3>
+        <p>Две диагонали в одной ячейке ряда. Работают на растяжение по очереди — ветер слева,
+           ветер справа. Самый надёжный и самый дешёвый способ.</p>
+      </div>
+
+      <div class="brace">
+        <figure>
+          <svg viewBox="0 0 320 180" role="img" aria-label="Подкосы от верха столба вниз к фундаментам">
+            <line x1="10" y1="152" x2="310" y2="152" stroke="var(--ink)" stroke-width="1.4"/>
+            <rect x="20" y="28" width="280" height="12" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+            <rect x="154" y="40" width="11" height="112" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.4"/>
+            <rect x="58" y="142" width="38" height="14" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.1"/>
+            <rect x="224" y="142" width="38" height="14" fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.1"/>
+            <line x1="159" y1="46" x2="77" y2="142" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <line x1="160" y1="46" x2="243" y2="142" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <text x="160" y="172" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">упор в отдельный бетонный блок</text>
+          </svg>
+        </figure>
+        <h3>Подкосы до земли</h3>
+        <p>От верха столба вниз в обе стороны, с упором в свой фундамент. Важно именно
+           «до земли»: подкос, упёртый в тот же столб, ничего не держит.</p>
+      </div>
+
+      <div class="brace">
+        <figure>
+          <svg viewBox="0 0 320 180" role="img" aria-label="План: жёсткий диск кровли передаёт сдвиг на стеновой ряд">
+            <rect x="18" y="22" width="284" height="12" fill="url(#wall)" stroke="var(--ink)" stroke-width="1.4"/>
+            <defs>
+              <pattern id="wall" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+                <line x1="0" y1="0" x2="0" y2="7" stroke="var(--ink-3)" stroke-width="1"/>
+              </pattern>
+            </defs>
+            <text x="160" y="16" font-size="10" fill="var(--ink-3)" text-anchor="middle">стена дома</text>
+            <g stroke="var(--ink-3)" stroke-width="1">
+              <line x1="48" y1="34" x2="48" y2="140"/><line x1="104" y1="34" x2="104" y2="140"/>
+              <line x1="160" y1="34" x2="160" y2="140"/><line x1="216" y1="34" x2="216" y2="140"/>
+              <line x1="272" y1="34" x2="272" y2="140"/>
+            </g>
+            <line x1="18" y1="140" x2="302" y2="140" stroke="var(--ink)" stroke-width="2"/>
+            <line x1="48" y1="140" x2="160" y2="34" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <line x1="272" y1="140" x2="160" y2="34" stroke="var(--accent-2)" stroke-width="2.6"/>
+            <text x="160" y="172" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">связи в плоскости кровли — вид сверху</text>
+          </svg>
+        </figure>
+        <h3>Диск кровли</h3>
+        <p>Диагонали в плоскости кровли цепляют наружный ряд за стеновой, а тот уже притянут
+           к дому шпильками. Держит только поперёк ряда — вдоль стены не помогает.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="callout">
+    <h3>Что связью не является</h3>
+    <div class="braces" style="grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr)); align-items:center">
+      <figure style="margin:0; border:1px solid var(--rule-2); background:var(--surface-2); padding:8px">
+        <svg viewBox="0 0 320 180" role="img" aria-label="Подкос между столбом и прогоном: рама всё равно заваливается вбок">
+          <line x1="10" y1="152" x2="310" y2="152" stroke="var(--ink)" stroke-width="1.4"/>
+          <rect x="20" y="28" width="280" height="12" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="1.2"/>
+          <rect x="64" y="40" width="11" height="112" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.4"/>
+          <rect x="244" y="40" width="11" height="112" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.4"/>
+          <!-- косынки -->
+          <line x1="70" y1="76" x2="106" y2="40" stroke="var(--ink-2)" stroke-width="2.2"/>
+          <line x1="249" y1="76" x2="213" y2="40" stroke="var(--ink-2)" stroke-width="2.2"/>
+          <!-- заваленное положение -->
+          <g stroke="var(--u-bad)" stroke-width="1.5" stroke-dasharray="5 4" fill="none">
+            <line x1="70" y1="152" x2="100" y2="40"/>
+            <line x1="250" y1="152" x2="280" y2="40"/>
+            <line x1="50" y1="34" x2="310" y2="34"/>
+          </g>
+          <text x="160" y="172" font-size="10.5" fill="var(--u-bad)" text-anchor="middle">узлы жёсткие, а рама всё равно уезжает</text>
+        </svg>
+      </figure>
+      <div class="stack">
+        <p><b>Подкос (косынка) между столбом и прогоном.</b> Он делает узел жёстким, но не мешает
+           всей раме качнуться вбок: столбы просто наклоняются, сохраняя прямые углы в узлах.
+           Такая рама называется смещаемой, и μ для неё остаётся около 2,0 — иногда чуть меньше,
+           но никак не 1,0.</p>
+        <p>Косынки полезны по другой причине: они разгружают узел и уменьшают момент в столбе.
+           Но право поставить в калькуляторе 1,0 они не дают.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <section class="callout ok">
+    <h3>Что из этого следует для навеса у дома</h3>
+    <p><b>Поперёк ряда, к дому и от дома.</b> Верх наружных столбов связан со стеновым рядом
+       через стропила, а стеновой ряд притянут к газоблоку сквозными шпильками. Если в плоскости
+       кровли есть диагональные связи — можно ставить 1,0. Если кровля держится только на
+       обрешётке и саморезах, честнее оставить 2,0.</p>
+    <p><b>Вдоль ряда, вдоль стены.</b> Здесь навес обычно не держит ничто: пять столбов в ряд
+       и прогон поверху — конструкция свободно качается вдоль стены. Это 2,0, пока не появится
+       крест или подкосы хотя бы в одной ячейке ряда.</p>
+    <p><b>Стеновой ряд — 1,0 в обеих плоскостях.</b> Столбы притянуты к стене шпильками в трёх
+       точках по высоте: уехать вбок они не могут никуда.</p>
+    <p style="color:var(--ink-3); font-size:13.5px">И отдельно: μ = 2,0 предполагает настоящую
+       заделку внизу — заглублённый столб или анкерный узел на достаточном фундаменте. Если столб
+       просто стоит на пятке на тонкой подливке, защемления нет, а со свободным верхом это уже не
+       расчётная схема, а механизм. Что-то одно — заделка внизу или связи вверху — должно быть
+       обязательно.</p>
+  </section>
+
+  <div class="foot">
+    <span>Расчёт по СП 16.13330.2017 (п. 7.1.3, табл. 9 и 32) и СП 20.13330.2016. Числа получены
+      в CanopyCraft для навеса 6000×4000 мм, высота столба 2500 мм, снеговой район IV, ветровой II.</span>
+    <span class="mono">поля «μ поперёк ряда» и «μ вдоль ряда» — блок «Элементы» в левой панели</span>
+    <span><a href="index.html">Вся справка</a> · <a href="../index.html">вернуться к расчёту</a></span>
+  </div>
+
+</div>
+</div>
+</body>
+</html>

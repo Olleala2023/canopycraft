@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Справка · CanopyCraft</title>
+<meta name="description" content="Разборы того, что стоит за полями калькулятора навеса: снеговой мешок, раскрепление столбов, границы применимости.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="help.css">
+<script>
+  // тема выбирается в калькуляторе и хранится на том же домене
+  try {
+    var t = localStorage.getItem('canopycraft.theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) { /* приватный режим */ }
+</script>
+</head>
+<body>
+<div class="sheet">
+<div class="inner">
+
+  <nav class="crumbs">
+    <a href="../index.html">← Калькулятор</a>
+    <span>·</span>
+    <span>Справка</span>
+  </nav>
+
+  <header class="head">
+    <h1>Справка</h1>
+    <p class="lead">Разборы того, что стоит за полями калькулятора: откуда берутся числа,
+      какие решения принимает программа за вас и где она может ошибиться.</p>
+  </header>
+
+  <div class="cards">
+    <a class="card" href="braces.html">
+      <span class="t">Раскрепление столбов</span>
+      <span class="d">Что такое связь, чем она отличается от жёсткого узла и во что обходится
+        её отсутствие. Три случая μ со схемами выгиба и числами.</span>
+      <span class="where">поля «μ поперёк ряда» и «μ вдоль ряда»</span>
+    </a>
+    <a class="card" href="snow.html">
+      <span class="t">Снеговой мешок у стены</span>
+      <span class="d">Почему у стены дома снега вдвое больше, чем в поле, как считается зона
+        мешка и почему кровлю приходится проверять в двух вариантах загружения.</span>
+      <span class="where">блок «Площадка» · перепад до кровли дома</span>
+    </a>
+    <a class="card" href="limits.html">
+      <span class="t">Что считается, а что нет</span>
+      <span class="d">Границы применимости: какие расчёты внутри, какие приняты упрощения
+        и что придётся считать отдельно.</span>
+      <span class="where">до того, как резать металл</span>
+    </a>
+  </div>
+
+  <hr class="rule">
+
+  <section class="stack">
+    <h2>Нормы, по которым считает калькулятор</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Документ</th><th>Что из него берётся</th></tr></thead>
+        <tbody>
+          <tr><td class="n">СП 20.13330.2016</td><td>снеговая и ветровая нагрузка, коэффициенты надёжности, снеговой мешок при перепаде высот (прил. Б, схема Б.8)</td></tr>
+          <tr><td class="n">СП 64.13330.2017</td><td>расчёт деревянных элементов: изгиб, скалывание, устойчивость плоской формы, прогибы</td></tr>
+          <tr><td class="n">СП 16.13330.2017</td><td>расчёт стальных: устойчивость сжатых стержней, сжатие с изгибом, предельная гибкость, местная устойчивость стенки</td></tr>
+          <tr><td class="n">СП 15.13330.2020</td><td>смятие газоблока под шайбой сквозной шпильки</td></tr>
+          <tr><td class="n">ГОСТ 30245-2003</td><td>сортамент профильных труб</td></tr>
+          <tr><td class="n">ГОСТ 24454-80</td><td>сортамент пиломатериала</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>Инженерная оценка для частного строительства. Не заменяет проект, прошедший экспертизу.</span>
+    <span><a href="../index.html">Вернуться к расчёту</a></span>
+  </div>
+
+</div>
+</div>
+
+</body>
+</html>

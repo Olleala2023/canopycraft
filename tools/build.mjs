@@ -60,7 +60,12 @@ if (clashes.length) {
 }
 
 const bundle = pieces.map(({ f, src }) => `/* ── ${f} ── */\n${src}`).join('\n');
-const css = readFileSync(join(root, 'src/ui/styles.css'), 'utf8');
+const tokens = readFileSync(join(root, 'src/ui/tokens.css'), 'utf8');
+const css = tokens + readFileSync(join(root, 'src/ui/styles.css'), 'utf8');
+
+// страницы справки — обычные статические файлы, но палитру берут из тех же токенов
+const helpCss = tokens + readFileSync(join(root, 'src/ui/help.css'), 'utf8');
+writeFileSync(join(root, 'help/help.css'), helpCss);
 let html = readFileSync(join(root, 'dev.html'), 'utf8');
 
 html = html
@@ -76,4 +81,4 @@ const inner = html
   .replace(/<\/head>\s*<body>/, '')
   .replace(/<\/body>\s*<\/html>\s*$/, '');
 writeFileSync(join(root, 'docs/app.artifact.html'), inner);
-console.log(`index.html собран: ${(html.length / 1024).toFixed(0)} КБ; docs/app.artifact.html: ${(inner.length / 1024).toFixed(0)} КБ`);
+console.log(`index.html собран: ${(html.length / 1024).toFixed(0)} КБ; docs/app.artifact.html: ${(inner.length / 1024).toFixed(0)} КБ; help/help.css: ${(helpCss.length / 1024).toFixed(0)} КБ`);
