@@ -31,20 +31,23 @@
       <button id="tab-section" aria-pressed="false">Разрез</button>
       <button id="tab-diagrams" aria-pressed="false">Эпюры</button>
     </div>
-    <span class="grow"></span>
-    <span class="verdict-pill" id="verdict-pill">—</span>
-    <button class="verdict-pill cost-pill" id="cost-pill" hidden title="Показать спецификацию и смету"></button>
-    <button class="btn" id="btn-pick-all">Подобрать всё</button>
-    <button class="btn" id="btn-cost-search">Подобрать по цене</button>
-    <a class="btn" href="help/index.html" target="_blank" rel="noopener" id="btn-help">Справка</a>
-    <button class="btn" id="btn-report">Отчёт</button>
-    <button class="btn" id="btn-link">Ссылка на расчёт</button>
-    <button class="btn icon" id="btn-theme" aria-label="Тема оформления">◐</button>
-    <span class="audio">
-      <button class="btn icon" id="btn-audio" aria-label="Фоновая музыка">♪</button>
-      <input type="range" class="vol" id="audio-vol" min="0" max="100" step="5" hidden aria-label="Громкость музыки">
-    </span>
-    <button class="btn" id="btn-reset">Сбросить</button>
+    <div class="status">
+      <span class="verdict-pill" id="verdict-pill">—</span>
+      <button class="verdict-pill cost-pill" id="cost-pill" hidden title="Показать спецификацию и смету"></button>
+    </div>
+    <div class="tools">
+      <button class="btn" id="btn-pick-all">Подобрать всё</button>
+      <button class="btn" id="btn-cost-search">Подобрать по цене</button>
+      <a class="btn" href="help/index.html" target="_blank" rel="noopener" id="btn-help">Справка</a>
+      <button class="btn" id="btn-report">Отчёт</button>
+      <button class="btn" id="btn-link" title="Скопировать ссылку на этот расчёт">Ссылка</button>
+      <button class="btn" id="btn-reset">Сбросить</button>
+      <span class="audio">
+        <button class="btn icon" id="btn-theme" aria-label="Тема оформления">◐</button>
+        <button class="btn icon" id="btn-audio" aria-label="Фоновая музыка">♪</button>
+        <input type="range" class="vol" id="audio-vol" min="0" max="100" step="5" hidden aria-label="Громкость музыки">
+      </span>
+    </div>
   </div>
 
   <div class="panes">
