@@ -44,14 +44,19 @@ export function defaultModel() {
     posts: {
       xs: Array.from({ length: nPosts }, (_, i) => (B * i) / (nPosts - 1)),
       sectionId: 's100x100x3',
-      mu: 2.0,
+      // коэффициенты расчётной длины в двух плоскостях: поперёк ряда — к дому и
+      // от дома, вдоль ряда — вдоль стены. Условия закрепления там разные, и
+      // считать надо по каждой отдельно
+      muX: 2.0,
+      muY: 2.0,
     },
     purlin: { sectionId: 's80x140x4' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
       xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
       sectionId: 's60x60x3',
-      mu: 1.0,            // раскреплён стеной по всей высоте
+      muX: 1.0,           // раскреплён стеной по всей высоте — в обеих плоскостях
+      muY: 1.0,
       boltCount: 3,       // шпилек на столб
       boltDiameter: 16,   // М16
       boltGrade: '5.8',

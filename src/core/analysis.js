@@ -233,7 +233,12 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
   const mat = propsFor(sec, model.opts);
   const lv = levels(model);
   const H = extra.braced ? lv.wallPostTop : lv.postTop;
-  const lef = cfg.mu * H;
+  // расчётные длины в двух плоскостях: поперёк ряда (x — к дому и от дома,
+  // в этой же плоскости действуют ветровой распор и эксцентриситет) и вдоль
+  // ряда (y — вдоль стены). Закрепления там разные, поэтому и μ разные
+  const lefX = cfg.muX * H;
+  const lefY = cfg.muY * H;
+  const lef = Math.max(lefX, lefY);
   const fascia = sec.h + 200;
   const n = purlin.reactions.length;
   const EI = mat.E * sec.props.Ix;
@@ -276,11 +281,19 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
     let M = 0;
     for (let k = 0; k < diagram.M.length; k++) if (Math.abs(diagram.M[k]) > Math.abs(M)) M = diagram.M[k];
 
-    const stab = steelStability(N, sec.props, mat, lef, 'y');
+    // устойчивость проверяется в каждой плоскости своей расчётной длиной
+    const stabX = steelStability(N, sec.props, mat, lefX, 'x');
+    const stabY = steelStability(N, sec.props, mat, lefY, 'y');
+    stabX.name = 'Устойчивость поперёк ряда';
+    stabY.name = 'Устойчивость вдоль ряда';
+    const stab = stabX.U >= stabY.U ? stabX : stabY;
     const checks = [
-      stab,
-      steelBeamColumn(N, M, sec.props, mat, lef, 'x'),
-      steelSlenderness(stab.lambda, stab.U),
+      stabX,
+      stabY,
+      steelBeamColumn(N, M, sec.props, mat, lefX, 'x'),
+      // гибкость и местная устойчивость — по той плоскости, которая правит
+      // общей устойчивостью: там наибольшая λ и наименьший φ
+      steelSlenderness(Math.max(stabX.lambda, stabY.lambda), stab.U),
       steelLocalBuckling(sec, mat, stab.lb),
     ];
     if (bolts) {
@@ -294,7 +307,7 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
     }
 
     return {
-      x: r.x, N, M, Nup, Hpost, sec, mat, lef, H, bolts, diagram,
+      x: r.x, N, M, Nup, Hpost, sec, mat, lef, lefX, lefY, H, bolts, diagram,
       braced: !!extra.braced, ...worstOf(checks),
     };
   });
