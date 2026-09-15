@@ -1,33 +1,5 @@
-:root{
-  color-scheme:light;
-  --paper:#EDF0F3; --surface:#FFFFFF; --surface-2:#F5F8FA; --sunk:#E4E9EE;
-  --ink:#111820; --ink-2:#48545F; --ink-3:#7C8894;
-  --rule:#D2DAE1; --rule-2:#BCC7D0;
-  --accent:#12405E; --accent-2:#1D6791; --accent-soft:#E1EBF2;
-  --u-low:#3D7EA6; --u-ok:#3E8E59; --u-warn:#C88A11; --u-bad:#BC382F;
-  --grid:#CBD6DF;
-}
-:root[data-theme="light"]{color-scheme:light}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    color-scheme:dark;
-    --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
-    --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
-    --rule:#2A333C; --rule-2:#3A4650;
-    --accent:#8CBEDE; --accent-2:#6FA9CD; --accent-soft:#17252F;
-    --u-low:#6DA8CB; --u-ok:#5CB37A; --u-warn:#E0AA3D; --u-bad:#E06B60;
-    --grid:#233039;
-  }
-}
-:root[data-theme="dark"]{
-  color-scheme:dark;
-  --paper:#0F1418; --surface:#161C22; --surface-2:#1C242B; --sunk:#0B0F13;
-  --ink:#E7ECF1; --ink-2:#A7B3BE; --ink-3:#74808B;
-  --rule:#2A333C; --rule-2:#3A4650;
-  --accent:#8CBEDE; --accent-2:#6FA9CD; --accent-soft:#17252F;
-  --u-low:#6DA8CB; --u-ok:#5CB37A; --u-warn:#E0AA3D; --u-bad:#E06B60;
-  --grid:#233039;
-}
+/* Палитра вынесена в tokens.css — сборка склеивает их в этом порядке. */
+
 *{box-sizing:border-box}
 body{
   background:var(--paper); color:var(--ink); margin:0;
@@ -93,6 +65,14 @@ input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color
 .field label{font-size:11.5px; color:var(--ink-2); display:flex; justify-content:space-between; gap:8px}
 .field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
 .field label .btn{white-space:nowrap; flex:0 0 auto}
+.field .note{display:block; margin-top:3px; font-size:10.5px; line-height:1.4; color:var(--ink-3)}
+a.help{
+  flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px;
+  border:1px solid var(--rule-2); border-radius:50%; color:var(--ink-3); text-decoration:none;
+  font-size:10px; line-height:1; font-family:"IBM Plex Mono",ui-monospace,monospace;
+}
+a.help:hover{border-color:var(--accent-2); color:var(--accent-2)}
+.check a.help{margin-left:5px; vertical-align:middle}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}

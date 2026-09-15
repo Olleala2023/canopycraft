@@ -72,7 +72,7 @@ const CONTROLS = [
   { k: 'geom.a', label: 'Свес за столбы', type: 'range', min: 0, max: 2000, step: 50, unit: 'мм' },
   { k: 'geom.alpha', label: 'Уклон', type: 'range', min: 3, max: 30, step: 1, unit: '°' },
   { k: 'geom.postHeight', label: 'Высота столба', type: 'range', min: 1800, max: 4000, step: 50, unit: 'мм' },
-  { k: 'geom.driftH', label: 'Перепад до кровли дома', type: 'range', min: 0, max: 4000, step: 100, unit: 'мм' },
+  { k: 'geom.driftH', label: 'Перепад до кровли дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'range', min: 0, max: 4000, step: 100, unit: 'мм' },
 
   { group: 'Элементы', open: true },
   { k: '#rafterCount', label: 'Стропил', type: 'range', min: 3, max: 25, step: 1, unit: 'шт', actions: [
@@ -90,19 +90,30 @@ const CONTROLS = [
   { k: 'purlin.sectionId', label: 'Прогон наружный', type: 'select', options: anyOpts, pick: 'purlin' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
-  { k: 'posts.mu', label: 'μ наружного столба', type: 'select', options: () => [
-      { id: '2', label: '2,0 — защемлён внизу, свободен вверху' },
-      { id: '1', label: '1,0 — есть связи в обе стороны' },
-      { id: '0.7', label: '0,7 — защемление + шарнир' }], numeric: true },
+  { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
+      { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
+      { id: '1', label: '1,0 — верх удержан связями от смещения' },
+      { id: '0.7', label: '0,7 — верх удержан + низ защемлён' }],
+    note: 'μ — во сколько раз расчётная длина больше высоты столба: l_ef = μ·H. От неё гибкость λ = l_ef/i, а от λ — несущая способность.' },
+  { k: 'posts.muY', label: 'μ вдоль ряда (вдоль стены)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
+      { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
+      { id: '1', label: '1,0 — верх удержан связями от смещения' },
+      { id: '0.7', label: '0,7 — верх удержан + низ защемлён' }],
+    note: 'Связь — это то, что не даёт верху столба уехать вбок: раскос, крест между столбами, жёсткая на сдвиг кровля. Подкос от столба к прогону делает узел жёстким, но раму не держит — права на 1,0 он не даёт.' },
 
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
   { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
-  { k: 'wallPosts.mu', label: 'μ стенового столба', type: 'select', numeric: true, options: () => [
+  { k: 'wallPosts.muX', label: 'μ поперёк ряда (от стены)', type: 'select', numeric: true, options: () => [
       { id: '1', label: '1,0 — раскреплён стеной' },
-      { id: '0.7', label: '0,7 — жёсткая заделка внизу' },
+      { id: '0.7', label: '0,7 — раскреплён + защемление внизу' },
       { id: '2', label: '2,0 — крепление к стене не учитывать' }] },
+  { k: 'wallPosts.muY', label: 'μ вдоль ряда (вдоль стены)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
+      { id: '1', label: '1,0 — раскреплён стеной' },
+      { id: '0.7', label: '0,7 — раскреплён + защемление внизу' },
+      { id: '2', label: '2,0 — крепление к стене не учитывать' }],
+    note: 'Столб притянут к стене шпильками в нескольких точках по высоте — уехать вбок он не может ни в одной плоскости, поэтому здесь 1,0 законно.' },
   { k: 'wallPosts.boltCount', label: 'Шпилек на столб', type: 'range', min: 2, max: 6, step: 1, unit: 'шт' },
   { k: 'wallPosts.boltDiameter', label: 'Диаметр шпильки', type: 'select', numeric: true, options: () => [
       { id: '12', label: 'М12' }, { id: '16', label: 'М16' }, { id: '20', label: 'М20' }, { id: '24', label: 'М24' }] },
@@ -122,7 +133,7 @@ const CONTROLS = [
   { k: 'site.windRegion', label: 'Ветровой район', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
   { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
       { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
-  { k: 'site.drift', label: 'Снеговой мешок у стены дома', type: 'check' },
+  { k: 'site.drift', label: 'Снеговой мешок у стены дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'check' },
   { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
   { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },
   { k: 'site.crossSlope', label: 'Поперечный уклон навеса φ', type: 'range', min: 0, max: 30, step: 1, unit: '°' },
@@ -175,6 +186,14 @@ const GROUPS_KEY = 'canopycraft.groups';
 const readGroups = () => { try { return JSON.parse(localStorage.getItem(GROUPS_KEY)) ?? {}; } catch { return {}; } };
 const writeGroups = (v) => { try { localStorage.setItem(GROUPS_KEY, JSON.stringify(v)); } catch { /* приватный режим */ } };
 
+/**
+ * Ссылка на статью справки рядом с подписью поля. Открывается в новой вкладке:
+ * расчёт в текущей остаётся нетронутым.
+ */
+const helpLink = (c) => (c.help
+  ? ` <a class="help" href="help/${c.help}" target="_blank" rel="noopener" title="Справка: ${c.helpTitle ?? 'подробнее'}" aria-label="Справка: ${c.helpTitle ?? 'подробнее'}">?</a>`
+  : '');
+
 function buildParams() {
   const hosts = { left: $('params'), right: $('params-right') };
   hosts.left.innerHTML = '';
@@ -201,15 +220,21 @@ function buildParams() {
     wrap.className = 'field';
     const id = 'c_' + c.k.replace(/[.#]/g, '_');
     if (c.type === 'check') {
-      wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}</span></label>`;
+      wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}${helpLink(c)}</span></label>`;
     } else if (c.type === 'number') {
       wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
     } else if (c.type === 'range') {
       const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(' ');
-      wrap.innerHTML = `<label for="${id}">${c.label} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
+      wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
     } else {
       const opts = c.options().map((o) => `<option value="${o.id}">${o.label}</option>`).join('');
-      wrap.innerHTML = `<label for="${id}">${c.label}${c.pick ? ` <button class="btn" data-pick-el="${c.pick}" style="padding:0 6px;font-size:11px">подобрать</button>` : ''}</label><select id="${id}">${opts}</select>`;
+      wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)}${c.pick ? ` <button class="btn" data-pick-el="${c.pick}" style="padding:0 6px;font-size:11px">подобрать</button>` : ''}</label><select id="${id}">${opts}</select>`;
+    }
+    if (c.note) {
+      const n = document.createElement('small');
+      n.className = 'note';
+      n.textContent = c.note;
+      wrap.appendChild(n);
     }
     body.appendChild(wrap);
     const input = wrap.querySelector('input,select');
@@ -313,7 +338,8 @@ function renderInspector(res) {
     kv.push(['N сжатие', `${f2(el.N / 1000)} кН`]);
     kv.push(['M', `${f2(el.M / 1e6)} кН·м`]);
     kv.push(['Отрыв', `${f2(Math.max(0, el.Nup) / 1000)} кН`]);
-    kv.push(['Расчётная длина', `${Math.round(el.lef)} мм`]);
+    kv.push(['Расчётная длина поперёк ряда', `${Math.round(el.lefX)} мм`]);
+    kv.push(['Расчётная длина вдоль ряда', `${Math.round(el.lefY)} мм`]);
     if (el.bolts) {
       kv.push(['Горизонт. распор на столб', `${f2(el.Hpost / 1000)} кН`]);
       kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
@@ -840,7 +866,7 @@ function buildReport(res) {
     <h2>1. Исходные данные</h2>
     <table>
       <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
-      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.mu}, стеновых ${wp.mu}</td></tr>
+      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.muX}/${m.posts.muY}, стеновых ${wp.muX}/${wp.muY} (поперёк/вдоль ряда)</td></tr>
       <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>

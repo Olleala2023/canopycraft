@@ -160,10 +160,46 @@ test('шпильки в газоблоке проверяются и завис�
 test('стеновой столб выгоднее наружного: он раскреплён стеной', () => {
   const m = defaultModel();
   const r = analyse(m);
-  const outer = r.posts[1].checks.find((c) => c.name === 'Устойчивость столба');
-  const wall = r.wallPosts[1].checks.find((c) => c.name === 'Устойчивость столба');
-  assert.ok(wall.note.includes('φ'), 'в примечании должен быть φ');
+  const outer = r.posts[1].checks.find((c) => c.name === 'Устойчивость вдоль ряда');
+  assert.ok(outer.note.includes('φ'), 'в примечании должен быть φ');
   assert.ok(r.posts[1].lef > r.wallPosts[1].lef, 'расчётная длина наружного столба больше');
+});
+
+test('μ задаётся в двух плоскостях независимо', () => {
+  const m = defaultModel();
+  m.posts.muX = 1.0;   // поперёк ряда верх удержан кровлей
+  m.posts.muY = 2.0;   // вдоль стены связей нет
+  const p = analyse(m).posts[1];
+  assert.equal(Math.round(p.lefX), Math.round(p.H));
+  assert.equal(Math.round(p.lefY), Math.round(2 * p.H));
+  const x = p.checks.find((c) => c.name === 'Устойчивость поперёк ряда');
+  const y = p.checks.find((c) => c.name === 'Устойчивость вдоль ряда');
+  assert.ok(y.U > x.U, 'плоскость без связей должна быть загружена сильнее');
+
+  // гибкость ограничивается по худшей плоскости
+  const flex = p.checks.find((c) => c.name === 'Гибкость');
+  assert.ok(Math.abs(flex.value - y.lambda) < 1e-6, 'в проверку гибкости идёт худшая λ');
+
+  // раскрепление одной плоскости не может ухудшить столб ни по одной проверке
+  const both = defaultModel();
+  both.posts.muX = 2.0; both.posts.muY = 2.0;
+  const q = analyse(both).posts[1];
+  assert.ok(q.U >= p.U, 'раскрепление поперёк ряда не может ухудшить столб');
+  for (const c of p.checks) {
+    const was = q.checks.find((o) => o.name === c.name);
+    assert.ok(c.U <= was.U + 1e-9, `${c.name}: стало ${c.U.toFixed(2)} против ${was.U.toFixed(2)}`);
+  }
+  // но здесь правит гибкость вдоль стены, и пока там связей нет, столб не легчает
+  assert.equal(p.worst.name, 'Гибкость');
+  const bcBefore = q.checks.find((c) => c.name === 'Сжатие с изгибом').U;
+  const bcAfter = p.checks.find((c) => c.name === 'Сжатие с изгибом').U;
+  assert.ok(bcAfter < bcBefore, 'сжатие с изгибом считается поперёк ряда и должно улучшиться');
+
+  // связи в обеих плоскостях снимают ограничение по гибкости
+  const braced = defaultModel();
+  braced.posts.muX = 1.0; braced.posts.muY = 1.0;
+  const z = analyse(braced).posts[1];
+  assert.ok(z.U < p.U * 0.8, `${z.U.toFixed(2)} против ${p.U.toFixed(2)}`);
 });
 
 test('спецификация считает хлысты стандартной длины', () => {

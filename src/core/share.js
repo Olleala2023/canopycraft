@@ -49,6 +49,24 @@ function fromBase64Url(code) {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * Старые ссылки: до разделения μ по плоскостям в модели было одно поле mu.
+ * mergeModel неизвестные ключи молча выбрасывает, и такая ссылка тихо
+ * считалась бы с текущими умолчаниями — поэтому переносим значение в оба поля.
+ */
+function migrate(patch) {
+  if (!isPlain(patch)) return patch;
+  const out = { ...patch };
+  for (const row of ['posts', 'wallPosts']) {
+    const r = out[row];
+    if (isPlain(r) && 'mu' in r) {
+      const { mu, ...rest } = r;
+      out[row] = { muX: mu, muY: mu, ...rest };
+    }
+  }
+  return out;
+}
+
 /** Модель → строка для адресной строки. */
 export function encodeModel(model) {
   return toBase64Url(JSON.stringify(diffModel(model)));
@@ -57,7 +75,7 @@ export function encodeModel(model) {
 /** Строка из адресной строки → модель. null, если строка испорчена. */
 export function decodeModel(code) {
   try {
-    const patch = JSON.parse(fromBase64Url(code));
+    const patch = migrate(JSON.parse(fromBase64Url(code)));
     if (!isPlain(patch)) return null;
     return mergeModel(patch);
   } catch {

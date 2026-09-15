@@ -4,6 +4,7 @@ import { defaultModel, spread } from '../src/core/model.js';
 import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads } from '../src/core/analysis.js';
 import { ladder, section } from '../src/core/sections.js';
 import { searchByCost } from '../src/core/search.js';
+import { decodeModel, encodeModel } from '../src/core/share.js';
 
 function sample() {
   const m = defaultModel();
@@ -104,4 +105,19 @@ test('столбы у стены не тяжелее наружных при п�
     assert.ok(wall.props.A <= outer.props.A,
       `у стены ${wall.label} (A=${wall.props.A.toFixed(0)}), снаружи ${outer.label} (A=${outer.props.A.toFixed(0)})`);
   }
+});
+
+test('старая ссылка с одним μ раскладывается по двум плоскостям', () => {
+  // ссылка, выпущенная до разделения μ: {"posts":{"mu":1}}
+  const code = Buffer.from(JSON.stringify({ posts: { mu: 1 } }), 'utf8')
+    .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const m = decodeModel(code);
+  assert.equal(m.posts.muX, 1);
+  assert.equal(m.posts.muY, 1);
+  assert.equal(m.posts.mu, undefined);
+  // а новые ссылки по-прежнему короткие и обратимые
+  const t = defaultModel();
+  t.posts.muX = 0.7;
+  assert.equal(decodeModel(encodeModel(t)).posts.muX, 0.7);
+  assert.equal(decodeModel(encodeModel(t)).posts.muY, defaultModel().posts.muY);
 });
