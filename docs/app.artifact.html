@@ -3608,14 +3608,6 @@ let audioPool = [...AUDIO_FILES];   // имена, которые ещё не о
 let audioQueue = [];                // перемешанный порядок на текущий круг
 let audioNow = null;
 
-/** Русское склонение после числа: 1 трек, 2 трека, 5 треков. */
-const pluralRu = (n, one, few, many) => {
-  const t = n % 10, h = n % 100;
-  if (t === 1 && h !== 11) return one;
-  if (t >= 2 && t <= 4 && (h < 12 || h > 14)) return few;
-  return many;
-};
-
 const shuffle = (a) => {
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -3658,8 +3650,10 @@ function paintAudio() {
   const b = $('btn-audio');
   const vol = $('audio-vol');
   b.classList.toggle('off', !audioState.on);
+  // без числа треков: до первого круга в списке ещё лежат имена, которых в
+  // папке нет, и счётчик показывал бы 8 при пяти файлах
   b.title = audioState.on
-    ? `Играет ${audioNow ?? '…'} · ${audioPool.length} ${pluralRu(audioPool.length, 'трек', 'трека', 'треков')}. Нажмите, чтобы выключить`
+    ? `Играет ${audioNow ?? '…'}. Нажмите, чтобы выключить`
     : 'Включить фоновую музыку';
   b.setAttribute('aria-pressed', String(audioState.on));
   vol.hidden = !audioState.on;
