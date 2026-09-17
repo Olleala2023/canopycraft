@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel } from '../src/core/model.js';
 import { analyse, billOfMaterials } from '../src/core/analysis.js';
-import { FASTENERS, fastener, shearCapacity, fitCount, spacingRules } from '../src/core/fasteners.js';
+import { FASTENERS, fastener, shearCapacity, fitCount, spacingRules, WELD, weldLine } from '../src/core/fasteners.js';
 
 test('несущая способность крепежа — по табл. 20 СП 64', () => {
   // гвоздь 4 мм: изгиб 2,5·d² = 2,5·0,4² = 0,40 кН, смятие 0,35·c·d при c = 42 мм
@@ -107,4 +107,81 @@ test('каждый крепёж из каталога даёт рабочий р
     assert.ok(Number.isFinite(t.U) && t.need >= 2, `${f.id}: U = ${t.U}`);
     assert.ok(t.penetration >= 4 * f.d, `${f.id}: защемление ${t.penetration} < 4d`);
   }
+});
+
+/* ─────────────── узел «прогон — столб» ─────────────── */
+
+test('сварной узел: геометрия шва и напряжения', () => {
+  const m = defaultModel();
+  const r = analyse(m);
+  const t = r.beamTies.outer;
+  assert.ok(t.welded);
+
+  // шов по контуру столба 100×100 за вычетом 10 мм непровара на каждом из четырёх швов
+  assert.equal(Math.round(t.weldLength), 2 * (100 + 100) - 40);
+
+  // напряжение по металлу шва: отрыв и момент на площадь и момент сопротивления линии шва
+  const A = WELD.betaF * t.tie.kf * t.weldLength;
+  const W = WELD.betaF * t.tie.kf * weldLine(100, 100).W;
+  const expect = Math.hypot(t.uplift / A + t.Mecc / W, t.H / A);
+  assert.ok(Math.abs(t.tauF - expect) < 1e-6, `${t.tauF.toFixed(1)} против ${expect.toFixed(1)} МПа`);
+  // по границе сплавления β_z = 1,0 — площадь больше, напряжение меньше
+  assert.ok(t.tauZ < t.tauF);
+});
+
+test('катет шва ограничен толщиной стенки', () => {
+  const m = defaultModel();
+  // труба 100×100×3: 1,2·t = 3,6 мм, катет 3 проходит, 4 и 6 — уже нет
+  const ok = analyse({ ...m, purlinTie: { id: 'weld3' } }).beamTies.outer;
+  assert.ok(ok.U <= 1, `катет 3: U = ${ok.U.toFixed(2)}`);
+  for (const id of ['weld4', 'weld6']) {
+    const bad = analyse({ ...m, purlinTie: { id } }).beamTies.outer;
+    assert.equal(bad.worst.name, 'Катет шва');
+    assert.ok(bad.U > 1, `${id}: U = ${bad.U.toFixed(2)}`);
+  }
+  // на толстостенной трубе тот же катет проходит
+  const thick = defaultModel();
+  thick.posts.sectionId = 's100x100x6';
+  thick.purlin.sectionId = 's100x140x6';
+  assert.ok(analyse({ ...thick, purlinTie: { id: 'weld5' } }).beamTies.outer.U <= 1);
+});
+
+test('к деревянной обвязке сварка подменяется болтовым узлом', () => {
+  const m = defaultModel();
+  // у стены по умолчанию сосна — просим сварку и получаем болты с объяснением
+  const r = analyse({ ...m, wallPurlinTie: { id: 'weld4' } });
+  const t = r.beamTies.wall;
+  assert.equal(t.welded, false);
+  assert.match(t.fallback, /сварка невозможна/);
+  assert.ok(t.checks?.length || t.worst, 'проверки посчитаны');
+  // в деревянном узле появляется смятие под шайбой, которого нет в стальном
+  const names = analyse(m).beamTies.wall.checks.map((c) => c.name);
+  assert.ok(names.includes('Смятие древесины под шайбой'));
+  assert.ok(names.includes('Болт как нагель в брусе'));
+  assert.ok(!analyse(m).beamTies.outer.checks.some((c) => /древесин/.test(c.name)));
+});
+
+test('болты узла делят усилие, и их число решает', () => {
+  const m = defaultModel();
+  m.site.windRegion = 'VII';
+  m.site.terrain = 'A';
+  const two = analyse({ ...m, wallPurlinTie: { id: 'plate12x2' } }).beamTies.wall;
+  const four = analyse({ ...m, wallPurlinTie: { id: 'plate12x4' } }).beamTies.wall;
+  assert.equal(two.n, 2);
+  assert.equal(four.n, 4);
+  assert.ok(Math.abs(two.Nb - two.uplift / 2) < 1e-9, 'отрыв делится на болты');
+  assert.ok(Math.abs(four.Nb - two.Nb / 2) < 1e-9);
+  assert.ok(two.U > 1 && four.U < two.U, `${two.U.toFixed(2)} → ${four.U.toFixed(2)}`);
+});
+
+test('узлы прогонов попадают в сводку и спецификацию', () => {
+  const r = analyse(defaultModel());
+  const row = r.summary.find((s) => s.key === 'beamTies');
+  assert.ok(row && row.U > 0, 'строка «Прогон на столбе»');
+
+  const b = billOfMaterials(r);
+  assert.ok(b.fasteners.some((f) => f.name.startsWith('Сварной шов')), 'шов наружного ряда');
+  assert.ok(b.fasteners.some((f) => /Пластина-оголовок/.test(f.name)), 'оголовок у стены');
+  const bolts = b.fasteners.find((f) => /Болт М12 класса .*узел/.test(f.name));
+  assert.equal(bolts.count, 2 * defaultModel().wallPosts.xs.length);
 });

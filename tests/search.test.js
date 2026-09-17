@@ -70,7 +70,14 @@ test('подбор по стоимости не оставляет более д
 
   for (const opt of r.options) {
     const m = opt.model;
-    assert.ok(analyse(m).maxU <= target);
+    // элементы — по целевому запасу, узлы — по единице: запас внутри них уже
+    // заложен, а вместимость узла и катет шва дискретны
+    const res = analyse(m);
+    const NODES = ['ties', 'beamTies'];
+    for (const row of res.summary) {
+      const limit = NODES.includes(row.key) ? 1 : target;
+      assert.ok(row.U <= limit + 1e-9, `${row.label}: U = ${row.U.toFixed(2)} > ${limit}`);
+    }
     const lists = {
       rafters: ladderFor(m.rafters.sectionId, { minH: 100 }),
       battens: ladderFor(m.battens.sectionId),

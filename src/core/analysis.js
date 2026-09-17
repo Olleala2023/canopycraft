@@ -16,8 +16,12 @@ import {
   steelLocalBuckling, deflectionCheck, worstOf,
   boltPlateBearing, boltHoleBearing, boltShear,
   tieShear, tieFit, steelHoleBearing,
+  weldMetal, weldFusion, weldLeg, boltTension, timberWasherBearing,
 } from './checks.js';
-import { fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D } from './fasteners.js';
+import {
+  fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D,
+  beamTie, weldLine, weldMinLeg, WELD, BOLT_RT, BOLT_AN, WASHER_SIDE,
+} from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
 
@@ -299,6 +303,90 @@ export function analyseTies(model, rafters, ctx) {
   };
 }
 
+/* ──────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ──────────────── */
+
+/**
+ * Прогон опирается на оголовок столба. Вертикальную нагрузку вниз держит само
+ * опирание, торец в торец, — узел для неё не нужен. Узел держит то, что
+ * пытается снять прогон с оголовка: ветровой отрыв и горизонтальную силу.
+ *
+ * Сварной узел жёсткий, поэтому в шов идёт ещё и момент от эксцентриситета
+ * опирания. Болтовой в один ряд принимается шарнирным: момент там
+ * воспринимается смятием площадки опирания, а болты держат отрыв и сдвиг.
+ */
+function analyseBeamTie(model, tieId, beam, posts) {
+  let tie = beamTie(tieId);
+  const postSec = posts[0].sec;
+  const mat = posts[0].mat;
+  const beamSec = beam.sec;
+  const beamMat = beam.mat;
+
+  // худший столб ряда: по отрыву, а при равном отрыве — по горизонтальной силе
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Hpost > a.Hpost) ? p : a));
+  const uplift = Math.max(0, post.Nup);
+  const H = Math.abs(post.Hpost);
+  const Mecc = Math.abs(post.N * model.opts.postEccentricity);
+
+  const checks = [];
+  let welded = tie.kind === 'weld';
+  let fallback = null;
+  if (welded && beamSec.material !== 'steel') {
+    // к деревянной обвязке не приварить — считаем болтовой узел
+    fallback = `${beamSec.label} — сосна, сварка невозможна: принят болтовой узел`;
+    tie = beamTie('plate12x2');
+    welded = false;
+  }
+
+  let detail = {};
+  if (welded) {
+    const line = weldLine(postSec.b, postSec.h);
+    const Aw = WELD.betaF * tie.kf * line.length;
+    const Az = WELD.betaZ * tie.kf * line.length;
+    const Wf = WELD.betaF * tie.kf * line.W;
+    const Wz = WELD.betaZ * tie.kf * line.W;
+    const tauF = Math.hypot(uplift / Aw + Mecc / Wf, H / Aw);
+    const tauZ = Math.hypot(uplift / Az + Mecc / Wz, H / Az);
+    const tMin = Math.min(postSec.t ?? 3, beamSec.t ?? 3);
+    const kfMin = weldMinLeg(Math.max(postSec.t ?? 3, beamSec.t ?? 3));
+    const note = `шов ${Math.round(line.length)} мм по контуру ${postSec.label}`;
+    checks.push(weldMetal(tauF, WELD.Rwf, note));
+    checks.push(weldFusion(tauZ, mat.Run, note));
+    checks.push(weldLeg(tie.kf, kfMin, 1.2 * tMin, `стенки ${postSec.t} и ${beamSec.t ?? '—'} мм`));
+    detail = { weldLength: line.length, tauF, tauZ, kfMin, kfMax: 1.2 * tMin };
+  } else {
+    const n = tie.n;
+    const Nb = uplift / n;
+    const Vb = H / n;
+    const note = `${n} × М${tie.d} класса ${tie.grade}`;
+    checks.push(boltTension(Nb, BOLT_RT[tie.grade], BOLT_AN[tie.d], note));
+    checks.push(boltShear(Vb, tie.d, tie.grade));
+    if (beamSec.material === 'timber') {
+      const side = WASHER_SIDE[tie.d] ?? 40;
+      checks.push(timberWasherBearing(Nb, side, tie.d, beamMat, `шайба ${side}×${side} мм`));
+      // горизонтальная сила передаётся болтом как нагелем в древесине
+      const cap = shearCapacity({ ...tie, kind: 'bolt', len: 0 }, { woodWidth: beamSec.b, mv: beamMat.mv ?? 1 });
+      const dowel = tieShear(H, n, cap.T, `T = ${(cap.T / 1000).toFixed(2).replace('.', ',')} кН · ${cap.governs}`);
+      dowel.name = 'Болт как нагель в брусе';
+      checks.push(dowel);
+      detail = { washer: side, dowelT: cap.T };
+    } else {
+      checks.push(steelHoleBearing(Vb, tie.d, beamSec.t ?? 3, beamMat, `болт М${tie.d} в стенку ${beamSec.t} мм`));
+    }
+    detail = { ...detail, n, Nb, Vb };
+  }
+  return {
+    tie, welded, fallback, uplift, H, Mecc, post: postSec, beam: beamSec, x: post.x,
+    ...detail, ...worstOf(checks),
+  };
+}
+
+export function analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts) {
+  return {
+    outer: analyseBeamTie(model, model.purlinTie.id, purlin, posts),
+    wall: analyseBeamTie(model, model.wallPurlinTie.id, wallPurlin, wallPosts),
+  };
+}
+
 /* ───────────────────────── СТОЛБЫ ───────────────────────── */
 
 /**
@@ -480,6 +568,7 @@ export function analyse(model) {
   const posts = analysePostRow(model, model.posts, purlin, ctx, sl.outer.extra);
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
   const ties = analyseTies(model, rafters, ctx);
+  const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -499,11 +588,13 @@ export function analyse(model) {
     { key: 'wallPosts', label: 'Столбы у стены', U: Math.max(...wallPosts.map((p) => p.U)), worst: rowWorst(wallPosts).worst },
     { key: 'ties', label: 'Крепление стропил', U: Math.max(ties.outer.U, ties.wall.U),
       worst: (ties.outer.U > ties.wall.U ? ties.outer : ties.wall).worst },
+    { key: 'beamTies', label: 'Прогон на столбе', U: Math.max(beamTies.outer.U, beamTies.wall.U),
+      worst: (beamTies.outer.U > beamTies.wall.U ? beamTies.outer : beamTies.wall).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, foundation,
     thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
@@ -602,6 +693,33 @@ export function billOfMaterials(result) {
       note: `${result.ties.outer.need} шт у прогона и ${result.ties.wall.need} у стены на каждое стропило`,
       mass: tieCount * fastenerMass(tieF), cost: tieCount * fastenerMass(tieF) * pr.steelKg,
     });
+  }
+
+  for (const [side, bt, row] of [
+    ['наружного ряда', result.beamTies.outer, m.posts],
+    ['у стены', result.beamTies.wall, m.wallPosts],
+  ]) {
+    const n = row.xs.length;
+    if (bt.welded) {
+      fasteners.push({
+        name: `Сварной шов оголовка ${side}`, count: n,
+        note: `${Math.round(bt.weldLength)} мм по контуру, катет ${bt.tie.kf} мм`, mass: 0, cost: 0,
+      });
+    } else {
+      const plate = (bt.post.b ?? 100) + 60;
+      const plateMassOne = plate * plate * 8 * 7.85e-6;
+      const bolts = bt.tie.n * n;
+      const boltMassOne = (Math.PI / 4) * bt.tie.d ** 2 * 120 * 7.85e-6 * 1.6;
+      fasteners.push({
+        name: `Пластина-оголовок ${plate}×${plate}×8 мм, ${side}`, count: n,
+        note: 'приваривается на торец столба', mass: n * plateMassOne, cost: n * plateMassOne * pr.steelKg,
+      });
+      fasteners.push({
+        name: `Болт М${bt.tie.d} класса ${bt.tie.grade}, узел ${side}`, count: bolts,
+        note: `${bt.tie.n} шт на столб, с гайкой и шайбами`, mass: bolts * boltMassOne,
+        cost: bolts * boltMassOne * pr.steelKg,
+      });
+    }
   }
 
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);

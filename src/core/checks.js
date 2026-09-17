@@ -202,6 +202,38 @@ export function boltHoleBearing(V, boltD, wallThickness, blockClass) {
     `М${boltD} через стену ${wallThickness} мм`);
 }
 
+/* ─────────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ─────────────────── */
+
+/** Угловой шов по металлу шва, СП 16 ф. (176): τ ≤ R_wf·γ_wf·γ_c. */
+export function weldMetal(tau, Rwf, note) {
+  return chk('Шов по металлу шва', tau, Rwf, 'МПа', 'τ = N/(β_f·k_f·l_ш) ≤ R_wf·γ_wf·γ_c', note);
+}
+
+/** Угловой шов по металлу границы сплавления, R_wz = 0,45·R_un. */
+export function weldFusion(tau, Run, note) {
+  return chk('Шов по границе сплавления', tau, 0.45 * Run, 'МПа',
+    'τ = N/(β_z·k_f·l_ш) ≤ R_wz·γ_wz·γ_c', note);
+}
+
+/** Катет шва: не меньше минимального по табл. 38 и не больше 1,2·t тонкого элемента. */
+export function weldLeg(kf, kfMin, kfMax, note) {
+  const value = kf < kfMin ? kfMin / kf : kf / kfMax;
+  return chk('Катет шва', value, 1, '',
+    `${kfMin} ≤ k_f ≤ 1,2·t_min = ${kfMax.toFixed(1).replace(".", ",")} мм`, note);
+}
+
+/** Растяжение болта, СП 16 ф. (188): N ≤ R_bt·A_bn. */
+export function boltTension(N, Rbt, Abn, note) {
+  return chk('Болт на растяжение', Math.abs(N), Rbt * Abn, 'Н', 'N ≤ R_bt·A_bn', note);
+}
+
+/** Смятие древесины поперёк волокон под шайбой. */
+export function timberWasherBearing(N, side, boltD, mat, note) {
+  const area = side * side - (Math.PI * boltD * boltD) / 4;
+  return chk('Смятие древесины под шайбой', Math.abs(N) / area, mat.Rcm90, 'МПа',
+    'σ = N/A_шайбы ≤ R_см90', note);
+}
+
 /* ─────────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ─────────────────── */
 
 /**

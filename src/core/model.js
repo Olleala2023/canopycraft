@@ -53,6 +53,9 @@ export function defaultModel() {
     purlin: { sectionId: 's80x140x4' },
     /** Крепление стропила к опоре от ветрового отрыва — см. core/fasteners.js */
     rafterTie: { id: 'nail4x50' },
+    /** Узлы «прогон — столб»: наружный ряд сварной, у стены болтовой (там сосна) */
+    purlinTie: { id: 'weld3' },
+    wallPurlinTie: { id: 'plate12x2' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
       xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),

@@ -19,6 +19,7 @@
 import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from './analysis.js';
 import { ladder, section } from './sections.js';
 import { spread } from './model.js';
+import { pickTies } from './optimize.js';
 
 const clone = (m) => JSON.parse(JSON.stringify(m));
 
@@ -184,10 +185,19 @@ export async function searchByCost(model, opts = {}) {
     m.wallPosts.sectionId = wall.post;
     m.wallPurlin.sectionId = wall.beam;
 
-    const res = analyse(m);
-    // сборка из независимо подобранных рядов проверяется целиком:
-    // отдельные проверки могли пройти, а огибающая — нет
-    if (!(res.maxU <= target)) continue;
+    // узлы подбираются под уже выбранные сечения: катет шва ограничен толщиной
+    // стенки, и на тонкой трубе сварной узел может оказаться неисполнимым
+    const withTies = pickTies(m).model;
+    const res = analyse(withTies);
+    // сборка из независимо подобранных рядов проверяется целиком: отдельные
+    // проверки могли пройти, а огибающая — нет. Узлы при этом меряются не
+    // целевым запасом, а единицей: запас внутри них уже заложен, а вместимость
+    // и катет шва дискретны
+    const NODES = ['ties', 'beamTies'];
+    const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
+    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
+    if (!(elements <= target && nodes <= 1)) continue;
+    Object.assign(m, withTies);
     const bom = billOfMaterials(res);
     options.push({ model: m, cost: bom.costs.total, res, bom });
   }
