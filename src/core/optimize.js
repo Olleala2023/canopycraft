@@ -2,7 +2,7 @@
 import { ladder, section } from './sections.js';
 import { analyse } from './analysis.js';
 import { spread } from './model.js';
-import { FASTENERS, BEAM_TIES } from './fasteners.js';
+import { FASTENERS, BEAM_TIES, POST_BASES } from './fasteners.js';
 
 const PATH = {
   rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
@@ -91,6 +91,7 @@ export function pickTies(model, target = 1) {
   tryAll('rafterTie', FASTENERS, (r) => Math.max(r.ties.outer.U, r.ties.wall.U));
   tryAll('purlinTie', forBeam('purlin'), (r) => r.beamTies.outer.U);
   tryAll('wallPurlinTie', forBeam('wallPurlin'), (r) => r.beamTies.wall.U);
+  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.U, r.bases.wall.U));
   return { model: m, log };
 }
 

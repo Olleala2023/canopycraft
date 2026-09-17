@@ -1243,6 +1243,36 @@ function boltHoleBearing(V, boltD, wallThickness, blockClass) {
     `М${boltD} через стену ${wallThickness} мм`);
 }
 
+/* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
+
+/** Смятие бетона под опорной плитой при внецентренном сжатии. */
+function concreteBearing(sigma, Rb, note) {
+  return chk('Смятие бетона под плитой', sigma, Rb, 'МПа', 'σ = N/A + M/W ≤ R_b', note);
+}
+
+/** Изгиб опорной плиты: консольный вылет за гранью столба под отпором бетона. */
+function plateBending(sigma, Ry, note) {
+  return chk('Изгиб опорной плиты', sigma, Ry, 'МПа', 'σ = 6·M/t² ≤ R_y, M = σ_б·c²/2', note);
+}
+
+/** Вырыв конуса бетона анкером: проекция конуса под 45°. */
+function anchorCone(N, hef, Rbt, note) {
+  const area = Math.PI * hef * hef;
+  return chk('Вырыв конуса бетона', Math.abs(N), Rbt * area, 'Н',
+    'N ≤ R_bt·π·h_ef²', note);
+}
+
+/** Заделка забетонированного столба: конструктивный минимум. */
+function embedDepth(h, need, note) {
+  return chk('Глубина заделки', need, h, 'мм', 'h ≥ 10·h_сечения — иначе защемления нет', note);
+}
+
+/** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
+function anchorMass(uplift, mass, note) {
+  return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',
+    'N_отр ≤ 0,9·m·g', note);
+}
+
 /* ─────────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ─────────────────── */
 
 /** Угловой шов по металлу шва, СП 16 ф. (176): τ ≤ R_wf·γ_wf·γ_c. */
@@ -1497,6 +1527,58 @@ const BOLT_AN = { 10: 52.3, 12: 76.2, 16: 144, 20: 225, 24: 324 };
 /** Сторона квадратной шайбы-пластины под болт, мм. */
 const WASHER_SIDE = { 10: 40, 12: 50, 16: 60 };
 
+/* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
+
+/**
+ * База решает, законна ли расчётная схема столба. Расчёт на устойчивость при
+ * μ = 2 предполагает защемление внизу — значит, база обязана воспринять момент
+ * от горизонтальной силы и эксцентриситета. Два анкера с малым разносом такой
+ * момент не держат, и тогда «защемлён внизу» — просто слова.
+ *
+ * Варианты: столб забетонирован в фундамент (заделка длиной хода) или
+ * опирается на приваренную плиту с анкерами.
+ */
+const POST_BASES = [
+  { id: 'embed600', kind: 'embed', label: 'забетонирован, заделка 600 мм', short: 'бетон 600', embed: 600 },
+  { id: 'embed800', kind: 'embed', label: 'забетонирован, заделка 800 мм', short: 'бетон 800', embed: 800 },
+  { id: 'embed1200', kind: 'embed', label: 'забетонирован, заделка 1200 мм', short: 'бетон 1200', embed: 1200 },
+  { id: 'plate2m12', kind: 'plate', label: 'плита 200×200×8 + 2 анкера М12', short: '2 × М12', n: 2, d: 12, plate: 200, t: 8, hef: 200, grade: '5.8' },
+  { id: 'plate4m12', kind: 'plate', label: 'плита 250×250×10 + 4 анкера М12', short: '4 × М12', n: 4, d: 12, plate: 250, t: 10, hef: 250, grade: '5.8' },
+  { id: 'plate4m16', kind: 'plate', label: 'плита 300×300×12 + 4 анкера М16', short: '4 × М16', n: 4, d: 16, plate: 300, t: 12, hef: 300, grade: '5.8' },
+  { id: 'plate4m20', kind: 'plate', label: 'плита 350×350×14 + 4 анкера М20', short: '4 × М20', n: 4, d: 20, plate: 350, t: 14, hef: 400, grade: '5.8' },
+];
+
+const BASE_BY_ID = new Map(POST_BASES.map((b) => [b.id, b]));
+
+function postBase(id) {
+  const b = BASE_BY_ID.get(id);
+  if (!b) throw new Error(`Неизвестная база: ${id}`);
+  return b;
+}
+
+/** Бетон фундамента: R_b и R_bt, МПа (СП 63.13330, табл. 6.8). */
+const CONCRETE = {
+  B15: { Rb: 8.5, Rbt: 0.75 },
+  B20: { Rb: 11.5, Rbt: 0.90 },
+  B25: { Rb: 14.5, Rbt: 1.05 },
+  B30: { Rb: 17.0, Rbt: 1.15 },
+};
+
+/** Отступ анкера от края плиты, мм. */
+const ANCHOR_EDGE = 40;
+/** Плотность железобетона, кг/м³ — для массы фундамента против отрыва. */
+const CONCRETE_DENSITY = 2400;
+
+/** Разнос анкеров по осям, мм. */
+const anchorSpan = (base) => Math.max(40, base.plate - 2 * ANCHOR_EDGE);
+
+/**
+ * Наименьшая глубина заделки забетонированного столба: десять размеров
+ * сечения. Конструктивное правило, а не расчёт по грунту — ниже этого о
+ * защемлении говорить нельзя.
+ */
+const minEmbed = (postH) => 10 * postH;
+
 /* ── src/core/model.js ── */
 /** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
 
@@ -1554,6 +1636,8 @@ function defaultModel() {
     rafterTie: { id: 'nail4x50' },
     /** Узлы «прогон — столб»: наружный ряд сварной, у стены болтовой (там сосна) */
     purlinTie: { id: 'weld3' },
+    /** База столба: чем он держится за фундамент — см. core/fasteners.js */
+    postBase: { id: 'plate4m12', footing: 400 },
     wallPurlinTie: { id: 'plate12x2' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
@@ -1576,6 +1660,7 @@ function defaultModel() {
       steel: { grade: 'C245', gammaC: 1.0 },
       bearingLength: 100,
       postEccentricity: 50,
+      concreteClass: 'B20',
       stockLength: 6000, // стандартная длина доски и трубы в продаже
     },
     /**
@@ -2214,6 +2299,80 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
   });
 }
 
+/* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
+
+/**
+ * База столба — то место, где расчётная схема встречается с землёй.
+ *
+ * Расчёт столба на устойчивость при μ = 2 или 0,7 предполагает защемление
+ * внизу. Значит, база обязана воспринять момент от горизонтальной силы и
+ * эксцентриситета опирания — иначе «защемлён внизу» остаётся словами, а
+ * настоящая расчётная длина больше принятой.
+ *
+ * Момент берётся наибольший по эпюре столба, а вертикальная сила — отрывающая.
+ * Строго говоря, это разные сочетания, но вместе они дают верхнюю оценку
+ * растяжения в анкере — в запас.
+ */
+function analysePostBase(model, cfg, posts, ctx) {
+  const base = postBase(model.postBase.id);
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && Math.abs(p.diagram.M[0]) > Math.abs(a.diagram.M[0])) ? p : a));
+  const sec = post.sec;
+  const mat = post.mat;
+  const conc = CONCRETE[model.opts.concreteClass] ?? CONCRETE.B20;
+  const N = Math.max(0, post.N);
+  const uplift = Math.max(0, post.Nup);
+  const H = Math.abs(post.Hpost);
+  const M = Math.abs(post.diagram.M[0]);
+  // защемление внизу предполагается всюду, кроме шарнирной схемы μ = 1
+  const needsFixity = cfg.muX !== 1 || cfg.muY !== 1;
+
+  const checks = [];
+  let detail = {};
+
+  if (base.kind === 'embed') {
+    const side = Math.max(sec.h + 100, model.postBase.footing ?? 400);
+    const mass = (side * side * base.embed) / 1e9 * CONCRETE_DENSITY;
+    if (needsFixity) {
+      checks.push(embedDepth(base.embed, minEmbed(sec.h),
+        `сечение ${sec.label}, схема с защемлением внизу`));
+    }
+    checks.push(anchorMass(uplift, mass, `стакан ${side}×${side}×${base.embed} мм ≈ ${mass.toFixed(0)} кг`));
+    checks.push(concreteBearing(N / (side * side), conc.Rb, `подошва ${side}×${side} мм`));
+    detail = { side, mass, needEmbed: minEmbed(sec.h) };
+  } else {
+    const A = base.plate * base.plate;
+    const W = (base.plate ** 3) / 6;
+    const sigma = N / A + M / W;
+    const c = Math.max(0, (base.plate - sec.h) / 2);
+    const Mc = (sigma * c * c) / 2;                 // Н·мм на 1 мм ширины
+    const sigmaPlate = (6 * Mc) / (base.t * base.t);
+    const span = anchorSpan(base);
+    const rows = base.n / 2;
+    const Na = uplift / base.n + M / (span * rows);
+    checks.push(concreteBearing(sigma, conc.Rb, `плита ${base.plate}×${base.plate} мм, бетон ${model.opts.concreteClass ?? 'B20'}`));
+    checks.push(plateBending(sigmaPlate, mat.Ry, `вылет ${Math.round(c)} мм при толщине ${base.t} мм`));
+    checks.push(boltTension(Na, BOLT_RT[base.grade], BOLT_AN[base.d],
+      `${base.n} × М${base.d}, разнос ${span} мм: отрыв ${(uplift / base.n / 1000).toFixed(2).replace('.', ',')} + момент ${(M / span / rows / 1000).toFixed(2).replace('.', ',')} кН`));
+    checks.push(anchorCone(Na, base.hef, conc.Rbt, `заделка ${base.hef} мм в бетон ${model.opts.concreteClass ?? 'B20'}`));
+    checks.push(boltShear(H / base.n, base.d, base.grade));
+    // анкеры держат столб, но сам блок ещё должен не выдернуться из земли
+    const needMass = uplift / 0.9 / 9.80665;
+    detail = { sigma, sigmaPlate, span, Na, c, needMass };
+  }
+
+  return {
+    base, post: sec, N, uplift, H, M, needsFixity, concrete: model.opts.concreteClass ?? 'B20',
+    x: post.x, ...detail, ...worstOf(checks),
+  };
+}
+
+function analysePostBases(model, posts, wallPosts, ctx) {
+  return {
+    outer: analysePostBase(model, model.posts, posts, ctx),
+    wall: analysePostBase(model, model.wallPosts, wallPosts, ctx),
+  };
+}
+
 /* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
 
 /**
@@ -2300,6 +2459,7 @@ function analyse(model) {
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
   const ties = analyseTies(model, rafters, ctx);
   const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
+  const bases = analysePostBases(model, posts, wallPosts, ctx);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -2321,11 +2481,13 @@ function analyse(model) {
       worst: (ties.outer.U > ties.wall.U ? ties.outer : ties.wall).worst },
     { key: 'beamTies', label: 'Прогон на столбе', U: Math.max(beamTies.outer.U, beamTies.wall.U),
       worst: (beamTies.outer.U > beamTies.wall.U ? beamTies.outer : beamTies.wall).worst },
+    { key: 'bases', label: 'База столба', U: Math.max(bases.outer.U, bases.wall.U),
+      worst: (bases.outer.U > bases.wall.U ? bases.outer : bases.wall).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
     thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
@@ -2451,6 +2613,24 @@ function billOfMaterials(result) {
         cost: bolts * boltMassOne * pr.steelKg,
       });
     }
+  }
+
+  const nAllPosts = m.posts.xs.length + m.wallPosts.xs.length;
+  const pb = result.bases.outer.base;
+  if (pb.kind === 'plate') {
+    const plateMassOne = pb.plate * pb.plate * pb.t * 7.85e-6;
+    const anchors = pb.n * nAllPosts;
+    const anchorMassOne = (Math.PI / 4) * pb.d ** 2 * (pb.hef + 120) * 7.85e-6 * 1.5;
+    fasteners.push({
+      name: `Плита базы ${pb.plate}×${pb.plate}×${pb.t} мм`, count: nAllPosts,
+      note: 'приваривается на нижний торец столба', mass: nAllPosts * plateMassOne,
+      cost: nAllPosts * plateMassOne * pr.steelKg,
+    });
+    fasteners.push({
+      name: `Анкер М${pb.d}, заделка ${pb.hef} мм`, count: anchors,
+      note: `${pb.n} шт на столб, разнос ${result.bases.outer.span} мм`,
+      mass: anchors * anchorMassOne, cost: anchors * anchorMassOne * pr.steelKg,
+    });
   }
 
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
@@ -2611,6 +2791,7 @@ function pickTies(model, target = 1) {
   tryAll('rafterTie', FASTENERS, (r) => Math.max(r.ties.outer.U, r.ties.wall.U));
   tryAll('purlinTie', forBeam('purlin'), (r) => r.beamTies.outer.U);
   tryAll('wallPurlinTie', forBeam('wallPurlin'), (r) => r.beamTies.wall.U);
+  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.U, r.bases.wall.U));
   return { model: m, log };
 }
 
@@ -2827,7 +3008,7 @@ async function searchByCost(model, opts = {}) {
     // проверки могли пройти, а огибающая — нет. Узлы при этом меряются не
     // целевым запасом, а единицей: запас внутри них уже заложен, а вместимость
     // и катет шва дискретны
-    const NODES = ['ties', 'beamTies'];
+    const NODES = ['ties', 'beamTies', 'bases'];
     const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
     const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
     if (!(elements <= target && nodes <= 1)) continue;
@@ -3135,6 +3316,11 @@ function pickElement(res, sel) {
     const p = res.posts[sel.index] ?? res.posts[0];
     return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
+  if (sel.type === 'base') {
+    const b = res.bases[sel.side ?? 'outer'];
+    return b && { ...b, kind: 'base', sec: { label: b.base.short },
+      title: sel.side === 'wall' ? 'БАЗА СТОЛБА У СТЕНЫ' : 'БАЗА НАРУЖНОГО СТОЛБА' };
+  }
   if (sel.type === 'beamTie') {
     const t = res.beamTies[sel.side ?? 'outer'];
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
@@ -3248,6 +3434,11 @@ const CONTROLS = [
     note: 'Вниз прогон держит само опирание, торец в торец. Узел нужен против ветрового отрыва и горизонтальной силы. Катет шва не может быть больше 1,2 толщины самой тонкой стенки — на трубе 3 мм это 3,6 мм.' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
+  { k: 'postBase.id', label: 'База столба', type: 'select',
+    options: () => POST_BASES.map((b) => ({ id: b.id, label: b.label })),
+    note: 'Расчёт столба при μ = 2 или 0,7 предполагает защемление внизу — значит, база обязана воспринять момент. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
+  { k: 'postBase.footing', label: 'Подошва фундамента', type: 'range', min: 300, max: 900, step: 50, unit: 'мм',
+    note: 'Для забетонированного столба: сторона бетонного блока. Его вес — единственное, что держит навес от вырыва вверх.' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
       { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
       { id: '1', label: '1,0 — верх удержан связями от смещения' },
@@ -3308,6 +3499,8 @@ const CONTROLS = [
     options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
   { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
     options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
+  { k: 'opts.concreteClass', label: 'Бетон фундамента', type: 'select',
+    options: () => Object.keys(CONCRETE).map((id) => ({ id, label: `${id} — R_b ${String(CONCRETE[id].Rb).replace('.', ',')} МПа` })) },
   { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
     options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
 
@@ -3535,6 +3728,21 @@ function renderInspector(res) {
       if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
     }
     kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
+  } else if (el.kind === 'base') {
+    kv.push(['Сжатие', `${f2(el.N / 1000)} кН`]);
+    kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
+    kv.push(['Момент в базе', `${f2(el.M / 1e6)} кН·м`]);
+    kv.push(['Схема столба', el.needsFixity ? 'с защемлением внизу — база держит момент' : 'шарнир внизу, связи вверху']);
+    if (el.base.kind === 'embed') {
+      kv.push(['Блок бетона', `${el.side}×${el.side}×${el.base.embed} мм ≈ ${Math.round(el.mass)} кг`]);
+      kv.push(['Нужно против отрыва', `${Math.round(el.uplift / 0.9 / 9.80665)} кг`]);
+      if (el.needsFixity) kv.push(['Заделка для защемления', `не менее ${el.needEmbed} мм`]);
+    } else {
+      kv.push(['На анкер: растяжение', `${f2(el.Na / 1000)} кН`]);
+      kv.push(['Разнос анкеров', `${el.span} мм · вылет плиты ${Math.round(el.c)} мм`]);
+      kv.push(['Под плитой', `${f2(el.sigma)} МПа при R_b ${f2((CONCRETE[el.concrete] ?? CONCRETE.B20).Rb)}`]);
+      kv.push(['Масса фундамента', `не менее ${Math.round(el.needMass)} кг на столб`]);
+    }
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
@@ -3555,11 +3763,13 @@ const SEL_FOR = {
   posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
   ties: { type: 'tie', side: 'outer' },
   beamTies: { type: 'beamTie', side: 'outer' },
+  bases: { type: 'base', side: 'outer' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
   if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
   if (key === 'beamTies') return { type: 'beamTie', side: res.beamTies.outer.U >= res.beamTies.wall.U ? 'outer' : 'wall' };
+  if (key === 'bases') return { type: 'base', side: res.bases.outer.U >= res.bases.wall.U ? 'outer' : 'wall' };
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];

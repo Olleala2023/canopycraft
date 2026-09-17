@@ -279,6 +279,11 @@ export function pickElement(res, sel) {
     const p = res.posts[sel.index] ?? res.posts[0];
     return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
+  if (sel.type === 'base') {
+    const b = res.bases[sel.side ?? 'outer'];
+    return b && { ...b, kind: 'base', sec: { label: b.base.short },
+      title: sel.side === 'wall' ? 'БАЗА СТОЛБА У СТЕНЫ' : 'БАЗА НАРУЖНОГО СТОЛБА' };
+  }
   if (sel.type === 'beamTie') {
     const t = res.beamTies[sel.side ?? 'outer'];
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },

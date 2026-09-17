@@ -17,10 +17,12 @@ import {
   boltPlateBearing, boltHoleBearing, boltShear,
   tieShear, tieFit, steelHoleBearing,
   weldMetal, weldFusion, weldLeg, boltTension, timberWasherBearing,
+  concreteBearing, plateBending, anchorCone, embedDepth, anchorMass,
 } from './checks.js';
 import {
   fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D,
   beamTie, weldLine, weldMinLeg, WELD, BOLT_RT, BOLT_AN, WASHER_SIDE,
+  postBase, anchorSpan, minEmbed, CONCRETE, CONCRETE_DENSITY,
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -483,6 +485,80 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
   });
 }
 
+/* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
+
+/**
+ * База столба — то место, где расчётная схема встречается с землёй.
+ *
+ * Расчёт столба на устойчивость при μ = 2 или 0,7 предполагает защемление
+ * внизу. Значит, база обязана воспринять момент от горизонтальной силы и
+ * эксцентриситета опирания — иначе «защемлён внизу» остаётся словами, а
+ * настоящая расчётная длина больше принятой.
+ *
+ * Момент берётся наибольший по эпюре столба, а вертикальная сила — отрывающая.
+ * Строго говоря, это разные сочетания, но вместе они дают верхнюю оценку
+ * растяжения в анкере — в запас.
+ */
+function analysePostBase(model, cfg, posts, ctx) {
+  const base = postBase(model.postBase.id);
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && Math.abs(p.diagram.M[0]) > Math.abs(a.diagram.M[0])) ? p : a));
+  const sec = post.sec;
+  const mat = post.mat;
+  const conc = CONCRETE[model.opts.concreteClass] ?? CONCRETE.B20;
+  const N = Math.max(0, post.N);
+  const uplift = Math.max(0, post.Nup);
+  const H = Math.abs(post.Hpost);
+  const M = Math.abs(post.diagram.M[0]);
+  // защемление внизу предполагается всюду, кроме шарнирной схемы μ = 1
+  const needsFixity = cfg.muX !== 1 || cfg.muY !== 1;
+
+  const checks = [];
+  let detail = {};
+
+  if (base.kind === 'embed') {
+    const side = Math.max(sec.h + 100, model.postBase.footing ?? 400);
+    const mass = (side * side * base.embed) / 1e9 * CONCRETE_DENSITY;
+    if (needsFixity) {
+      checks.push(embedDepth(base.embed, minEmbed(sec.h),
+        `сечение ${sec.label}, схема с защемлением внизу`));
+    }
+    checks.push(anchorMass(uplift, mass, `стакан ${side}×${side}×${base.embed} мм ≈ ${mass.toFixed(0)} кг`));
+    checks.push(concreteBearing(N / (side * side), conc.Rb, `подошва ${side}×${side} мм`));
+    detail = { side, mass, needEmbed: minEmbed(sec.h) };
+  } else {
+    const A = base.plate * base.plate;
+    const W = (base.plate ** 3) / 6;
+    const sigma = N / A + M / W;
+    const c = Math.max(0, (base.plate - sec.h) / 2);
+    const Mc = (sigma * c * c) / 2;                 // Н·мм на 1 мм ширины
+    const sigmaPlate = (6 * Mc) / (base.t * base.t);
+    const span = anchorSpan(base);
+    const rows = base.n / 2;
+    const Na = uplift / base.n + M / (span * rows);
+    checks.push(concreteBearing(sigma, conc.Rb, `плита ${base.plate}×${base.plate} мм, бетон ${model.opts.concreteClass ?? 'B20'}`));
+    checks.push(plateBending(sigmaPlate, mat.Ry, `вылет ${Math.round(c)} мм при толщине ${base.t} мм`));
+    checks.push(boltTension(Na, BOLT_RT[base.grade], BOLT_AN[base.d],
+      `${base.n} × М${base.d}, разнос ${span} мм: отрыв ${(uplift / base.n / 1000).toFixed(2).replace('.', ',')} + момент ${(M / span / rows / 1000).toFixed(2).replace('.', ',')} кН`));
+    checks.push(anchorCone(Na, base.hef, conc.Rbt, `заделка ${base.hef} мм в бетон ${model.opts.concreteClass ?? 'B20'}`));
+    checks.push(boltShear(H / base.n, base.d, base.grade));
+    // анкеры держат столб, но сам блок ещё должен не выдернуться из земли
+    const needMass = uplift / 0.9 / 9.80665;
+    detail = { sigma, sigmaPlate, span, Na, c, needMass };
+  }
+
+  return {
+    base, post: sec, N, uplift, H, M, needsFixity, concrete: model.opts.concreteClass ?? 'B20',
+    x: post.x, ...detail, ...worstOf(checks),
+  };
+}
+
+export function analysePostBases(model, posts, wallPosts, ctx) {
+  return {
+    outer: analysePostBase(model, model.posts, posts, ctx),
+    wall: analysePostBase(model, model.wallPosts, wallPosts, ctx),
+  };
+}
+
 /* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
 
 /**
@@ -569,6 +645,7 @@ export function analyse(model) {
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
   const ties = analyseTies(model, rafters, ctx);
   const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
+  const bases = analysePostBases(model, posts, wallPosts, ctx);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -590,11 +667,13 @@ export function analyse(model) {
       worst: (ties.outer.U > ties.wall.U ? ties.outer : ties.wall).worst },
     { key: 'beamTies', label: 'Прогон на столбе', U: Math.max(beamTies.outer.U, beamTies.wall.U),
       worst: (beamTies.outer.U > beamTies.wall.U ? beamTies.outer : beamTies.wall).worst },
+    { key: 'bases', label: 'База столба', U: Math.max(bases.outer.U, bases.wall.U),
+      worst: (bases.outer.U > bases.wall.U ? bases.outer : bases.wall).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
     thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
@@ -720,6 +799,24 @@ export function billOfMaterials(result) {
         cost: bolts * boltMassOne * pr.steelKg,
       });
     }
+  }
+
+  const nAllPosts = m.posts.xs.length + m.wallPosts.xs.length;
+  const pb = result.bases.outer.base;
+  if (pb.kind === 'plate') {
+    const plateMassOne = pb.plate * pb.plate * pb.t * 7.85e-6;
+    const anchors = pb.n * nAllPosts;
+    const anchorMassOne = (Math.PI / 4) * pb.d ** 2 * (pb.hef + 120) * 7.85e-6 * 1.5;
+    fasteners.push({
+      name: `Плита базы ${pb.plate}×${pb.plate}×${pb.t} мм`, count: nAllPosts,
+      note: 'приваривается на нижний торец столба', mass: nAllPosts * plateMassOne,
+      cost: nAllPosts * plateMassOne * pr.steelKg,
+    });
+    fasteners.push({
+      name: `Анкер М${pb.d}, заделка ${pb.hef} мм`, count: anchors,
+      note: `${pb.n} шт на столб, разнос ${result.bases.outer.span} мм`,
+      mass: anchors * anchorMassOne, cost: anchors * anchorMassOne * pr.steelKg,
+    });
   }
 
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);

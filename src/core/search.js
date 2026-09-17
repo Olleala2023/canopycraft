@@ -193,7 +193,7 @@ export async function searchByCost(model, opts = {}) {
     // проверки могли пройти, а огибающая — нет. Узлы при этом меряются не
     // целевым запасом, а единицей: запас внутри них уже заложен, а вместимость
     // и катет шва дискретны
-    const NODES = ['ties', 'beamTies'];
+    const NODES = ['ties', 'beamTies', 'bases'];
     const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
     const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
     if (!(elements <= target && nodes <= 1)) continue;

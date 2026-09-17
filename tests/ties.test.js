@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel } from '../src/core/model.js';
 import { analyse, billOfMaterials } from '../src/core/analysis.js';
-import { FASTENERS, fastener, shearCapacity, fitCount, spacingRules, WELD, weldLine } from '../src/core/fasteners.js';
+import {
+  FASTENERS, fastener, shearCapacity, fitCount, spacingRules, WELD, weldLine,
+  postBase, anchorSpan,
+} from '../src/core/fasteners.js';
+import { pickAll } from '../src/core/optimize.js';
 
 test('несущая способность крепежа — по табл. 20 СП 64', () => {
   // гвоздь 4 мм: изгиб 2,5·d² = 2,5·0,4² = 0,40 кН, смятие 0,35·c·d при c = 42 мм
@@ -184,4 +188,70 @@ test('узлы прогонов попадают в сводку и специф
   assert.ok(b.fasteners.some((f) => /Пластина-оголовок/.test(f.name)), 'оголовок у стены');
   const bolts = b.fasteners.find((f) => /Болт М12 класса .*узел/.test(f.name));
   assert.equal(bolts.count, 2 * defaultModel().wallPosts.xs.length);
+});
+
+/* ─────────────── база столба ─────────────── */
+
+test('база держит момент, и разнос анкеров решает', () => {
+  const m = defaultModel();
+  const two = analyse({ ...m, postBase: { id: 'plate2m12', footing: 400 } }).bases.outer;
+  const four = analyse({ ...m, postBase: { id: 'plate4m12', footing: 400 } }).bases.outer;
+
+  // момент в базе — это консольный столб: эксцентриситет плюс ветер на плече высоты
+  assert.ok(two.M > 1e6, `${(two.M / 1e6).toFixed(2)} кН·м`);
+  // два анкера с разносом 120 мм принимают весь момент парой сил
+  const span2 = anchorSpan(postBase('plate2m12'));
+  assert.equal(span2, 120);
+  assert.ok(Math.abs(two.Na - (two.uplift / 2 + two.M / span2)) < 1e-6);
+  // четыре анкера: момент делится на два анкера растянутой стороны, и разнос больше
+  assert.ok(four.Na < two.Na / 2, `${(four.Na / 1000).toFixed(1)} против ${(two.Na / 1000).toFixed(1)} кН`);
+  assert.ok(two.U > 1 && four.U < 1, `два: ${two.U.toFixed(2)}, четыре: ${four.U.toFixed(2)}`);
+  assert.equal(two.worst.name, 'Болт на растяжение');
+});
+
+test('у раскреплённого ряда момента в базе нет', () => {
+  const r = analyse(defaultModel());
+  assert.ok(r.bases.wall.M < 1, 'стеновой столб раскреплён шпильками — эпюра не даёт момента внизу');
+  assert.ok(r.bases.wall.U < r.bases.outer.U);
+});
+
+test('забетонированный столб: вес блока против отрыва и глубина заделки', () => {
+  const m = defaultModel();
+  const shallow = analyse({ ...m, postBase: { id: 'embed600', footing: 400 } }).bases.outer;
+  // блок 400×400×600 весит 230 кг, а против отрыва нужно 600 с лишним
+  assert.equal(shallow.side, 400);
+  assert.ok(Math.abs(shallow.mass - 0.4 * 0.4 * 0.6 * 2400) < 1);
+  assert.ok(shallow.U > 1);
+
+  // шире и глубже — проходит
+  const big = analyse({ ...m, postBase: { id: 'embed1200', footing: 700 } }).bases.outer;
+  assert.ok(big.U <= 1, `U = ${big.U.toFixed(2)}`);
+
+  // при схеме с защемлением требуется заделка не менее десяти размеров сечения
+  assert.equal(shallow.needEmbed, 10 * 100);
+  const pinned = defaultModel();
+  pinned.posts.muX = 1; pinned.posts.muY = 1;
+  pinned.postBase = { id: 'embed600', footing: 700 };
+  const noFix = analyse(pinned).bases.outer;
+  assert.equal(noFix.needsFixity, false);
+  assert.ok(!noFix.checks.some((c) => c.name === 'Глубина заделки'), 'шарнирной схеме заделка не нужна');
+});
+
+test('база попадает в сводку, подбор и спецификацию', () => {
+  const r = analyse(defaultModel());
+  assert.ok(r.summary.find((s) => s.key === 'bases'));
+
+  const b = billOfMaterials(r);
+  assert.ok(b.fasteners.some((f) => f.name.startsWith('Плита базы')));
+  const anchors = b.fasteners.find((f) => f.name.startsWith('Анкер'));
+  const m = defaultModel();
+  assert.equal(anchors.count, 4 * (m.posts.xs.length + m.wallPosts.xs.length));
+
+  // автоподбор выбирает базу под нагрузку
+  const windy = defaultModel();
+  windy.site.windRegion = 'VII';
+  windy.site.terrain = 'A';
+  const picked = pickAll(windy, 0.9).model;
+  assert.ok(analyse(picked).bases.outer.U <= 1);
+  assert.notEqual(picked.postBase.id, defaultModel().postBase.id, 'под сильный ветер нужна база крупнее');
 });
