@@ -2,7 +2,7 @@ import { defaultModel, spread } from '../core/model.js';
 import { analyse, billOfMaterials } from '../core/analysis.js';
 import { SECTIONS, section } from '../core/sections.js';
 import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
-import { FASTENERS, BEAM_TIES } from '../core/fasteners.js';
+import { FASTENERS, BEAM_TIES, POST_BASES, CONCRETE } from '../core/fasteners.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel } from '../core/share.js';
@@ -97,6 +97,11 @@ const CONTROLS = [
     note: 'Вниз прогон держит само опирание, торец в торец. Узел нужен против ветрового отрыва и горизонтальной силы. Катет шва не может быть больше 1,2 толщины самой тонкой стенки — на трубе 3 мм это 3,6 мм.' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
+  { k: 'postBase.id', label: 'База столба', type: 'select',
+    options: () => POST_BASES.map((b) => ({ id: b.id, label: b.label })),
+    note: 'Расчёт столба при μ = 2 или 0,7 предполагает защемление внизу — значит, база обязана воспринять момент. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
+  { k: 'postBase.footing', label: 'Подошва фундамента', type: 'range', min: 300, max: 900, step: 50, unit: 'мм',
+    note: 'Для забетонированного столба: сторона бетонного блока. Его вес — единственное, что держит навес от вырыва вверх.' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
       { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
       { id: '1', label: '1,0 — верх удержан связями от смещения' },
@@ -157,6 +162,8 @@ const CONTROLS = [
     options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
   { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
     options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
+  { k: 'opts.concreteClass', label: 'Бетон фундамента', type: 'select',
+    options: () => Object.keys(CONCRETE).map((id) => ({ id, label: `${id} — R_b ${String(CONCRETE[id].Rb).replace('.', ',')} МПа` })) },
   { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
     options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
 
@@ -384,6 +391,21 @@ function renderInspector(res) {
       if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
     }
     kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
+  } else if (el.kind === 'base') {
+    kv.push(['Сжатие', `${f2(el.N / 1000)} кН`]);
+    kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
+    kv.push(['Момент в базе', `${f2(el.M / 1e6)} кН·м`]);
+    kv.push(['Схема столба', el.needsFixity ? 'с защемлением внизу — база держит момент' : 'шарнир внизу, связи вверху']);
+    if (el.base.kind === 'embed') {
+      kv.push(['Блок бетона', `${el.side}×${el.side}×${el.base.embed} мм ≈ ${Math.round(el.mass)} кг`]);
+      kv.push(['Нужно против отрыва', `${Math.round(el.uplift / 0.9 / 9.80665)} кг`]);
+      if (el.needsFixity) kv.push(['Заделка для защемления', `не менее ${el.needEmbed} мм`]);
+    } else {
+      kv.push(['На анкер: растяжение', `${f2(el.Na / 1000)} кН`]);
+      kv.push(['Разнос анкеров', `${el.span} мм · вылет плиты ${Math.round(el.c)} мм`]);
+      kv.push(['Под плитой', `${f2(el.sigma)} МПа при R_b ${f2((CONCRETE[el.concrete] ?? CONCRETE.B20).Rb)}`]);
+      kv.push(['Масса фундамента', `не менее ${Math.round(el.needMass)} кг на столб`]);
+    }
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
@@ -404,11 +426,13 @@ const SEL_FOR = {
   posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
   ties: { type: 'tie', side: 'outer' },
   beamTies: { type: 'beamTie', side: 'outer' },
+  bases: { type: 'base', side: 'outer' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
   if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
   if (key === 'beamTies') return { type: 'beamTie', side: res.beamTies.outer.U >= res.beamTies.wall.U ? 'outer' : 'wall' };
+  if (key === 'bases') return { type: 'base', side: res.bases.outer.U >= res.bases.wall.U ? 'outer' : 'wall' };
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];

@@ -202,6 +202,36 @@ export function boltHoleBearing(V, boltD, wallThickness, blockClass) {
     `М${boltD} через стену ${wallThickness} мм`);
 }
 
+/* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
+
+/** Смятие бетона под опорной плитой при внецентренном сжатии. */
+export function concreteBearing(sigma, Rb, note) {
+  return chk('Смятие бетона под плитой', sigma, Rb, 'МПа', 'σ = N/A + M/W ≤ R_b', note);
+}
+
+/** Изгиб опорной плиты: консольный вылет за гранью столба под отпором бетона. */
+export function plateBending(sigma, Ry, note) {
+  return chk('Изгиб опорной плиты', sigma, Ry, 'МПа', 'σ = 6·M/t² ≤ R_y, M = σ_б·c²/2', note);
+}
+
+/** Вырыв конуса бетона анкером: проекция конуса под 45°. */
+export function anchorCone(N, hef, Rbt, note) {
+  const area = Math.PI * hef * hef;
+  return chk('Вырыв конуса бетона', Math.abs(N), Rbt * area, 'Н',
+    'N ≤ R_bt·π·h_ef²', note);
+}
+
+/** Заделка забетонированного столба: конструктивный минимум. */
+export function embedDepth(h, need, note) {
+  return chk('Глубина заделки', need, h, 'мм', 'h ≥ 10·h_сечения — иначе защемления нет', note);
+}
+
+/** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
+export function anchorMass(uplift, mass, note) {
+  return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',
+    'N_отр ≤ 0,9·m·g', note);
+}
+
 /* ─────────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ─────────────────── */
 
 /** Угловой шов по металлу шва, СП 16 ф. (176): τ ≤ R_wf·γ_wf·γ_c. */

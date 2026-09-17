@@ -55,6 +55,8 @@ export function defaultModel() {
     rafterTie: { id: 'nail4x50' },
     /** Узлы «прогон — столб»: наружный ряд сварной, у стены болтовой (там сосна) */
     purlinTie: { id: 'weld3' },
+    /** База столба: чем он держится за фундамент — см. core/fasteners.js */
+    postBase: { id: 'plate4m12', footing: 400 },
     wallPurlinTie: { id: 'plate12x2' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
@@ -77,6 +79,7 @@ export function defaultModel() {
       steel: { grade: 'C245', gammaC: 1.0 },
       bearingLength: 100,
       postEccentricity: 50,
+      concreteClass: 'B20',
       stockLength: 6000, // стандартная длина доски и трубы в продаже
     },
     /**
