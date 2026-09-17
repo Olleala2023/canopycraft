@@ -298,3 +298,229 @@ export function pickElement(res, sel) {
 }
 
 export { f2, esc };
+
+/* ──────────────────────── УЗЛЫ ──────────────────────── */
+
+/**
+ * Узловые чертежи: то, что распечатывают и везут на объект.
+ *
+ * Всё рисуется по числам расчёта, а не «примерно»: крепежей ровно столько,
+ * сколько посчитано, шаги между ними — расчётные, катет шва и разнос анкеров
+ * подписаны теми значениями, которые проверены.
+ */
+const RULE = 'var(--rule-2)';
+
+/** Рамка детали с заголовком и подписью-вердиктом. */
+function detailFrame(box, title, caption, U) {
+  const { x, y, w, h } = box;
+  return `<g>
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="var(--surface)" stroke="${RULE}"/>
+    <rect x="${x}" y="${y}" width="${w}" height="22" fill="var(--surface-2)" stroke="${RULE}"/>
+    <text x="${x + 9}" y="${y + 15}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.1">${esc(title)}</text>
+    <text x="${x + w - 9}" y="${y + 15}" font-size="10.5" font-family="${mono}" text-anchor="end" fill="${uColor(U)}">U ${f2(U)}</text>
+    <text x="${x + 9}" y="${y + h - 9}" font-size="10" font-family="${mono}" fill="var(--ink-3)">${esc(caption)}</text>
+  </g>`;
+}
+
+/** Рабочее поле детали: внутри рамки, без заголовка и подписи. */
+const inner = (box) => ({ x: box.x + 10, y: box.y + 28, w: box.w - 20, h: box.h - 56 });
+
+/** Узел «стропило — опора»: уголок с крепежом в расчётном количестве. */
+function nodeRafterTie(t, rafterSec, alpha, box, clip) {
+  const p = inner(box);
+  const supH = t.support.h, supW = 280, rH = rafterSec.h, rL = 300;
+  // масштаб под всё содержимое: стропило над опорой плюс место под стрелку
+  const sc = Math.min(p.w / (supW + 40), p.h / (rH + supH + 90));
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const cy = p.y + p.h - mm(supH) - 16;              // верх опоры
+  const s = [`<g clip-path="url(#${clip})">`];
+
+  s.push(`<rect x="${cx - mm(supW / 2)}" y="${cy}" width="${mm(supW)}" height="${mm(supH)}"
+    fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  s.push(`<text x="${cx + mm(supW / 2)}" y="${cy + mm(supH) + 12}" font-size="9" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">${esc(t.support.label)}</text>`);
+
+  // стропило и уголок — в одной повёрнутой системе
+  const leg = 90, legDown = 65, ax = cx + mm(12);
+  const rot = [];
+  rot.push(`<rect x="${cx - mm(rL / 2)}" y="${cy - mm(rH)}" width="${mm(rL)}" height="${mm(rH)}"
+    fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  rot.push(`<rect x="${ax}" y="${cy - mm(leg)}" width="3" height="${mm(leg)}" fill="var(--accent-2)"/>`);
+  const nails = [];
+  let left = t.need;
+  for (let r = 0; r < t.fit.rows && left > 0; r++) {
+    for (let c = 0; c < t.fit.cols && left > 0; c++, left--) {
+      nails.push([ax + 10 + mm(c * t.spacing.s1), cy - mm(leg) + mm(14 + r * t.spacing.s2)]);
+    }
+  }
+  for (const [px, py] of nails) rot.push(`<circle cx="${px}" cy="${py}" r="2.4" fill="var(--u-bad)"/>`);
+  if (t.need > t.fit.n) {
+    // нарисовано столько, сколько влезает; расчёт требует больше — это и есть отказ
+    rot.push(`<text x="${ax + 10}" y="${cy - mm(leg) - 8}" font-size="9" font-family="${mono}" fill="var(--u-bad)">нужно ${t.need}, влезает ${t.fit.n}</text>`);
+  }
+  if (nails.length > 1) {
+    rot.push(dimV(nails[0][1], nails[1][1], ax + 34, `${Math.round(t.spacing.s2)}`));
+  }
+
+  s.push(`<g transform="rotate(${-alpha} ${cx} ${cy})">${rot.join('')}</g>`);
+  s.push(`<text x="${p.x + 2}" y="${p.y + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">стропило ${esc(rafterSec.label)}, уклон ${alpha}°</text>`);
+
+  // нижняя полка уголка — по опоре
+  s.push(`<rect x="${ax}" y="${cy}" width="${mm(legDown)}" height="3" fill="var(--accent-2)"/>`);
+
+  // отрыв — справа, чтобы не спорить с подписями
+  const arrowX = p.x + p.w - 12;
+  s.push(`<g pointer-events="none">
+    <line x1="${arrowX}" y1="${p.y + 34}" x2="${arrowX}" y2="${p.y + 14}" stroke="var(--u-bad)" stroke-width="1.6"/>
+    <path d="M${arrowX - 4},${p.y + 20} L${arrowX},${p.y + 11} L${arrowX + 4},${p.y + 20} z" fill="var(--u-bad)"/>
+    <text x="${arrowX - 7}" y="${p.y + 20}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--u-bad)">отрыв ${f2(t.force / 1000)} кН</text>
+  </g>`);
+  s.push('</g>');
+  return s.join('');
+}
+
+/** Узел «прогон — столб»: сварка по контуру или пластина с болтами. */
+function nodeBeamTie(t, box, clip) {
+  const p = inner(box);
+  const postB = t.post.b, beamH = t.beam.h, beamW = 300, postShow = 150;
+  const sc = Math.min(p.w / (beamW + 60), p.h / (beamH + postShow + 60));
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const base = p.y + p.h - 14;
+  const top = base - mm(postShow);                    // оголовок столба
+  const s = [`<g clip-path="url(#${clip})">`];
+
+  s.push(`<rect x="${cx - mm(postB / 2)}" y="${top}" width="${mm(postB)}" height="${mm(postShow)}"
+    fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  s.push(`<text x="${cx}" y="${base + 11}" font-size="9" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">столб ${esc(t.post.label)}</text>`);
+
+  const plT = t.welded ? 0 : 8;
+  const beamY = top - mm(plT) - mm(beamH);
+  if (!t.welded) {
+    const pl = t.plate ?? postB + 80;
+    s.push(`<rect x="${cx - mm(pl / 2)}" y="${top - mm(plT)}" width="${mm(pl)}" height="${mm(plT)}"
+      fill="var(--accent-soft)" stroke="var(--accent-2)" stroke-width="1.2"/>`);
+  }
+  s.push(`<rect x="${cx - mm(beamW / 2)}" y="${beamY}" width="${mm(beamW)}" height="${mm(beamH)}"
+    fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  s.push(`<text x="${cx - mm(beamW / 2)}" y="${beamY - 6}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${esc(t.beam.label)}</text>`);
+
+  if (t.welded) {
+    const kf = Math.max(5, mm(t.tie.kf) * 4);
+    for (const sgn of [-1, 1]) {
+      const x = cx + sgn * mm(postB / 2);
+      s.push(`<path d="M${x},${top} L${x + sgn * kf},${top} L${x},${top - kf} z" fill="var(--u-warn)" stroke="var(--u-warn)"/>`);
+    }
+    const lx = cx + mm(postB / 2) + 8;
+    s.push(`<line x1="${lx}" y1="${top - 4}" x2="${lx + 26}" y2="${top - 22}" stroke="var(--ink-3)"/>`);
+    s.push(`<text x="${lx + 29}" y="${top - 22}" font-size="9" font-family="${mono}" fill="var(--ink-2)">k = ${t.tie.kf}</text>`);
+  } else {
+    const span = Math.max(80, (t.plate ?? postB + 80) - 80);
+    for (const sgn of [-1, 1]) {
+      const x = cx + sgn * mm(span / 2);
+      s.push(`<line x1="${x}" y1="${beamY - 5}" x2="${x}" y2="${top + 5}" stroke="var(--u-bad)" stroke-width="2"/>`);
+      s.push(`<circle cx="${x}" cy="${beamY - 7}" r="2.6" fill="var(--u-bad)"/>`);
+    }
+    s.push(dimH(cx - mm(span / 2), cx + mm(span / 2), top + 24, `${Math.round(span)}`));
+  }
+
+  const arrowX = p.x + p.w - 12;
+  s.push(`<g pointer-events="none">
+    <line x1="${arrowX}" y1="${p.y + 32}" x2="${arrowX}" y2="${p.y + 12}" stroke="var(--u-bad)" stroke-width="1.6"/>
+    <path d="M${arrowX - 4},${p.y + 18} L${arrowX},${p.y + 9} L${arrowX + 4},${p.y + 18} z" fill="var(--u-bad)"/>
+    <text x="${arrowX - 7}" y="${p.y + 18}" font-size="9.5" text-anchor="end" font-family="${mono}" fill="var(--u-bad)">отрыв ${f2(t.uplift / 1000)} кН</text>
+  </g>`);
+  s.push('</g>');
+  return s.join('');
+}
+
+/** База столба: плита с анкерами либо заделка в бетон. */
+function nodeBase(b, box, clip) {
+  const p = inner(box);
+  const isPlate = b.base.kind === 'plate';
+  const deep = isPlate ? b.base.hef + 80 : b.base.embed;
+  const wide = isPlate ? b.base.plate + 200 : b.side;
+  const postShow = 130;
+  const sc = Math.min(p.w / (wide + 70), p.h / (deep + postShow + 30));
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const ground = p.y + p.h - mm(deep) - 16;
+  const s = [`<g clip-path="url(#${clip})">`];
+
+  s.push(`<rect x="${cx - mm(wide / 2)}" y="${ground}" width="${mm(wide)}" height="${mm(deep)}"
+    fill="url(#nodeHatch)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  s.push(`<line x1="${cx - mm(wide / 2) - 10}" y1="${ground}" x2="${cx + mm(wide / 2) + 10}" y2="${ground}" stroke="var(--ink)" stroke-width="1.6"/>`);
+
+  const postTop = ground - mm(postShow);
+  if (isPlate) {
+    s.push(`<rect x="${cx - mm(b.post.b / 2)}" y="${postTop}" width="${mm(b.post.b)}" height="${mm(postShow) - mm(b.base.t)}"
+      fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
+    s.push(`<rect x="${cx - mm(b.base.plate / 2)}" y="${ground - mm(b.base.t)}" width="${mm(b.base.plate)}" height="${Math.max(3, mm(b.base.t))}"
+      fill="var(--accent-soft)" stroke="var(--accent-2)" stroke-width="1.2"/>`);
+    for (const sgn of [-1, 1]) {
+      const x = cx + sgn * mm(b.span / 2);
+      s.push(`<line x1="${x}" y1="${ground - mm(b.base.t) - 6}" x2="${x}" y2="${ground + mm(b.base.hef)}" stroke="var(--u-bad)" stroke-width="2.2"/>`);
+      s.push(`<path d="M${x},${ground + mm(b.base.hef)} L${x + sgn * mm(45)},${ground + mm(b.base.hef)}" stroke="var(--u-bad)" stroke-width="2.2" fill="none"/>`);
+    }
+    s.push(dimH(cx - mm(b.span / 2), cx + mm(b.span / 2), ground + mm(b.base.hef) + 18, `разнос ${b.span}`));
+    s.push(dimV(ground, ground + mm(b.base.hef), cx + mm(wide / 2) + 18, `${b.base.hef}`));
+  } else {
+    s.push(`<rect x="${cx - mm(b.post.b / 2)}" y="${postTop}" width="${mm(b.post.b)}" height="${mm(postShow) + mm(b.base.embed) - mm(60)}"
+      fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
+    s.push(dimV(ground, ground + mm(b.base.embed), cx + mm(wide / 2) + 18, `${b.base.embed}`));
+    s.push(dimH(cx - mm(wide / 2), cx + mm(wide / 2), ground + mm(deep) + 16, `${b.side}`));
+    s.push(`<text x="${p.x}" y="${p.y + p.h}" font-size="9" font-family="${mono}" fill="var(--u-bad)">блок ${Math.round(b.mass)} кг · нужно ${Math.round(b.uplift / 0.9 / 9.80665)} кг</text>`);
+  }
+  s.push(`<text x="${cx + mm(b.post.b / 2) + 6}" y="${postTop + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${esc(b.post.label)}</text>`);
+  s.push('</g>');
+  return s.join('');
+}
+
+export function drawNodes(res, sel) {
+  const m = res.model;
+  const alpha = m.geom.alpha;
+  const rafterSec = res.rafters[0].sec;
+  const W = 1080, H = 660, pad = { l: 16, t: 44 };
+  const bw = (W - pad.l * 2 - 2 * 18) / 3, bh = (H - pad.t - 16 - 18) / 2;
+  const clips = [];
+  const s = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Узловые чертежи">`];
+  s.push(`<defs><pattern id="nodeHatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+    <rect width="7" height="7" fill="var(--sunk)"/><line x1="0" y1="0" x2="0" y2="7" stroke="var(--ink-3)" stroke-width="1"/></pattern></defs>`);
+  s.push(`<text x="${pad.l}" y="26" font-size="10.5" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">УЗЛЫ · всё по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные</text>`);
+
+  const rows = [
+    { side: 'outer', label: 'наружный ряд', tie: res.ties.outer, beam: res.beamTies.outer, base: res.bases.outer },
+    { side: 'wall', label: 'у стены', tie: res.ties.wall, beam: res.beamTies.wall, base: res.bases.wall },
+  ];
+  rows.forEach((row, r) => {
+    const y = pad.t + r * (bh + 18);
+    const boxes = [0, 1, 2].map((c) => ({ x: pad.l + c * (bw + 18), y, w: bw, h: bh }));
+
+    const detail = (box, pick, title, caption, U, draw) => {
+      const id = `clip-${pick}-${row.side}`;
+      const p = inner(box);
+      clips.push(`<clipPath id="${id}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}"/></clipPath>`);
+      return `<g class="pickable" data-pick="${pick}" data-side="${row.side}">`
+        + detailFrame(box, title, caption, U) + draw(id)
+        + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`;
+    };
+
+    s.push(detail(boxes[0], 'tie', `1.${r + 1} СТРОПИЛО — ${row.side === 'wall' ? 'ОБВЯЗКА' : 'ПРОГОН'}`,
+      `${row.tie.need} × ${row.tie.fastener.short}${row.tie.fastener.kind === 'bolt' ? '' : ' · два уголка'}`,
+      row.tie.U, (c) => nodeRafterTie(row.tie, rafterSec, alpha, boxes[0], c)));
+
+    s.push(detail(boxes[1], 'beamTie', `2.${r + 1} ${row.side === 'wall' ? 'ОБВЯЗКА' : 'ПРОГОН'} — СТОЛБ`,
+      row.beam.welded ? `сварка по контуру, катет ${row.beam.tie.kf} мм` : `${row.beam.n} × М${row.beam.tie.d} через пластину`,
+      row.beam.U, (c) => nodeBeamTie(row.beam, boxes[1], c)));
+
+    s.push(detail(boxes[2], 'base', `3.${r + 1} БАЗА · ${row.label.toUpperCase()}`,
+      row.base.base.kind === 'plate'
+        ? `плита ${row.base.base.plate}×${row.base.base.plate}, ${row.base.base.n} × М${row.base.base.d}`
+        : `заделка ${row.base.base.embed} мм, подошва ${row.base.side} мм`,
+      row.base.U, (c) => nodeBase(row.base, boxes[2], c)));
+  });
+
+  s.splice(1, 0, `<defs>${clips.join('')}</defs>`);
+  s.push('</svg>');
+  return { svg: s.join(''), meta: null };
+}

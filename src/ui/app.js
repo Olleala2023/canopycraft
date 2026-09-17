@@ -6,7 +6,7 @@ import { FASTENERS, BEAM_TIES, POST_BASES, CONCRETE } from '../core/fasteners.js
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel } from '../core/share.js';
-import { drawPlan, drawSection, drawDiagrams, pickElement, uColor, f2 } from './views.js';
+import { drawPlan, drawSection, drawDiagrams, drawNodes, pickElement, uColor, f2 } from './views.js';
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'canopycraft.model.v2';
@@ -666,18 +666,19 @@ $('btn-cost-search').addEventListener('click', runCostSearch);
 /* ─────────────────── сцена и перетаскивание ─────────────────── */
 
 function renderCanvas(res) {
-  const draw = state.view === 'plan' ? drawPlan : state.view === 'section' ? drawSection : drawDiagrams;
-  const out = draw(res, state.sel);
+  const DRAW = { plan: drawPlan, section: drawSection, diagrams: drawDiagrams, nodes: drawNodes };
+  const out = (DRAW[state.view] ?? drawPlan)(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
   wrapForZoom();
   if (state.view === 'plan') wirePlan();
+  if (state.view === 'nodes') wireNodes();
 }
 
 /* ─────────────────── масштаб и панорама ─────────────────── */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const zoom = { plan: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 } };
+const zoom = { plan: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 }, nodes: { k: 1, tx: 0, ty: 0 } };
 const zv = () => zoom[state.view];
 
 function svgEl() { return $('canvas').querySelector('svg'); }
@@ -864,6 +865,16 @@ function onDragEnd() {
   else render(); // простой клик — только подсветить выбранный элемент
 }
 
+/** Клик по детали узла открывает этот узел в инспекторе. */
+function wireNodes() {
+  $('canvas').querySelectorAll('[data-pick]').forEach((g) => {
+    g.addEventListener('pointerdown', () => {
+      state.sel = { type: g.getAttribute('data-pick'), side: g.getAttribute('data-side') };
+      render();
+    });
+  });
+}
+
 function wirePlan() {
   const svg = $('canvas').querySelector('svg');
   svg.querySelectorAll('[data-pick]').forEach((g) => {
@@ -1046,16 +1057,19 @@ function render(hint) {
     : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
-  $('hint').textContent = hintText;
+  $('hint').textContent = state.view === 'nodes'
+    ? 'Чертежи собраны по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные · клик по детали открывает её проверки справа · меняйте исполнение узлов в блоке «Элементы»'
+    : hintText;
   save();
 }
 
 /* ─────────────────── события шапки ─────────────────── */
 
-for (const [id, view] of [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams']]) {
+const TABS = [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams'], ['tab-nodes', 'nodes']];
+for (const [id, view] of TABS) {
   $(id).addEventListener('click', () => {
     state.view = view;
-    for (const t of ['tab-plan', 'tab-section', 'tab-diagrams']) $(t).setAttribute('aria-pressed', String(t === id));
+    for (const [t] of TABS) $(t).setAttribute('aria-pressed', String(t === id));
     render();
   });
 }
