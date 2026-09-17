@@ -374,7 +374,7 @@ function analyseBeamTie(model, tieId, beam, posts) {
     } else {
       checks.push(steelHoleBearing(Vb, tie.d, beamSec.t ?? 3, beamMat, `болт М${tie.d} в стенку ${beamSec.t} мм`));
     }
-    detail = { ...detail, n, Nb, Vb };
+    detail = { ...detail, n, Nb, Vb, plate: Math.max(160, (postSec.b ?? 100) + 80) };
   }
   return {
     tie, welded, fallback, uplift, H, Mecc, post: postSec, beam: beamSec, x: post.x,
@@ -785,7 +785,7 @@ export function billOfMaterials(result) {
         note: `${Math.round(bt.weldLength)} мм по контуру, катет ${bt.tie.kf} мм`, mass: 0, cost: 0,
       });
     } else {
-      const plate = (bt.post.b ?? 100) + 60;
+      const plate = Math.max(160, (bt.post.b ?? 100) + 80);
       const plateMassOne = plate * plate * 8 * 7.85e-6;
       const bolts = bt.tie.n * n;
       const boltMassOne = (Math.PI / 4) * bt.tie.d ** 2 * 120 * 7.85e-6 * 1.6;
