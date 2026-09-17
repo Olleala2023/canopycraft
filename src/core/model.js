@@ -51,6 +51,8 @@ export function defaultModel() {
       muY: 2.0,
     },
     purlin: { sectionId: 's80x140x4' },
+    /** Крепление стропила к опоре от ветрового отрыва — см. core/fasteners.js */
+    rafterTie: { id: 'nail4x50' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
       xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
@@ -84,6 +86,7 @@ export function defaultModel() {
       steelKg: 120,      // ₽ за кг профильной трубы
       roofingM2: 600,    // ₽ за м² покрытия
       fastenerPc: 150,   // ₽ за комплект шпилька + пластина + гайки
+      anglePc: 60,       // ₽ за перфорированный уголок крепления стропила
       currency: '₽',
     },
   };

@@ -2,6 +2,7 @@ import { defaultModel, spread } from '../core/model.js';
 import { analyse, billOfMaterials } from '../core/analysis.js';
 import { SECTIONS, section } from '../core/sections.js';
 import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
+import { FASTENERS } from '../core/fasteners.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel } from '../core/share.js';
@@ -88,6 +89,9 @@ const CONTROLS = [
   { k: 'battens.sectionId', label: 'Обрешётка', type: 'select', options: anyOpts, pick: 'battens' },
   { k: 'battens.spacing', label: 'Шаг обрешётки', type: 'range', min: 200, max: 1200, step: 50, unit: 'мм' },
   { k: 'purlin.sectionId', label: 'Прогон наружный', type: 'select', options: anyOpts, pick: 'purlin' },
+  { k: 'rafterTie.id', label: 'Крепление стропила к опоре', type: 'select',
+    options: () => FASTENERS.map((f) => ({ id: f.id, label: f.label })),
+    note: 'Ветер поднимает лёгкую кровлю, и стропило висит на крепеже. Уголок нужен затем, чтобы усилие пришло на крепёж срезом: на выдёргивание гвозди и саморезы в несущих узлах не работают. Число крепежей считается, проверяется — помещается ли оно по правилам расстановки.' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
@@ -155,6 +159,7 @@ const CONTROLS = [
   { k: 'prices.steelKg', label: 'Профильная труба, ₽/кг', type: 'number', min: 0, step: 5 },
   { k: 'prices.roofingM2', label: 'Кровля, ₽/м²', type: 'number', min: 0, step: 50 },
   { k: 'prices.fastenerPc', label: 'Комплект шпилька+пластина, ₽/шт', type: 'number', min: 0, step: 10 },
+  { k: 'prices.anglePc', label: 'Уголок крепёжный, ₽/шт', type: 'number', min: 0, step: 10 },
 ];
 
 const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
@@ -347,6 +352,16 @@ function renderInspector(res) {
       kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
       kv.push(['По шпилькам снизу вверх', el.bolts.forces.map((f) => f2(f / 1000)).join(' / ') + ' кН']);
     }
+  } else if (el.kind === 'tie') {
+    kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
+    if (el.along > 0) kv.push(['Скатная составляющая', `${f2(el.along / 1000)} кН`]);
+    kv.push(['На узел', `${f2(el.force / 1000)} кН`]);
+    kv.push(['Крепёж', `${el.need} × ${el.fastener.short}`]);
+    kv.push(['Несущая одного', `${f2(el.T / 1000)} кН · ${el.governs}`]);
+    kv.push(['Защемление в древесине', `${Math.round(el.penetration)} мм`]);
+    kv.push(['Помещается в узле', `${el.fit.n} шт · сетка ${el.fit.cols}×${el.fit.rows}`]);
+    kv.push(['Шаги S1 / S2 / S3', `${Math.round(el.spacing.s1)} / ${Math.round(el.spacing.s2)} / ${Math.round(el.spacing.s3)} мм`]);
+    kv.push(['Опора', `${el.support.label} · ${el.support.material === 'steel' ? 'сталь' : 'сосна'}`]);
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
@@ -365,9 +380,11 @@ const SEL_FOR = {
   battens: { type: 'battens' }, rafters: { type: 'rafter', index: 0 },
   purlin: { type: 'purlin' }, wallPurlin: { type: 'wallPurlin' },
   posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
+  ties: { type: 'tie', side: 'outer' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
+  if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];
@@ -866,6 +883,7 @@ function buildReport(res) {
     <h2>1. Исходные данные</h2>
     <table>
       <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
+      <tr><td>Крепление стропил</td><td>${res.ties.outer.need} × ${res.ties.outer.fastener.short} у прогона, ${res.ties.wall.need} × ${res.ties.wall.fastener.short} у обвязки; шаги S1 ${Math.round(res.ties.outer.spacing.s1)}, S2 ${Math.round(res.ties.outer.spacing.s2)}, S3 ${Math.round(res.ties.outer.spacing.s3)} мм</td></tr>
       <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.muX}/${m.posts.muY}, стеновых ${wp.muX}/${wp.muY} (поперёк/вдоль ряда)</td></tr>
       <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>

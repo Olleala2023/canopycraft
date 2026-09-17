@@ -279,6 +279,11 @@ export function pickElement(res, sel) {
     const p = res.posts[sel.index] ?? res.posts[0];
     return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
+  if (sel.type === 'tie') {
+    const t = res.ties[sel.side ?? 'outer'];
+    return t && { ...t, kind: 'tie', sec: t.fastener,
+      title: sel.side === 'wall' ? 'УЗЕЛ: СТРОПИЛО — ОБВЯЗКА' : 'УЗЕЛ: СТРОПИЛО — ПРОГОН' };
+  }
   return null;
 }
 
