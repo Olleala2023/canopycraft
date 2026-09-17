@@ -1237,6 +1237,38 @@ function boltHoleBearing(V, boltD, wallThickness, blockClass) {
     `М${boltD} через стену ${wallThickness} мм`);
 }
 
+/* ─────────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ─────────────────── */
+
+/** Угловой шов по металлу шва, СП 16 ф. (176): τ ≤ R_wf·γ_wf·γ_c. */
+function weldMetal(tau, Rwf, note) {
+  return chk('Шов по металлу шва', tau, Rwf, 'МПа', 'τ = N/(β_f·k_f·l_ш) ≤ R_wf·γ_wf·γ_c', note);
+}
+
+/** Угловой шов по металлу границы сплавления, R_wz = 0,45·R_un. */
+function weldFusion(tau, Run, note) {
+  return chk('Шов по границе сплавления', tau, 0.45 * Run, 'МПа',
+    'τ = N/(β_z·k_f·l_ш) ≤ R_wz·γ_wz·γ_c', note);
+}
+
+/** Катет шва: не меньше минимального по табл. 38 и не больше 1,2·t тонкого элемента. */
+function weldLeg(kf, kfMin, kfMax, note) {
+  const value = kf < kfMin ? kfMin / kf : kf / kfMax;
+  return chk('Катет шва', value, 1, '',
+    `${kfMin} ≤ k_f ≤ 1,2·t_min = ${kfMax.toFixed(1).replace(".", ",")} мм`, note);
+}
+
+/** Растяжение болта, СП 16 ф. (188): N ≤ R_bt·A_bn. */
+function boltTension(N, Rbt, Abn, note) {
+  return chk('Болт на растяжение', Math.abs(N), Rbt * Abn, 'Н', 'N ≤ R_bt·A_bn', note);
+}
+
+/** Смятие древесины поперёк волокон под шайбой. */
+function timberWasherBearing(N, side, boltD, mat, note) {
+  const area = side * side - (Math.PI * boltD * boltD) / 4;
+  return chk('Смятие древесины под шайбой', Math.abs(N) / area, mat.Rcm90, 'МПа',
+    'σ = N/A_шайбы ≤ R_см90', note);
+}
+
 /* ─────────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ─────────────────── */
 
 /**
@@ -1395,6 +1427,70 @@ function fastenerMass(f) {
 /** Масса одного перфорированного уголка 90×90×65×2, кг. */
 const ANGLE_MASS = (90 * 65 + 90 * 65) * ANGLE_PLATE * 7850e-9;
 
+/* ─────────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ─────────────────── */
+
+/**
+ * Прогон опирается на оголовок столба. Вертикальную нагрузку вниз держит
+ * само опирание — торец в торец, узел для этого не нужен. Узел держит то,
+ * что пытается прогон с этого оголовка снять: ветровой отрыв, горизонтальную
+ * силу и момент от эксцентриситета опирания.
+ *
+ * Два исполнения:
+ *   сварка   — угловые швы по контуру оголовка (только для стального прогона);
+ *   пластина — оголовок с приваренной пластиной, прогон на болтах.
+ */
+const BEAM_TIES = [
+  { id: 'weld3', label: 'сварка по контуру, катет 3 мм', short: 'шов k=3', kind: 'weld', kf: 3 },
+  { id: 'weld4', label: 'сварка по контуру, катет 4 мм', short: 'шов k=4', kind: 'weld', kf: 4 },
+  { id: 'weld5', label: 'сварка по контуру, катет 5 мм', short: 'шов k=5', kind: 'weld', kf: 5 },
+  { id: 'weld6', label: 'сварка по контуру, катет 6 мм', short: 'шов k=6', kind: 'weld', kf: 6 },
+  { id: 'plate10x2', label: 'пластина-оголовок + 2 болта М10', short: '2 × М10', kind: 'plate', d: 10, n: 2, grade: '5.8' },
+  { id: 'plate10x4', label: 'пластина-оголовок + 4 болта М10', short: '4 × М10', kind: 'plate', d: 10, n: 4, grade: '5.8' },
+  { id: 'plate12x2', label: 'пластина-оголовок + 2 болта М12', short: '2 × М12', kind: 'plate', d: 12, n: 2, grade: '5.8' },
+  { id: 'plate12x4', label: 'пластина-оголовок + 4 болта М12', short: '4 × М12', kind: 'plate', d: 12, n: 4, grade: '5.8' },
+];
+
+const BEAM_TIE_BY_ID = new Map(BEAM_TIES.map((t) => [t.id, t]));
+
+function beamTie(id) {
+  const t = BEAM_TIE_BY_ID.get(id);
+  if (!t) throw new Error(`Неизвестный узел: ${id}`);
+  return t;
+}
+
+/**
+ * Угловой шов, СП 16 п. 14.1.7. Ручная сварка электродами Э46 или
+ * полуавтоматическая проволокой ≤ 1,4 мм: β_f = 0,7, β_z = 1,0.
+ */
+const WELD = { Rwf: 200, betaF: 0.7, betaZ: 1.0, gapEnd: 10 };
+
+/**
+ * Геометрия шва по контуру прямоугольного профиля: расчётная длина и момент
+ * сопротивления линии шва. С каждого из четырёх швов снимается по 10 мм на
+ * непровар в начале и конце.
+ * @param {number} b ширина профиля, мм
+ * @param {number} h высота профиля в плоскости изгиба, мм
+ */
+function weldLine(b, h) {
+  const length = Math.max(1, 2 * (b + h) - 4 * WELD.gapEnd);
+  return { length, W: b * h + (h * h) / 3 };
+}
+
+/** Наименьший допустимый катет шва по табл. 38 СП 16, мм. */
+function weldMinLeg(tMax) {
+  if (tMax <= 4) return 3;
+  if (tMax <= 5) return 4;
+  if (tMax <= 10) return 5;
+  return 6;
+}
+
+/** Расчётные сопротивления болтов растяжению, МПа (СП 16, табл. Д.5). */
+const BOLT_RT = { '4.8': 160, '5.8': 200, '8.8': 400 };
+/** Площадь нетто по резьбе, мм² (ГОСТ 24379). */
+const BOLT_AN = { 10: 52.3, 12: 76.2, 16: 144, 20: 225, 24: 324 };
+/** Сторона квадратной шайбы-пластины под болт, мм. */
+const WASHER_SIDE = { 10: 40, 12: 50, 16: 60 };
+
 /* ── src/core/model.js ── */
 /** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
 
@@ -1450,6 +1546,9 @@ function defaultModel() {
     purlin: { sectionId: 's80x140x4' },
     /** Крепление стропила к опоре от ветрового отрыва — см. core/fasteners.js */
     rafterTie: { id: 'nail4x50' },
+    /** Узлы «прогон — столб»: наружный ряд сварной, у стены болтовой (там сосна) */
+    purlinTie: { id: 'weld3' },
+    wallPurlinTie: { id: 'plate12x2' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
       xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
@@ -1929,6 +2028,90 @@ function analyseTies(model, rafters, ctx) {
   };
 }
 
+/* ──────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ──────────────── */
+
+/**
+ * Прогон опирается на оголовок столба. Вертикальную нагрузку вниз держит само
+ * опирание, торец в торец, — узел для неё не нужен. Узел держит то, что
+ * пытается снять прогон с оголовка: ветровой отрыв и горизонтальную силу.
+ *
+ * Сварной узел жёсткий, поэтому в шов идёт ещё и момент от эксцентриситета
+ * опирания. Болтовой в один ряд принимается шарнирным: момент там
+ * воспринимается смятием площадки опирания, а болты держат отрыв и сдвиг.
+ */
+function analyseBeamTie(model, tieId, beam, posts) {
+  let tie = beamTie(tieId);
+  const postSec = posts[0].sec;
+  const mat = posts[0].mat;
+  const beamSec = beam.sec;
+  const beamMat = beam.mat;
+
+  // худший столб ряда: по отрыву, а при равном отрыве — по горизонтальной силе
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Hpost > a.Hpost) ? p : a));
+  const uplift = Math.max(0, post.Nup);
+  const H = Math.abs(post.Hpost);
+  const Mecc = Math.abs(post.N * model.opts.postEccentricity);
+
+  const checks = [];
+  let welded = tie.kind === 'weld';
+  let fallback = null;
+  if (welded && beamSec.material !== 'steel') {
+    // к деревянной обвязке не приварить — считаем болтовой узел
+    fallback = `${beamSec.label} — сосна, сварка невозможна: принят болтовой узел`;
+    tie = beamTie('plate12x2');
+    welded = false;
+  }
+
+  let detail = {};
+  if (welded) {
+    const line = weldLine(postSec.b, postSec.h);
+    const Aw = WELD.betaF * tie.kf * line.length;
+    const Az = WELD.betaZ * tie.kf * line.length;
+    const Wf = WELD.betaF * tie.kf * line.W;
+    const Wz = WELD.betaZ * tie.kf * line.W;
+    const tauF = Math.hypot(uplift / Aw + Mecc / Wf, H / Aw);
+    const tauZ = Math.hypot(uplift / Az + Mecc / Wz, H / Az);
+    const tMin = Math.min(postSec.t ?? 3, beamSec.t ?? 3);
+    const kfMin = weldMinLeg(Math.max(postSec.t ?? 3, beamSec.t ?? 3));
+    const note = `шов ${Math.round(line.length)} мм по контуру ${postSec.label}`;
+    checks.push(weldMetal(tauF, WELD.Rwf, note));
+    checks.push(weldFusion(tauZ, mat.Run, note));
+    checks.push(weldLeg(tie.kf, kfMin, 1.2 * tMin, `стенки ${postSec.t} и ${beamSec.t ?? '—'} мм`));
+    detail = { weldLength: line.length, tauF, tauZ, kfMin, kfMax: 1.2 * tMin };
+  } else {
+    const n = tie.n;
+    const Nb = uplift / n;
+    const Vb = H / n;
+    const note = `${n} × М${tie.d} класса ${tie.grade}`;
+    checks.push(boltTension(Nb, BOLT_RT[tie.grade], BOLT_AN[tie.d], note));
+    checks.push(boltShear(Vb, tie.d, tie.grade));
+    if (beamSec.material === 'timber') {
+      const side = WASHER_SIDE[tie.d] ?? 40;
+      checks.push(timberWasherBearing(Nb, side, tie.d, beamMat, `шайба ${side}×${side} мм`));
+      // горизонтальная сила передаётся болтом как нагелем в древесине
+      const cap = shearCapacity({ ...tie, kind: 'bolt', len: 0 }, { woodWidth: beamSec.b, mv: beamMat.mv ?? 1 });
+      const dowel = tieShear(H, n, cap.T, `T = ${(cap.T / 1000).toFixed(2).replace('.', ',')} кН · ${cap.governs}`);
+      dowel.name = 'Болт как нагель в брусе';
+      checks.push(dowel);
+      detail = { washer: side, dowelT: cap.T };
+    } else {
+      checks.push(steelHoleBearing(Vb, tie.d, beamSec.t ?? 3, beamMat, `болт М${tie.d} в стенку ${beamSec.t} мм`));
+    }
+    detail = { ...detail, n, Nb, Vb };
+  }
+  return {
+    tie, welded, fallback, uplift, H, Mecc, post: postSec, beam: beamSec, x: post.x,
+    ...detail, ...worstOf(checks),
+  };
+}
+
+function analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts) {
+  return {
+    outer: analyseBeamTie(model, model.purlinTie.id, purlin, posts),
+    wall: analyseBeamTie(model, model.wallPurlinTie.id, wallPurlin, wallPosts),
+  };
+}
+
 /* ───────────────────────── СТОЛБЫ ───────────────────────── */
 
 /**
@@ -2110,6 +2293,7 @@ function analyse(model) {
   const posts = analysePostRow(model, model.posts, purlin, ctx, sl.outer.extra);
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
   const ties = analyseTies(model, rafters, ctx);
+  const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -2129,11 +2313,13 @@ function analyse(model) {
     { key: 'wallPosts', label: 'Столбы у стены', U: Math.max(...wallPosts.map((p) => p.U)), worst: rowWorst(wallPosts).worst },
     { key: 'ties', label: 'Крепление стропил', U: Math.max(ties.outer.U, ties.wall.U),
       worst: (ties.outer.U > ties.wall.U ? ties.outer : ties.wall).worst },
+    { key: 'beamTies', label: 'Прогон на столбе', U: Math.max(beamTies.outer.U, beamTies.wall.U),
+      worst: (beamTies.outer.U > beamTies.wall.U ? beamTies.outer : beamTies.wall).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, foundation,
     thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
@@ -2234,6 +2420,33 @@ function billOfMaterials(result) {
     });
   }
 
+  for (const [side, bt, row] of [
+    ['наружного ряда', result.beamTies.outer, m.posts],
+    ['у стены', result.beamTies.wall, m.wallPosts],
+  ]) {
+    const n = row.xs.length;
+    if (bt.welded) {
+      fasteners.push({
+        name: `Сварной шов оголовка ${side}`, count: n,
+        note: `${Math.round(bt.weldLength)} мм по контуру, катет ${bt.tie.kf} мм`, mass: 0, cost: 0,
+      });
+    } else {
+      const plate = (bt.post.b ?? 100) + 60;
+      const plateMassOne = plate * plate * 8 * 7.85e-6;
+      const bolts = bt.tie.n * n;
+      const boltMassOne = (Math.PI / 4) * bt.tie.d ** 2 * 120 * 7.85e-6 * 1.6;
+      fasteners.push({
+        name: `Пластина-оголовок ${plate}×${plate}×8 мм, ${side}`, count: n,
+        note: 'приваривается на торец столба', mass: n * plateMassOne, cost: n * plateMassOne * pr.steelKg,
+      });
+      fasteners.push({
+        name: `Болт М${bt.tie.d} класса ${bt.tie.grade}, узел ${side}`, count: bolts,
+        note: `${bt.tie.n} шт на столб, с гайкой и шайбами`, mass: bolts * boltMassOne,
+        cost: bolts * boltMassOne * pr.steelKg,
+      });
+    }
+  }
+
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
   const byName = (n) => items.find((i) => i.name === n)?.mass ?? 0;
   // всё, что висит над головой (без столбов) — это и есть постоянная нагрузка на кровлю
@@ -2304,6 +2517,7 @@ function billOfMaterials(result) {
 
 
 
+
 const PATH = {
   rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
   battens: (m, id) => ({ ...m, battens: { ...m.battens, sectionId: id } }),
@@ -2357,6 +2571,43 @@ function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
   return null;
 }
 
+/**
+ * Подобрать узлы: крепление стропил и оба узла «прогон — столб».
+ *
+ * Каталоги упорядочены от простого и дешёвого к сложному (гвозди → саморезы →
+ * болты; тонкий шов → толстый → пластина с болтами), поэтому первое
+ * проходящее исполнение и есть то, которое стоит делать.
+ *
+ * Порог здесь 1,0, а не общий целевой запас: внутри узла запас уже заложен —
+ * число крепежей подбирается с коэффициентом 0,85, — а вместимость узла и
+ * катет шва величины дискретные, половины болта не бывает.
+ */
+function pickTies(model, target = 1) {
+  let m = model;
+  const log = [];
+  // сначала ищем исполнение с запасом, и только если такого нет — впритык:
+  // узел, набитый до последнего гвоздя, не прощает ни одной ошибки монтажа
+  const tryAll = (key, list, U) => {
+    for (const limit of [0.9 * target, target]) {
+      for (const t of list) {
+        const next = { ...m, [key]: { ...m[key], id: t.id } };
+        let u;
+        try { u = U(analyse(next)); } catch { continue; }
+        if (u <= limit) { m = next; log.push({ key, label: t.label, U: u }); return; }
+      }
+    }
+    log.push({ key, label: null, U: null });
+  };
+  // к деревянной балке не приварить — сварные исполнения для неё не предлагаем
+  const forBeam = (key) => (section(m[key].sectionId).material === 'steel'
+    ? BEAM_TIES
+    : BEAM_TIES.filter((t) => t.kind !== 'weld'));
+  tryAll('rafterTie', FASTENERS, (r) => Math.max(r.ties.outer.U, r.ties.wall.U));
+  tryAll('purlinTie', forBeam('purlin'), (r) => r.beamTies.outer.U);
+  tryAll('wallPurlinTie', forBeam('wallPurlin'), (r) => r.beamTies.wall.U);
+  return { model: m, log };
+}
+
 /** Подобрать все элементы подряд, снизу вверх по цепочке. */
 function pickAll(model, target = 0.9) {
   let m = model;
@@ -2370,7 +2621,9 @@ function pickAll(model, target = 0.9) {
       log.push({ key, label: null, U: null });
     }
   }
-  return { model: m, log };
+  // узлы подбираются последними: они зависят от того, какие сечения выбраны
+  const ties = pickTies(m);
+  return { model: ties.model, log: [...log, ...ties.log] };
 }
 
 /* ── src/core/search.js ── */
@@ -2392,6 +2645,7 @@ function pickAll(model, target = 0.9) {
  * упорядочен и по цене: первое прошедшее сечение при переборе снизу и есть
  * самое дешёвое.
  */
+
 
 
 
@@ -2559,10 +2813,19 @@ async function searchByCost(model, opts = {}) {
     m.wallPosts.sectionId = wall.post;
     m.wallPurlin.sectionId = wall.beam;
 
-    const res = analyse(m);
-    // сборка из независимо подобранных рядов проверяется целиком:
-    // отдельные проверки могли пройти, а огибающая — нет
-    if (!(res.maxU <= target)) continue;
+    // узлы подбираются под уже выбранные сечения: катет шва ограничен толщиной
+    // стенки, и на тонкой трубе сварной узел может оказаться неисполнимым
+    const withTies = pickTies(m).model;
+    const res = analyse(withTies);
+    // сборка из независимо подобранных рядов проверяется целиком: отдельные
+    // проверки могли пройти, а огибающая — нет. Узлы при этом меряются не
+    // целевым запасом, а единицей: запас внутри них уже заложен, а вместимость
+    // и катет шва дискретны
+    const NODES = ['ties', 'beamTies'];
+    const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
+    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
+    if (!(elements <= target && nodes <= 1)) continue;
+    Object.assign(m, withTies);
     const bom = billOfMaterials(res);
     options.push({ model: m, cost: bom.costs.total, res, bom });
   }
@@ -2866,6 +3129,11 @@ function pickElement(res, sel) {
     const p = res.posts[sel.index] ?? res.posts[0];
     return p && { ...p, title: `СТОЛБ ${(sel.index ?? 0) + 1}`, kind: 'post', res: { uls: p.diagram, sls: p.diagram } };
   }
+  if (sel.type === 'beamTie') {
+    const t = res.beamTies[sel.side ?? 'outer'];
+    return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
+      title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
+  }
   if (sel.type === 'tie') {
     const t = res.ties[sel.side ?? 'outer'];
     return t && { ...t, kind: 'tie', sec: t.fastener,
@@ -2969,6 +3237,9 @@ const CONTROLS = [
   { k: 'rafterTie.id', label: 'Крепление стропила к опоре', type: 'select',
     options: () => FASTENERS.map((f) => ({ id: f.id, label: f.label })),
     note: 'Ветер поднимает лёгкую кровлю, и стропило висит на крепеже. Уголок нужен затем, чтобы усилие пришло на крепёж срезом: на выдёргивание гвозди и саморезы в несущих узлах не работают. Число крепежей считается, проверяется — помещается ли оно по правилам расстановки.' },
+  { k: 'purlinTie.id', label: 'Узел «прогон — столб»', type: 'select',
+    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
+    note: 'Вниз прогон держит само опирание, торец в торец. Узел нужен против ветрового отрыва и горизонтальной силы. Катет шва не может быть больше 1,2 толщины самой тонкой стенки — на трубе 3 мм это 3,6 мм.' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
@@ -2984,6 +3255,9 @@ const CONTROLS = [
 
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
+  { k: 'wallPurlinTie.id', label: 'Узел «обвязка — столб»', type: 'select',
+    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
+    note: 'К деревянной обвязке не приварить: если выбрана сварка, расчёт всё равно считает болтовой узел и пишет об этом.' },
   { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
   { k: 'wallPosts.muX', label: 'μ поперёк ряда (от стены)', type: 'select', numeric: true, options: () => [
@@ -3239,6 +3513,22 @@ function renderInspector(res) {
     kv.push(['Помещается в узле', `${el.fit.n} шт · сетка ${el.fit.cols}×${el.fit.rows}`]);
     kv.push(['Шаги S1 / S2 / S3', `${Math.round(el.spacing.s1)} / ${Math.round(el.spacing.s2)} / ${Math.round(el.spacing.s3)} мм`]);
     kv.push(['Опора', `${el.support.label} · ${el.support.material === 'steel' ? 'сталь' : 'сосна'}`]);
+  } else if (el.kind === 'beamTie') {
+    if (el.fallback) kv.push(['Исполнение', el.fallback]);
+    kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
+    kv.push(['Горизонтальная сила', `${f2(el.H / 1000)} кН`]);
+    if (el.welded) {
+      kv.push(['Момент от эксцентриситета', `${f2(el.Mecc / 1e6)} кН·м`]);
+      kv.push(['Длина шва по контуру', `${Math.round(el.weldLength)} мм`]);
+      kv.push(['Катет', `${el.tie.kf} мм · допустимо ${el.kfMin}…${f2(el.kfMax)} мм`]);
+      kv.push(['Напряжение в шве', `${f2(el.tauF)} / ${f2(el.tauZ)} МПа`]);
+    } else {
+      kv.push(['Болтов на столб', `${el.n} × М${el.tie.d} класса ${el.tie.grade}`]);
+      kv.push(['На болт: растяжение', `${f2(el.Nb / 1000)} кН`]);
+      kv.push(['На болт: срез', `${f2(el.Vb / 1000)} кН`]);
+      if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
+    }
+    kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
@@ -3258,10 +3548,12 @@ const SEL_FOR = {
   purlin: { type: 'purlin' }, wallPurlin: { type: 'wallPurlin' },
   posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
   ties: { type: 'tie', side: 'outer' },
+  beamTies: { type: 'beamTie', side: 'outer' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
   if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
+  if (key === 'beamTies') return { type: 'beamTie', side: res.beamTies.outer.U >= res.beamTies.wall.U ? 'outer' : 'wall' };
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];

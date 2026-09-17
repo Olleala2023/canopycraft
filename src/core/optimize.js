@@ -2,6 +2,7 @@
 import { ladder, section } from './sections.js';
 import { analyse } from './analysis.js';
 import { spread } from './model.js';
+import { FASTENERS, BEAM_TIES } from './fasteners.js';
 
 const PATH = {
   rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
@@ -56,6 +57,43 @@ export function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
   return null;
 }
 
+/**
+ * Подобрать узлы: крепление стропил и оба узла «прогон — столб».
+ *
+ * Каталоги упорядочены от простого и дешёвого к сложному (гвозди → саморезы →
+ * болты; тонкий шов → толстый → пластина с болтами), поэтому первое
+ * проходящее исполнение и есть то, которое стоит делать.
+ *
+ * Порог здесь 1,0, а не общий целевой запас: внутри узла запас уже заложен —
+ * число крепежей подбирается с коэффициентом 0,85, — а вместимость узла и
+ * катет шва величины дискретные, половины болта не бывает.
+ */
+export function pickTies(model, target = 1) {
+  let m = model;
+  const log = [];
+  // сначала ищем исполнение с запасом, и только если такого нет — впритык:
+  // узел, набитый до последнего гвоздя, не прощает ни одной ошибки монтажа
+  const tryAll = (key, list, U) => {
+    for (const limit of [0.9 * target, target]) {
+      for (const t of list) {
+        const next = { ...m, [key]: { ...m[key], id: t.id } };
+        let u;
+        try { u = U(analyse(next)); } catch { continue; }
+        if (u <= limit) { m = next; log.push({ key, label: t.label, U: u }); return; }
+      }
+    }
+    log.push({ key, label: null, U: null });
+  };
+  // к деревянной балке не приварить — сварные исполнения для неё не предлагаем
+  const forBeam = (key) => (section(m[key].sectionId).material === 'steel'
+    ? BEAM_TIES
+    : BEAM_TIES.filter((t) => t.kind !== 'weld'));
+  tryAll('rafterTie', FASTENERS, (r) => Math.max(r.ties.outer.U, r.ties.wall.U));
+  tryAll('purlinTie', forBeam('purlin'), (r) => r.beamTies.outer.U);
+  tryAll('wallPurlinTie', forBeam('wallPurlin'), (r) => r.beamTies.wall.U);
+  return { model: m, log };
+}
+
 /** Подобрать все элементы подряд, снизу вверх по цепочке. */
 export function pickAll(model, target = 0.9) {
   let m = model;
@@ -69,5 +107,7 @@ export function pickAll(model, target = 0.9) {
       log.push({ key, label: null, U: null });
     }
   }
-  return { model: m, log };
+  // узлы подбираются последними: они зависят от того, какие сечения выбраны
+  const ties = pickTies(m);
+  return { model: ties.model, log: [...log, ...ties.log] };
 }

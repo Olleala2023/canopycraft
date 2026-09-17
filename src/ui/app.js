@@ -2,7 +2,7 @@ import { defaultModel, spread } from '../core/model.js';
 import { analyse, billOfMaterials } from '../core/analysis.js';
 import { SECTIONS, section } from '../core/sections.js';
 import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
-import { FASTENERS } from '../core/fasteners.js';
+import { FASTENERS, BEAM_TIES } from '../core/fasteners.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel } from '../core/share.js';
@@ -92,6 +92,9 @@ const CONTROLS = [
   { k: 'rafterTie.id', label: 'Крепление стропила к опоре', type: 'select',
     options: () => FASTENERS.map((f) => ({ id: f.id, label: f.label })),
     note: 'Ветер поднимает лёгкую кровлю, и стропило висит на крепеже. Уголок нужен затем, чтобы усилие пришло на крепёж срезом: на выдёргивание гвозди и саморезы в несущих узлах не работают. Число крепежей считается, проверяется — помещается ли оно по правилам расстановки.' },
+  { k: 'purlinTie.id', label: 'Узел «прогон — столб»', type: 'select',
+    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
+    note: 'Вниз прогон держит само опирание, торец в торец. Узел нужен против ветрового отрыва и горизонтальной силы. Катет шва не может быть больше 1,2 толщины самой тонкой стенки — на трубе 3 мм это 3,6 мм.' },
   { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
@@ -107,6 +110,9 @@ const CONTROLS = [
 
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
+  { k: 'wallPurlinTie.id', label: 'Узел «обвязка — столб»', type: 'select',
+    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
+    note: 'К деревянной обвязке не приварить: если выбрана сварка, расчёт всё равно считает болтовой узел и пишет об этом.' },
   { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
   { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
   { k: 'wallPosts.muX', label: 'μ поперёк ряда (от стены)', type: 'select', numeric: true, options: () => [
@@ -362,6 +368,22 @@ function renderInspector(res) {
     kv.push(['Помещается в узле', `${el.fit.n} шт · сетка ${el.fit.cols}×${el.fit.rows}`]);
     kv.push(['Шаги S1 / S2 / S3', `${Math.round(el.spacing.s1)} / ${Math.round(el.spacing.s2)} / ${Math.round(el.spacing.s3)} мм`]);
     kv.push(['Опора', `${el.support.label} · ${el.support.material === 'steel' ? 'сталь' : 'сосна'}`]);
+  } else if (el.kind === 'beamTie') {
+    if (el.fallback) kv.push(['Исполнение', el.fallback]);
+    kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
+    kv.push(['Горизонтальная сила', `${f2(el.H / 1000)} кН`]);
+    if (el.welded) {
+      kv.push(['Момент от эксцентриситета', `${f2(el.Mecc / 1e6)} кН·м`]);
+      kv.push(['Длина шва по контуру', `${Math.round(el.weldLength)} мм`]);
+      kv.push(['Катет', `${el.tie.kf} мм · допустимо ${el.kfMin}…${f2(el.kfMax)} мм`]);
+      kv.push(['Напряжение в шве', `${f2(el.tauF)} / ${f2(el.tauZ)} МПа`]);
+    } else {
+      kv.push(['Болтов на столб', `${el.n} × М${el.tie.d} класса ${el.tie.grade}`]);
+      kv.push(['На болт: растяжение', `${f2(el.Nb / 1000)} кН`]);
+      kv.push(['На болт: срез', `${f2(el.Vb / 1000)} кН`]);
+      if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
+    }
+    kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
@@ -381,10 +403,12 @@ const SEL_FOR = {
   purlin: { type: 'purlin' }, wallPurlin: { type: 'wallPurlin' },
   posts: { type: 'post', index: 0 }, wallPosts: { type: 'wallPost', index: 0 },
   ties: { type: 'tie', side: 'outer' },
+  beamTies: { type: 'beamTie', side: 'outer' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
   if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
+  if (key === 'beamTies') return { type: 'beamTie', side: res.beamTies.outer.U >= res.beamTies.wall.U ? 'outer' : 'wall' };
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];
