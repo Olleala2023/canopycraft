@@ -15,7 +15,9 @@ import {
   steelBending, steelShear, steelStability, steelBeamColumn, steelSlenderness,
   steelLocalBuckling, deflectionCheck, worstOf,
   boltPlateBearing, boltHoleBearing, boltShear,
+  tieShear, tieFit, steelHoleBearing,
 } from './checks.js';
+import { fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
 
@@ -131,6 +133,9 @@ function analyseRafter(model, x, trib, ctx) {
       purlinUplift: uplift.reactions[1].R,
       wallSls: Math.max(...byVariant.map((g) => g.SLS.reactions[0].R)),
       purlinSls: Math.max(...byVariant.map((g) => g.SLS.reactions[1].R)),
+      // скатная составляющая в том же сочетании, что и отрыв: снега в нём нет,
+      // а собственный вес взят с разгружающим коэффициентом 0,9
+      alongUplift: GAMMA_F.relieving * deadPerpN * Ls * (sa / ca),
     },
     ...w,
   };
@@ -215,6 +220,83 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   }
   checks.push(deflectionCheck(spans, 200));
   return { label, sec, mat, res: { uls, sls, up }, spans, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
+}
+
+/* ───────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ───────────────── */
+
+/**
+ * Крепление стропила к опоре от отрыва.
+ *
+ * Ветер поднимает кровлю: при лёгком покрытии собственный вес отрыв не
+ * перекрывает, и стропило висит на крепеже. Узел принят такой: стропило
+ * прижато к опоре перфорированным уголком с двух сторон (или сквозным
+ * болтом), крепёж работает на срез — на выдёргивание гвозди и саморезы в
+ * несущих узлах работать не должны.
+ *
+ * На узел приходит равнодействующая двух сил: вертикального отрыва и скатной
+ * составляющей, которая накапливается к нижней опоре — к наружному прогону.
+ * Число крепежей подбирается, а проверяется то, помещается ли оно в узле по
+ * правилам расстановки: если нет — нужен крепёж крупнее, а не «набить гуще».
+ */
+const TIE_TARGET = 0.85;
+
+function analyseTie(model, rafters, side, support, ctx) {
+  const f = fastener(model.rafterTie.id);
+  const sec = section(model.rafters.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const supSec = section(support.sectionId);
+  const supMat = propsFor(supSec, model.opts);
+
+  // худшее стропило ряда: у крайних грузовая ширина меньше, но и прижимающий вес тоже
+  const worst = rafters.reduce((a, r) => {
+    const up = -r.reactions[side === 'wall' ? 'wallUplift' : 'purlinUplift'];
+    return up > a.up ? { up, r } : a;
+  }, { up: -Infinity, r: rafters[0] });
+  const uplift = Math.max(0, worst.up);
+  // скатная составляющая доходит до нижней опоры — она у наружного прогона
+  const along = side === 'outer' ? Math.abs(worst.r.reactions.alongUplift) : 0;
+  const force = Math.hypot(uplift, along);
+
+  const cap = shearCapacity(f, { woodWidth: sec.b, mv: mat.mv ?? 1 });
+  // если опора деревянная, вторая половина крепежа работает в ней — берём худшее
+  const capSup = supSec.material === 'timber'
+    ? shearCapacity(f, { woodWidth: supSec.b, mv: supMat.mv ?? 1 })
+    : cap;
+  const T = Math.min(cap.T, capSup.T);
+  // число крепежей подбирается с тем же целевым запасом, что и сечения при
+  // автоподборе: узел, собранный впритык, не оставляет права на ошибку монтажа
+  const need = Math.max(2, Math.ceil(force / (TIE_TARGET * T)));
+  const fit = fitCount(f, { rafterH: sec.h });
+  const sp = spacingRules(f);
+
+  const checks = [
+    tieShear(force, need, T, `${need} × ${f.short}, T = ${(T / 1000).toFixed(2).replace('.', ',')} кН · ${cap.governs}`),
+    tieFit(need, fit.n, `${fit.cols}×${fit.rows} при S1 ${sp.s1}, S2 ${sp.s2}, S3 ${sp.s3} мм`),
+  ];
+  if (supSec.material === 'steel') {
+    // уголок крепится к профилю самосверлящими винтами того же числа
+    checks.push(boltShear(force / need, SELF_DRILL_D, '5.8'));
+    checks.push(steelHoleBearing(force / need, SELF_DRILL_D, supSec.t ?? 3, supMat,
+      `винт ${SELF_DRILL_D} мм в стенку ${supSec.t ?? 3} мм`));
+  }
+  if (!cap.deep) {
+    checks.push(tieShear(force, 0, 0,
+      `защемление ${cap.pen} мм меньше 4d = ${4 * f.d} мм — крепёж не несущий`));
+  }
+
+  return {
+    side, fastener: f, force, uplift, along, T, need, fit, spacing: sp,
+    penetration: cap.pen, governs: cap.governs,
+    support: supSec, x: worst.r.x,
+    ...worstOf(checks),
+  };
+}
+
+export function analyseTies(model, rafters, ctx) {
+  return {
+    outer: analyseTie(model, rafters, 'outer', model.purlin, ctx),
+    wall: analyseTie(model, rafters, 'wall', model.wallPurlin, ctx),
+  };
 }
 
 /* ───────────────────────── СТОЛБЫ ───────────────────────── */
@@ -397,6 +479,7 @@ export function analyse(model) {
 
   const posts = analysePostRow(model, model.posts, purlin, ctx, sl.outer.extra);
   const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
+  const ties = analyseTies(model, rafters, ctx);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -414,11 +497,13 @@ export function analyse(model) {
     { key: 'posts', label: 'Столбы наружные', U: Math.max(...posts.map((p) => p.U)), worst: rowWorst(posts).worst },
     { key: 'wallPurlin', label: 'Обвязка у стены', U: wallPurlin.U, worst: wallPurlin.worst },
     { key: 'wallPosts', label: 'Столбы у стены', U: Math.max(...wallPosts.map((p) => p.U)), worst: rowWorst(wallPosts).worst },
+    { key: 'ties', label: 'Крепление стропил', U: Math.max(ties.outer.U, ties.wall.U),
+      worst: (ties.outer.U > ties.wall.U ? ties.outer : ties.wall).worst },
   ];
 
   return {
     model, ctx, dead, snow, wind,
-    rafters, battens, purlin, wallPurlin, posts, wallPosts, foundation,
+    rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, foundation,
     thrust: sl.thrust,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
@@ -494,6 +579,31 @@ export function billOfMaterials(result) {
       note: 'с внутренней стороны стены, под гайку с шайбой', mass: plateMass, cost: 0 },
   ];
 
+  // узлы крепления стропил: на каждое стропило два узла — у прогона и у стены
+  const nRafters = m.rafters.xs.length;
+  const tieF = result.ties.outer.fastener;
+  const tieCount = (result.ties.outer.need + result.ties.wall.need) * nRafters;
+  if (tieF.kind === 'bolt') {
+    fasteners.push({
+      name: `Болт ${tieF.short.replace('болт ', '')} с гайкой и шайбами`, count: tieCount,
+      note: `крепление стропил: ${result.ties.outer.need} шт у прогона и ${result.ties.wall.need} у стены на каждое`,
+      // болты и метизы считаются по массе металла, уголки — поштучно
+      mass: tieCount * fastenerMass(tieF), cost: tieCount * fastenerMass(tieF) * pr.steelKg,
+    });
+  } else {
+    const angles = 4 * nRafters; // по два уголка на узел, узла два
+    fasteners.push({
+      name: 'Уголок крепёжный 90×90×65×2', count: angles,
+      note: 'по два на узел, с обеих сторон стропила', mass: angles * ANGLE_MASS,
+      cost: angles * (pr.anglePc ?? 0),
+    });
+    fasteners.push({
+      name: tieF.short.charAt(0).toUpperCase() + tieF.short.slice(1), count: tieCount,
+      note: `${result.ties.outer.need} шт у прогона и ${result.ties.wall.need} у стены на каждое стропило`,
+      mass: tieCount * fastenerMass(tieF), cost: tieCount * fastenerMass(tieF) * pr.steelKg,
+    });
+  }
+
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);
   const byName = (n) => items.find((i) => i.name === n)?.mass ?? 0;
   // всё, что висит над головой (без столбов) — это и есть постоянная нагрузка на кровлю
@@ -503,8 +613,8 @@ export function billOfMaterials(result) {
   const timberMass = sum((i) => i.material === 'сосна');
   const steelMass = sum((i) => i.material === 'сталь');
   const steelLength = items.filter((i) => i.material === 'сталь').reduce((a, i) => a + i.totalLength, 0);
-  const fastenerMass = fasteners.reduce((a, f) => a + f.mass, 0);
-  const total = timberMass + steelMass + roofMass + fastenerMass;
+  const fastenerTotal = fasteners.reduce((a, f) => a + f.mass, 0);
+  const total = timberMass + steelMass + roofMass + fastenerTotal;
   const planArea = (m.geom.B * (m.geom.L + m.geom.a)) / 1e6; // м² в плане
 
   const groups = [
@@ -513,7 +623,7 @@ export function billOfMaterials(result) {
     { name: 'Стропила', mass: byName('Стропила'), note: 'сосна' },
     { name: 'Прогоны и обвязка', mass: byName('Прогон наружный') + byName('Обвязка у стены'), note: 'сталь + сосна' },
     { name: 'Столбы', mass: byName('Столбы наружные') + byName('Столбы у стены'), note: 'сталь' },
-    { name: 'Метизы', mass: boltMass + plateMass, note: 'шпильки и пластины' },
+    { name: 'Метизы', mass: fastenerTotal, note: 'шпильки, пластины и крепёж узлов' },
   ];
 
   const weights = {
@@ -552,7 +662,7 @@ export function billOfMaterials(result) {
       { name: 'Кровельное покрытие', cost: costRoofing, base: `${roofArea.toFixed(1)} м² × ${pr.roofingM2} ₽/м²` },
       { name: 'Сосна', cost: costTimber, base: `${timberVolume.toFixed(3)} м³ × ${pr.timberM3} ₽/м³` },
       { name: 'Сталь', cost: costSteel, base: `${steelMass.toFixed(0)} кг × ${pr.steelKg} ₽/кг` },
-      { name: 'Метизы', cost: costFasteners, base: `${boltCount} компл. × ${pr.fastenerPc} ₽` },
+      { name: 'Метизы', cost: costFasteners, base: `${boltCount} компл. шпилек × ${pr.fastenerPc} ₽ и крепёж узлов` },
     ],
   };
 

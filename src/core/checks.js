@@ -202,6 +202,34 @@ export function boltHoleBearing(V, boltD, wallThickness, blockClass) {
     `М${boltD} через стену ${wallThickness} мм`);
 }
 
+/* ─────────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ─────────────────── */
+
+/**
+ * Срез группы крепежей в узле: усилие делится на все крепежи поровну.
+ * @param {number} force равнодействующая на узел, Н
+ * @param {number} n число крепежей
+ * @param {number} T несущая способность одного на один шов, Н
+ */
+export function tieShear(force, n, T, note) {
+  return chk('Крепёж на срез', Math.abs(force), n * T, 'Н',
+    'N ≤ n·T, T — табл. 20 СП 64', note);
+}
+
+/**
+ * Требуемое число крепежей против того, что помещается по правилам
+ * расстановки. Если не помещается — узел не собрать, нужен другой крепёж.
+ */
+export function tieFit(need, fit, note) {
+  return chk('Крепёж помещается в узле', need, fit, 'шт',
+    'n_треб ≤ n_мест при S1, S2, S3 по разд. 8 СП 64', note);
+}
+
+/** Смятие стенки стального профиля крепежом. R_bp = 1,35·R_un (СП 16, табл. Г.5). */
+export function steelHoleBearing(N, d, t, mat, note) {
+  return chk('Смятие стенки профиля', Math.abs(N) / (d * t), 1.35 * mat.Run, 'МПа',
+    'σ = N/(d·t) ≤ R_bp', note);
+}
+
 /** Срез шпильки. R_bs = 0,4·R_bun (СП 16, табл. Д.5): класс 5.8 → 200 МПа, 8.8 → 320 МПа. */
 export function boltShear(V, boltD, grade = '5.8', planes = 1) {
   const Rbs = { '4.8': 160, '5.8': 200, '8.8': 320 }[grade] ?? 200;

@@ -15,6 +15,7 @@ const ORDER = [
   'src/core/loads.js',
   'src/core/beam.js',
   'src/core/checks.js',
+  'src/core/fasteners.js',
   'src/core/model.js',
   'src/core/share.js',
   'src/core/analysis.js',
@@ -23,6 +24,22 @@ const ORDER = [
   'src/ui/views.js',
   'src/ui/app.js',
 ];
+
+/**
+ * Склейка снимает import'ы, поэтому переименование при импорте
+ * (import { a as b }) в бандле превращается в обращение к несуществующему
+ * имени — модульные тесты при этом проходят. Ловим на сборке.
+ */
+function aliasedImports(src, file) {
+  const out = [];
+  for (const m of src.matchAll(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)';/gm)) {
+    for (const part of m[1].split(',')) {
+      const as = /(\S+)\s+as\s+(\S+)/.exec(part.trim());
+      if (as) out.push(`${as[1]} as ${as[2]} (${file} ← ${m[2]})`);
+    }
+  }
+  return out;
+}
 
 function strip(src) {
   return src
@@ -45,7 +62,13 @@ function topLevelNames(src) {
   return names;
 }
 
-const pieces = ORDER.map((f) => ({ f, src: strip(readFileSync(join(root, f), 'utf8')) }));
+const raw = ORDER.map((f) => ({ f, text: readFileSync(join(root, f), 'utf8') }));
+const aliases = raw.flatMap(({ f, text }) => aliasedImports(text, f));
+if (aliases.length) {
+  console.error('Переименование при импорте не переживает склейку:\n  ' + aliases.join('\n  '));
+  process.exit(1);
+}
+const pieces = raw.map(({ f, text }) => ({ f, src: strip(text) }));
 const seen = new Map();
 const clashes = [];
 for (const { f, src } of pieces) {
