@@ -587,12 +587,16 @@ async function runCostSearch() {
     });
     renderSearch(r, before);
   } catch (e) {
-    host.innerHTML = `<div class="pane-title">Подбор по цене</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
+    host.innerHTML = `<div class="pane-title">Подбор по цене${SEARCH_HELP}</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
   }
   btn.disabled = false;
   btn.textContent = 'Подобрать по цене';
   searchBusy = false;
 }
+
+/** Кружок «?» в заголовке таблицы подбора: объяснение, почему варианты именно такие. */
+const SEARCH_HELP = '<a class="help" href="help/cost.html" target="_blank" rel="noopener"'
+  + ' title="Справка: почему подбор предлагает именно это" aria-label="Справка: почему подбор предлагает именно это">?</a>';
 
 function renderSearch(r, before) {
   const host = $('search');
@@ -616,7 +620,7 @@ function renderSearch(r, before) {
       <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
   }).join('');
 
-  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с</div>
+  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с${SEARCH_HELP}</div>
     <div class="tbl"><table>
       <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
         <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
