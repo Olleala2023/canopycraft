@@ -3362,48 +3362,61 @@ function detailFrame(box, title, caption, U) {
 /** Рабочее поле детали: внутри рамки, без заголовка и подписи. */
 const inner = (box) => ({ x: box.x + 10, y: box.y + 28, w: box.w - 20, h: box.h - 56 });
 
-/** Узел «стропило — опора»: уголок с крепежом в расчётном количестве. */
+/**
+ * Узел «стропило — опора»: уголок с крепежом в расчётном количестве.
+ *
+ * Вид вдоль опоры, поэтому она показана в сечении: прогон — труба 80×140,
+ * обвязка — доска на ребро. Стропило лежит на верхней грани и опирается на
+ * дальнее ребро — при уклоне 8° на ширине опоры остаётся клиновидный зазор
+ * миллиметров в десять, его и выбирают запилом или подкладкой.
+ */
 function nodeRafterTie(t, rafterSec, alpha, box, clip) {
   const p = inner(box);
-  const supH = t.support.h, supW = 280, rH = rafterSec.h, rL = 300;
-  // масштаб под всё содержимое: стропило над опорой плюс место под стрелку
-  const sc = Math.min(p.w / (supW + 40), p.h / (rH + supH + 90));
+  const supB = t.support.b, supH = t.support.h, rH = rafterSec.h;
+  const up = 300, down = 110;                        // сколько стропила показать в обе стороны
+  const sc = Math.min(p.w / (up + down + supB + 40), p.h / (rH + supH + 70));
   const mm = (v) => v * sc;
   const cx = p.x + p.w / 2;
-  const cy = p.y + p.h - mm(supH) - 16;              // верх опоры
+  const cy = p.y + p.h - mm(supH) - 26;              // верх опоры
+  const pivot = cx + mm(supB / 2);                   // дальнее ребро опоры — точка опирания
   const s = [`<g clip-path="url(#${clip})">`];
 
-  s.push(`<rect x="${cx - mm(supW / 2)}" y="${cy}" width="${mm(supW)}" height="${mm(supH)}"
+  // опора в сечении
+  s.push(`<rect x="${cx - mm(supB / 2)}" y="${cy}" width="${mm(supB)}" height="${mm(supH)}"
     fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.3"/>`);
-  s.push(`<text x="${cx + mm(supW / 2)}" y="${cy + mm(supH) + 12}" font-size="9" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">${esc(t.support.label)}</text>`);
+  s.push(dimH(cx - mm(supB / 2), cx + mm(supB / 2), cy + mm(supH) + 16, `${supB}`));
+  s.push(`<text x="${cx + mm(supB / 2) + 8}" y="${cy + mm(supH) - 2}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${esc(t.support.label)}</text>`);
 
-  // стропило и уголок — в одной повёрнутой системе
-  const leg = 90, legDown = 65, ax = cx + mm(12);
+  // стропило: опирается на дальнее ребро и уходит вверх к стене
+  const leg = 90, legDown = 65;
+  const ax = pivot - mm(legDown);                    // уголок ставится со стороны пролёта
   const rot = [];
-  rot.push(`<rect x="${cx - mm(rL / 2)}" y="${cy - mm(rH)}" width="${mm(rL)}" height="${mm(rH)}"
+  rot.push(`<rect x="${pivot - mm(up)}" y="${cy - mm(rH)}" width="${mm(up + down)}" height="${mm(rH)}"
     fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
   rot.push(`<rect x="${ax}" y="${cy - mm(leg)}" width="3" height="${mm(leg)}" fill="var(--accent-2)"/>`);
   const nails = [];
   let left = t.need;
   for (let r = 0; r < t.fit.rows && left > 0; r++) {
     for (let c = 0; c < t.fit.cols && left > 0; c++, left--) {
-      nails.push([ax + 10 + mm(c * t.spacing.s1), cy - mm(leg) + mm(14 + r * t.spacing.s2)]);
+      nails.push([ax + 9 + mm(c * t.spacing.s1), cy - mm(leg) + mm(14 + r * t.spacing.s2)]);
     }
   }
-  for (const [px, py] of nails) rot.push(`<circle cx="${px}" cy="${py}" r="2.4" fill="var(--u-bad)"/>`);
+  for (const [nx, ny] of nails) rot.push(`<circle cx="${nx}" cy="${ny}" r="2.4" fill="var(--u-bad)"/>`);
+  if (nails.length > 1) rot.push(dimV(nails[0][1], nails[1][1], ax + 32, `${Math.round(t.spacing.s2)}`));
   if (t.need > t.fit.n) {
     // нарисовано столько, сколько влезает; расчёт требует больше — это и есть отказ
-    rot.push(`<text x="${ax + 10}" y="${cy - mm(leg) - 8}" font-size="9" font-family="${mono}" fill="var(--u-bad)">нужно ${t.need}, влезает ${t.fit.n}</text>`);
+    rot.push(`<text x="${ax}" y="${cy - mm(leg) - 8}" font-size="9" font-family="${mono}" fill="var(--u-bad)">нужно ${t.need}, влезает ${t.fit.n}</text>`);
   }
-  if (nails.length > 1) {
-    rot.push(dimV(nails[0][1], nails[1][1], ax + 34, `${Math.round(t.spacing.s2)}`));
-  }
+  // уклон вниз к свесу: поворот по часовой вокруг точки опирания
+  s.push(`<g transform="rotate(${alpha} ${pivot} ${cy})">${rot.join('')}</g>`);
 
-  s.push(`<g transform="rotate(${-alpha} ${cx} ${cy})">${rot.join('')}</g>`);
-  s.push(`<text x="${p.x + 2}" y="${p.y + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">стропило ${esc(rafterSec.label)}, уклон ${alpha}°</text>`);
-
-  // нижняя полка уголка — по опоре
+  // нижняя полка уголка — по верху опоры
   s.push(`<rect x="${ax}" y="${cy}" width="${mm(legDown)}" height="3" fill="var(--accent-2)"/>`);
+  s.push(`<text x="${p.x + 2}" y="${p.y + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">стропило ${esc(rafterSec.label)}, уклон ${alpha}°</text>`);
+  if (alpha > 0) {
+    const gap = Math.round(supB * Math.tan((alpha * Math.PI) / 180));
+    s.push(`<text x="${p.x + 2}" y="${p.y + p.h - 1}" font-size="9" font-family="${mono}" fill="var(--ink-3)">опирание на дальнее ребро, зазор от уклона ≈ ${gap} мм — запил или подкладка</text>`);
+  }
 
   // отрыв — справа, чтобы не спорить с подписями
   const arrowX = p.x + p.w - 12;
