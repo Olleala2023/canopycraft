@@ -130,7 +130,7 @@ tr.hi td{background:var(--accent-soft)}
   display:inline-block; padding:1px 7px; border:1px solid currentColor; font-size:11px;
   font-family:"IBM Plex Mono",ui-monospace,monospace; letter-spacing:.04em; white-space:nowrap;
 }
-.pill.warn{color:var(--u-warn)} .pill.ok{color:var(--u-ok)} .pill.bad{color:var(--u-bad)}
+.pill.warn{color:var(--u-warn)} .pill.ok{color:var(--u-ok)} .pill.bad{color:var(--u-bad)} .pill.low{color:var(--u-low)}
 
 .callout{
   border-left:3px solid var(--u-bad); background:var(--surface-2);
