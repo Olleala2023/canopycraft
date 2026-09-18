@@ -78,6 +78,7 @@ a.help{
 }
 a.help:hover{border-color:var(--accent-2); color:var(--accent-2)}
 .check a.help{margin-left:5px; vertical-align:middle}
+.pane-title a.help{margin-left:7px; vertical-align:-4px}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}

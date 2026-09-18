@@ -127,6 +127,7 @@ a.help{
 }
 a.help:hover{border-color:var(--accent-2); color:var(--accent-2)}
 .check a.help{margin-left:5px; vertical-align:middle}
+.pane-title a.help{margin-left:7px; vertical-align:-4px}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}
@@ -278,6 +279,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
         <span><i style="background:var(--u-ok)"></i>0,5–0,85 норма</span>
         <span><i style="background:var(--u-warn)"></i>0,85–1,0 предел</span>
         <span><i style="background:var(--u-bad)"></i>U &gt; 1,0 не проходит</span>
+        <a class="help" href="help/u.html" target="_blank" rel="noopener" title="Справка: как читать коэффициент U" aria-label="Справка: как читать коэффициент U">?</a>
       </div>
       <div class="hint" id="hint"></div>
     </section>
@@ -4164,12 +4166,16 @@ async function runCostSearch() {
     });
     renderSearch(r, before);
   } catch (e) {
-    host.innerHTML = `<div class="pane-title">Подбор по цене</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
+    host.innerHTML = `<div class="pane-title">Подбор по цене${SEARCH_HELP}</div><div class="hint" style="border:0;padding:0">Не получилось: ${String(e)}</div>`;
   }
   btn.disabled = false;
   btn.textContent = 'Подобрать по цене';
   searchBusy = false;
 }
+
+/** Кружок «?» в заголовке таблицы подбора: объяснение, почему варианты именно такие. */
+const SEARCH_HELP = '<a class="help" href="help/cost.html" target="_blank" rel="noopener"'
+  + ' title="Справка: почему подбор предлагает именно это" aria-label="Справка: почему подбор предлагает именно это">?</a>';
 
 function renderSearch(r, before) {
   const host = $('search');
@@ -4193,7 +4199,7 @@ function renderSearch(r, before) {
       <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
   }).join('');
 
-  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с</div>
+  host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с${SEARCH_HELP}</div>
     <div class="tbl"><table>
       <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
         <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
@@ -4213,9 +4219,9 @@ function renderSearch(r, before) {
         Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
       </div>
       <div class="hint" style="border:0;padding:0">
-        Работа, фундамент и крепёж не считаются: вариант с частыми стропилами дешевле по материалу,
-        но дороже по монтажу. Оптимум зависит от ваших цен — перебор имеет смысл после того,
-        как вы подставили свои.
+        Метизы узлов в смете есть, а работа, доставка, фундамент и раскрой — нет: вариант с частыми
+        стропилами дешевле по кубатуре, но дороже по монтажу. Оптимум зависит от ваших цен —
+        перебор имеет смысл после того, как вы подставили свои.
       </div>
     </div>
     <div class="field" style="max-width:260px;margin-top:8px">
