@@ -988,7 +988,11 @@ function onDragEnd() {
 function wireNodes() {
   $('canvas').querySelectorAll('[data-pick]').forEach((g) => {
     g.addEventListener('pointerdown', () => {
-      state.sel = { type: g.getAttribute('data-pick'), side: g.getAttribute('data-side') };
+      state.sel = {
+        type: g.getAttribute('data-pick'),
+        side: g.getAttribute('data-side') ?? undefined,
+        key: g.getAttribute('data-key') ?? undefined,
+      };
       render();
     });
   });
