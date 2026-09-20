@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultModel } from '../src/core/model.js';
+import { defaultModel, spread } from '../src/core/model.js';
 import { analyse } from '../src/core/analysis.js';
 import { drawPlan, drawSection, drawDiagrams, drawNodes } from '../src/ui/views.js';
 
@@ -62,4 +62,35 @@ test('узловые чертежи собраны по числам расчё�
   const tight = analyse(windy);
   assert.ok(tight.ties.outer.need > tight.ties.outer.fit.n, 'ожидалась перегрузка узла');
   assert.ok(drawNodes(tight, { type: 'rafter', index: 0 }).svg.includes(`нужно ${tight.ties.outer.need}, влезает`));
+});
+
+test('стык по длине попадает на чертежи, а без стыков их не рисуют', () => {
+  const plain = analyse(defaultModel());
+  assert.ok(!drawNodes(plain, { type: 'rafter', index: 0 }).svg.includes('СТЫК'),
+    'навес в один хлыст — стыковать нечего, лишней детали быть не должно');
+  assert.ok(!drawSection(plain).svg.includes('вне плоскости разреза'));
+
+  const wide = defaultModel();
+  wide.geom.B = 9000;
+  wide.rafters.xs = spread(9000, 16);
+  wide.posts.xs = spread(9000, 5);
+  wide.wallPosts.xs = spread(9000, 7);
+
+  const butt = drawNodes(analyse(wide), { type: 'rafter', index: 0 }).svg;
+  assert.ok(butt.includes('4.1 СТЫК · ПРОГОН'), 'деталь стыка прогона');
+  assert.ok(butt.includes('4.2 СТЫК · ОБВЯЗКА'), 'деталь стыка обвязки');
+  assert.ok(butt.includes('торец в торец'), 'встык рисуется торцами над опорой');
+  assert.ok(!butt.includes('U 0,00'), 'у стыка встык считать нечего — U не выводится');
+
+  wide.opts.spliceJoint = 'plate';
+  const res = analyse(wide);
+  const plate = drawNodes(res, { type: 'rafter', index: 0 }).svg;
+  const wall = res.spliceJoints.find((j) => j.key === 'wallPurlin');
+  assert.ok(plate.includes(`${wall.n} × М${wall.d}`), 'нагели подписаны расчётным числом');
+  assert.ok(plate.includes(`${wall.plateLength}`), 'длина накладки — расчётная');
+  assert.ok(plate.includes('data-pick="splice"'), 'по детали можно кликнуть');
+
+  const section = drawSection(res).svg;
+  assert.ok(section.includes('вне плоскости разреза'), 'разрез честно говорит, что стык не в его плоскости');
+  assert.ok(section.includes('накладках'), 'и на чём он держится');
 });
