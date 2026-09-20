@@ -32,6 +32,8 @@ import {
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
+/** Ускорение свободного падения, м/с² — вес бетона против отрыва. */
+const G0 = 9.80665;
 
 /** Жёсткости сечения для решателя. */
 function stiffness(sec, mat) {
@@ -909,7 +911,10 @@ export function analyse(model) {
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
     uplift: maxUplift,
-    requiredMass: maxUplift / 0.9 / 1000,
+    /** сила, которую фундамент обязан удержать, кН — с коэффициентом 0,9 на вес */
+    requiredHold: maxUplift / 0.9 / 1000,
+    /** та же величина в килограммах бетона: человек считает фундамент весом, а не ньютонами */
+    requiredMassKg: maxUplift / 0.9 / G0,
     cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000,
     maxDown: Math.max(...posts.map((p) => p.N)),
   };
@@ -965,7 +970,6 @@ export function billOfMaterials(result) {
   const m = result.model;
   const stock = m.opts.stockLength ?? 6000;
   const pr = m.prices ?? { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' };
-  const G0 = 9.80665;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
     const isT = sec.material === 'timber';

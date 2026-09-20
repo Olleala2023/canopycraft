@@ -1103,7 +1103,7 @@ function buildReport(res) {
       <tr><td>Горизонтальный распор на стеновой ряд</td><td>${f2(res.thrust.total / 1000)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
       <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
       <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
-      <tr><td>Фундамент против отрыва</td><td>масса ≥ ${f2(res.foundation.requiredMass)} кН, куб бетона ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
+      <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
     </table>
     <h2>5. Массы конструкции</h2>
     <p>Собственный вес всех элементов входит в расчёт нагрузок: стропила и прогоны — погонным

@@ -2035,6 +2035,8 @@ function decodeModel(code) {
 
 
 const deg = (d) => (d * Math.PI) / 180;
+/** Ускорение свободного падения, м/с² — вес бетона против отрыва. */
+const G0 = 9.80665;
 
 /** Жёсткости сечения для решателя. */
 function stiffness(sec, mat) {
@@ -2912,7 +2914,10 @@ function analyse(model) {
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
     uplift: maxUplift,
-    requiredMass: maxUplift / 0.9 / 1000,
+    /** сила, которую фундамент обязан удержать, кН — с коэффициентом 0,9 на вес */
+    requiredHold: maxUplift / 0.9 / 1000,
+    /** та же величина в килограммах бетона: человек считает фундамент весом, а не ньютонами */
+    requiredMassKg: maxUplift / 0.9 / G0,
     cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000,
     maxDown: Math.max(...posts.map((p) => p.N)),
   };
@@ -2968,7 +2973,6 @@ function billOfMaterials(result) {
   const m = result.model;
   const stock = m.opts.stockLength ?? 6000;
   const pr = m.prices ?? { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' };
-  const G0 = 9.80665;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
     const isT = sec.material === 'timber';
@@ -5340,7 +5344,7 @@ function buildReport(res) {
       <tr><td>Горизонтальный распор на стеновой ряд</td><td>${f2(res.thrust.total / 1000)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
       <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
       <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
-      <tr><td>Фундамент против отрыва</td><td>масса ≥ ${f2(res.foundation.requiredMass)} кН, куб бетона ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
+      <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
     </table>
     <h2>5. Массы конструкции</h2>
     <p>Собственный вес всех элементов входит в расчёт нагрузок: стропила и прогоны — погонным
