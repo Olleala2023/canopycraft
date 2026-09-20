@@ -7,6 +7,12 @@
  * Опоры — шарнирные (v = 0), число и положение произвольные, консоли с любой стороны.
  * Эпюры M и Q считаются статикой по найденным реакциям, а не по узловым усилиям МКЭ,
  * поэтому не зависят от густоты сетки.
+ *
+ * Стыки по длине задаются через hinges: в таком узле прогиб общий, а поворот нет —
+ * момент через стык не передаётся. Реализовано статической конденсацией поворота
+ * у правого от стыка элемента: узловой поворот остаётся за левым элементом, правый
+ * получает шарнирное примыкание. Это точно, а не приближённо, и не ломает ленточную
+ * структуру матрицы.
  */
 
 /** Симметричная ленточная матрица: хранится верхняя лента. */
@@ -52,6 +58,39 @@ function elementStiffness(Le, EI, GAs) {
 }
 
 /**
+ * Шарнирное примыкание конца элемента: поворот r исключается статической
+ * конденсацией из матрицы жёсткости и из вектора нагрузки элемента.
+ * Строка и столбец r обнуляются — этот поворот больше не общий с соседом.
+ */
+function releaseEnd(k, fe, r) {
+  const krr = k[r][r];
+  if (!(Math.abs(krr) > 0)) return { k, fe };
+  const k2 = k.map((row) => row.slice());
+  const f2 = fe.slice();
+  for (let a = 0; a < 4; a++) {
+    if (a === r) continue;
+    f2[a] = fe[a] - (k[a][r] * fe[r]) / krr;
+    for (let b = 0; b < 4; b++) {
+      if (b === r) continue;
+      k2[a][b] = k[a][b] - (k[a][r] * k[r][b]) / krr;
+    }
+  }
+  for (let i = 0; i < 4; i++) { k2[r][i] = 0; k2[i][r] = 0; }
+  f2[r] = 0;
+  return { k: k2, fe: f2 };
+}
+
+/**
+ * Поворот, исключённый конденсацией, — восстанавливается по решению,
+ * иначе прогиб справа от стыка интерполируется по чужому повороту.
+ */
+function recoverRotation(k0, fe0, r, ue) {
+  let s = fe0[r];
+  for (let b = 0; b < 4; b++) if (b !== r) s -= k0[r][b] * ue[b];
+  return s / k0[r][r];
+}
+
+/**
  * @param {object} o
  * @param {number} o.length длина балки, мм
  * @param {number[]} o.supports координаты шарнирных опор, мм
@@ -60,6 +99,7 @@ function elementStiffness(Le, EI, GAs) {
  * @param {(x:number)=>number} [o.q] распределённая нагрузка, Н/мм, вниз
  * @param {{x:number,P:number}[]} [o.point] сосредоточенные силы, Н, вниз
  * @param {{x:number,M:number}[]} [o.moments] сосредоточенные моменты, Н·мм
+ * @param {number[]} [o.hinges] стыки по длине: координаты, где момент не передаётся
  * @param {number} [o.nEl] минимальное число конечных элементов
  */
 export function solveBeam(o) {
@@ -75,6 +115,7 @@ export function solveBeam(o) {
   for (const s of o.supports) set.add(Math.min(length, Math.max(0, s)));
   for (const p of point) set.add(Math.min(length, Math.max(0, p.x)));
   for (const p of moments) set.add(Math.min(length, Math.max(0, p.x)));
+  for (const h of o.hinges ?? []) if (h > 0 && h < length) set.add(h);
   const X = [...set].sort((a, b) => a - b).filter((v, i, a) => i === 0 || v - a[i - 1] > 1e-6);
   const nn = X.length;
   const ndof = 2 * nn;
@@ -85,11 +126,25 @@ export function solveBeam(o) {
   const idx = (i, j) => i * (bw + 1) + (j - i);
   const elems = [];
 
+  // стык рвёт непрерывность поворота: узловой поворот оставляем левому элементу,
+  // правый примыкает шарнирно. Концы балки пропускаем — рвать там нечего
+  const released = new Set();
+  for (const h of o.hinges ?? []) {
+    let n = -1;
+    for (let i = 1; i < nn - 1; i++) if (n < 0 || Math.abs(X[i] - h) < Math.abs(X[n] - h)) n = i;
+    if (n > 0 && Math.abs(X[n] - h) < 1e-6) released.add(n);
+  }
+
   for (let e = 0; e < nn - 1; e++) {
     const Le = X[e + 1] - X[e];
-    const k = elementStiffness(Le, EI, GAs);
+    const k0 = elementStiffness(Le, EI, GAs);
     const dofs = [2 * e, 2 * e + 1, 2 * e + 2, 2 * e + 3];
-    elems.push({ k, dofs, Le, x0: X[e] });
+    // распределённая нагрузка: интегрируем q по элементу (3 точки Симпсона)
+    const wm = (q(X[e]) + 4 * q(X[e] + Le / 2) + q(X[e + 1])) / 6;
+    const fe0 = [(wm * Le) / 2, (wm * Le * Le) / 12, (wm * Le) / 2, -(wm * Le * Le) / 12];
+    const rel = released.has(e) ? 1 : -1; // шарнир в левом узле этого элемента
+    const { k, fe } = rel >= 0 ? releaseEnd(k0, fe0, rel) : { k: k0, fe: fe0 };
+    elems.push({ k, dofs, Le, x0: X[e], rel, k0, fe0 });
     for (let a = 0; a < 4; a++) {
       for (let b = a; b < 4; b++) {
         const i = dofs[a], j = dofs[b];
@@ -97,12 +152,7 @@ export function solveBeam(o) {
         band[idx(lo, hi)] += k[a][b];
       }
     }
-    // распределённая нагрузка: интегрируем q по элементу (3 точки Симпсона)
-    const wm = (q(X[e]) + 4 * q(X[e] + Le / 2) + q(X[e + 1])) / 6;
-    F[dofs[0]] += (wm * Le) / 2;
-    F[dofs[1]] += (wm * Le * Le) / 12;
-    F[dofs[2]] += (wm * Le) / 2;
-    F[dofs[3]] -= (wm * Le * Le) / 12;
+    for (let a = 0; a < 4; a++) F[dofs[a]] += fe[a];
   }
   const Fload = Float64Array.from(F);
   for (const p of point) {
@@ -184,7 +234,10 @@ export function solveBeam(o) {
     while (n0 < nn - 2 && X[n0 + 1] < x) n0++;
     const xa = X[n0], xb = X[n0 + 1];
     const t = (x - xa) / (xb - xa);
-    const va = u[2 * n0], ta = u[2 * n0 + 1], vb = u[2 * n0 + 2], tb = u[2 * n0 + 3];
+    const el = elems[n0];
+    const ue = [u[2 * n0], u[2 * n0 + 1], u[2 * n0 + 2], u[2 * n0 + 3]];
+    const va = ue[0], vb = ue[2], tb = ue[3];
+    const ta = el.rel === 1 ? recoverRotation(el.k0, el.fe0, 1, ue) : ue[1];
     const Le = xb - xa;
     const h00 = 2 * t ** 3 - 3 * t ** 2 + 1, h10 = t ** 3 - 2 * t ** 2 + t;
     const h01 = -2 * t ** 3 + 3 * t ** 2, h11 = t ** 3 - t ** 2;

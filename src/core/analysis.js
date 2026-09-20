@@ -68,7 +68,8 @@ function analyseRafter(model, x, trib, ctx) {
   // Схема Б.8 требует считать нижнее покрытие в двух вариантах — равномерном
   // и со снеговым мешком. За расчётное принимается худшее из них, причём
   // поэлементно: у стены правит мешок, в дальней части — равномерный снег.
-  const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, nEl: 120 });
+  const hinges = spliceHinges(model, Ls);
+  const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, hinges, nEl: 120 });
   const byVariant = ctx.snow.variants.map((v) => {
     const snowAt = (xs) => (v.at(xs * ca) * trib) / 1000 * ca * ca;
     return {
@@ -129,7 +130,7 @@ function analyseRafter(model, x, trib, ctx) {
 
   const w = worstOf(checks);
   return {
-    x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans,
+    x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans, hinges,
     res,
     variant: lead.variant.label,
     reactions: {
@@ -164,15 +165,16 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (Math.max(...ctx.snow.variants.map((v) => v.at(0))) * sp) / 1000 * ca * ca;
 
-  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, nEl: 160 });
-  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, nEl: 160 });
+  const hinges = spliceHinges(model, B);
+  const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, hinges, nEl: 160 });
+  const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, hinges, nEl: 160 });
 
   // сосредоточенная 1 кН (СП 20 п. 8.3.4) в середине наибольшего пролёта
   let span = 0, mid = B / 2;
   for (let i = 0; i + 1 < xs.length; i++) {
     if (xs[i + 1] - xs[i] > span) { span = xs[i + 1] - xs[i]; mid = (xs[i] + xs[i + 1]) / 2; }
   }
-  const point = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD, point: [{ x: mid, P: 1000 }], nEl: 160 });
+  const point = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD, point: [{ x: mid, P: 1000 }], hinges, nEl: 160 });
 
   const Mmax = Math.abs(uls.maxM) > Math.abs(point.maxM) ? uls.maxM : point.maxM;
   const Vmax = Math.abs(uls.maxV) > Math.abs(point.maxV) ? uls.maxV : point.maxV;
@@ -198,7 +200,7 @@ function analyseBattens(model, ctx) {
     note: ctx.dead.def.label,
   });
 
-  return { sec, mat, span, res: { uls, sls, point }, spans, ...worstOf(checks) };
+  return { sec, mat, span, res: { uls, sls, point }, spans, hinges, ...worstOf(checks) };
 }
 
 /* ───────────────────── ПРОГОН И БРУС У СТЕНЫ ───────────────────── */
@@ -211,9 +213,12 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   const gammaDead = sec.material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel;
   const self = sec.weight * gammaDead;
 
-  const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, nEl: 160 });
-  const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, nEl: 160 });
-  const up = solveBeam({ length: B, supports, EI, GAs, q: () => 0, point: loads.uplift, nEl: 160 });
+  // элемент длиннее хлыста собирается из кусков: стык встык момент не передаёт
+  const hinges = spliceHinges(model, B);
+
+  const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
+  const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
+  const up = solveBeam({ length: B, supports, EI, GAs, q: () => 0, point: loads.uplift, hinges, nEl: 160 });
 
   const spans = deflectionSpans(sls, B, supports).spans;
   const checks = [];
@@ -225,7 +230,7 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
     checks.push(steelShear(uls.maxV, sec.props, mat));
   }
   checks.push(deflectionCheck(spans, 200));
-  return { label, sec, mat, res: { uls, sls, up }, spans, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
+  return { label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
 }
 
 /* ───────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ───────────────── */
@@ -648,6 +653,19 @@ export function supportLoads(model, roof = analyseRoof(model)) {
  * Столбы попадают в список при коротком хлысте, но схему по ним не судим —
  * стойка не балка на опорах, стык в ней конструируется отдельно.
  */
+/**
+ * Координаты стыков внутри элемента для расчётной схемы.
+ *
+ * Пустой список, если элемент влезает в хлыст или стык выполнен накладкой:
+ * тогда сечение восстановлено и балка остаётся неразрезной. Стык ровно на
+ * конце элемента ничего не рвёт, поэтому в схему не идёт.
+ */
+export function spliceHinges(model, length) {
+  if ((model.opts.spliceJoint ?? 'butt') !== 'butt') return [];
+  const stock = model.opts.stockLength ?? 6000;
+  return splicePlan(length, stock).at.filter((x) => x > 0 && x < length);
+}
+
 export function spliceReport(model) {
   const { geom } = model;
   const stock = model.opts.stockLength ?? 6000;

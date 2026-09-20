@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, splicePlan, spread } from '../src/core/model.js';
-import { analyse, billOfMaterials, spliceReport } from '../src/core/analysis.js';
+import { analyse, billOfMaterials, spliceReport, spliceHinges } from '../src/core/analysis.js';
+import { solveBeam } from '../src/core/beam.js';
 
 test('раскладка стыков: хлысты от левого конца, остаток в последнем куске', () => {
   const one = splicePlan(6000, 6000, [0, 3000, 6000]);
@@ -94,4 +95,77 @@ test('столбы попадают в отчёт при коротком хлы
   assert.ok(posts, 'столб длиннее хлыста должен быть назван');
   assert.equal(posts.splices, 1);
   assert.equal(posts.unstable, false, 'стойка — не балка на опорах, изменяемости тут не считаем');
+});
+
+/* ───────── стык в расчётной схеме ───────── */
+
+test('шарнир в решателе: два пролёта со стыком над средней опорой = две простые балки', () => {
+  const L = 3000, q = 2, EI = 206000 * 3e6;
+  const run = (hinges) => solveBeam({ length: 2 * L, supports: [0, L, 2 * L], EI, GAs: 0, q: () => q, hinges, nEl: 200 });
+  const at = (r, x) => {
+    let best = 0;
+    for (let i = 0; i < r.x.length; i++) if (Math.abs(r.x[i] - x) < Math.abs(r.x[best] - x)) best = i;
+    return r.M[best];
+  };
+  const wmax = (r, x0, x1) => {
+    let f = 0;
+    for (let i = 0; i < r.x.length; i++) if (r.x[i] >= x0 && r.x[i] <= x1 && Math.abs(r.w[i]) > Math.abs(f)) f = r.w[i];
+    return f;
+  };
+
+  const cont = run([]);
+  assert.ok(Math.abs(at(cont, L) - (-q * L * L / 8)) < 1e-3 * q * L * L, 'неразрезная: момент над опорой −qL²/8');
+  assert.ok(Math.abs(cont.reactions[1].R - 1.25 * q * L) < 1, 'неразрезная: средняя реакция 1,25·qL');
+
+  const hin = run([L]);
+  assert.ok(Math.abs(at(hin, L)) < 1e-6 * q * L * L, 'со стыком момент через него не идёт');
+  assert.ok(Math.abs(at(hin, L / 2) - (q * L * L / 8)) < 1e-3 * q * L * L, 'в пролёте qL²/8, как у простой балки');
+  assert.ok(Math.abs(hin.reactions[0].R - 0.5 * q * L) < 1, 'крайняя реакция 0,5·qL');
+  assert.ok(Math.abs(hin.reactions[1].R - q * L) < 1, 'средняя реакция qL');
+
+  // прогиб справа от стыка считается по восстановленному повороту, а не по чужому
+  const fTheory = (5 * q * L ** 4) / (384 * EI);
+  assert.ok(Math.abs(wmax(hin, 0, L) - fTheory) < 0.01 * fTheory, 'слева 5qL⁴/384EI');
+  assert.ok(Math.abs(wmax(hin, L, 2 * L) - fTheory) < 0.01 * fTheory, 'справа столько же');
+});
+
+test('стык на конце балки ничего не рвёт', () => {
+  const L = 3000, q = 2, EI = 206000 * 3e6;
+  const plain = solveBeam({ length: L, supports: [0, L], EI, GAs: 0, q: () => q, nEl: 120 });
+  const edge = solveBeam({ length: L, supports: [0, L], EI, GAs: 0, q: () => q, hinges: [0, L], nEl: 120 });
+  assert.ok(Math.abs(plain.maxM - edge.maxM) < 1e-6 * Math.abs(plain.maxM), 'на концах непрерывности нет');
+});
+
+test('накладка оставляет балку неразрезной, стык встык — нет', () => {
+  const m = defaultModel();
+  m.geom.B = 9000;
+  assert.deepEqual(spliceHinges(m, 9000), [6000], 'встык по умолчанию — шарнир при 6000');
+  assert.deepEqual(spliceHinges(m, 6000), [], 'элемент по длине хлыста стыка не требует');
+  m.opts.spliceJoint = 'plate';
+  assert.deepEqual(spliceHinges(m, 9000), [], 'накладка восстанавливает сечение — шарнира нет');
+});
+
+test('расчёт по умолчанию не зависит от типа стыка: стыков там нет', () => {
+  const a = analyse(defaultModel());
+  const m = defaultModel();
+  m.opts.spliceJoint = 'plate';
+  assert.equal(analyse(m).maxU, a.maxU, 'навес 6 м при хлысте 6 м считается одинаково');
+});
+
+test('стык встык поднимает момент в прогоне против неразрезной схемы', () => {
+  const build = (joint) => {
+    const m = defaultModel();
+    m.geom.B = 9000;
+    m.rafters.xs = spread(9000, 16);
+    m.posts.xs = spread(9000, 5);
+    m.wallPosts.xs = spread(9000, 7);
+    m.purlin.sectionId = 's60x80x3';
+    m.opts.spliceJoint = joint;
+    return analyse(m).purlin;
+  };
+  const plate = build('plate'), butt = build('butt');
+  assert.ok(butt.U > plate.U * 1.2, `шарнир должен заметно грузить прогон: ${plate.U.toFixed(3)} → ${butt.U.toFixed(3)}`);
+  assert.ok(plate.U < 1 && butt.U > 1, 'сечение, проходящее неразрезным, со стыком встык не проходит');
+  const sum = (b) => b.reactions.reduce((a, r) => a + r.R, 0);
+  assert.ok(Math.abs(sum(plate) - sum(butt)) < 0.01 * sum(plate), 'сумма реакций не зависит от схемы');
 });
