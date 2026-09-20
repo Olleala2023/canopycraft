@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { defaultModel, splicePlan, spread } from '../src/core/model.js';
 import { analyse, billOfMaterials, spliceReport, spliceHinges } from '../src/core/analysis.js';
 import { solveBeam } from '../src/core/beam.js';
+import { dowelDouble } from '../src/core/fasteners.js';
 
 test('раскладка стыков: хлысты от левого конца, остаток в последнем куске', () => {
   const one = splicePlan(6000, 6000, [0, 3000, 6000]);
@@ -75,16 +76,32 @@ test('навес шире хлыста: стыки названы и посчи�
   assert.equal(battens.splices, battens.count, 'по одному стыку на каждую доску обрешётки');
 });
 
-test('расстановка столбов, при которой кусок остаётся на одной опоре', () => {
-  const m = defaultModel();
-  m.geom.B = 9000;
-  m.rafters.xs = spread(9000, 16);
-  m.posts.xs = [0, 2000, 4000, 9000];
-  m.wallPosts.xs = spread(9000, 7);
+test('стык встык садится на опору, а не на длину хлыста', () => {
+  // 0/2000/4000/9000: наивный стык при 6000 оставил бы правый кусок на одном столбе,
+  // но стык встык кладётся на самую дальнюю опору в пределах хлыста — это 4000
+  const plan = splicePlan(9000, 6000, [0, 2000, 4000, 9000], { onSupports: true });
+  assert.deepEqual(plan.at, [4000]);
+  assert.equal(plan.unstable, false, 'оба куска встали на опоры');
+  assert.equal(plan.impossible, false);
 
+  const naive = splicePlan(9000, 6000, [0, 2000, 4000, 9000]);
+  assert.deepEqual(naive.at, [6000], 'для накладки место стыка не привязано к опорам');
+  assert.equal(naive.unstable, true, 'и тогда правый кусок висит на одном столбе');
+});
+
+test('стык встык невозможен, если в пределах хлыста нет опоры', () => {
+  // пролёт 7 м между столбами: кусок длиной в хлыст не на чем закончить
+  const plan = splicePlan(11000, 6000, [0, 7000, 11000], { onSupports: true });
+  assert.equal(plan.impossible, true);
+  assert.equal(plan.from, 0, 'не нашлось опоры в пределах хлыста от начала');
+
+  const m = defaultModel();
+  m.geom.B = 11000;
+  m.rafters.xs = spread(11000, 19);
+  m.posts.xs = [0, 7000, 11000];
+  m.wallPosts.xs = spread(11000, 9);
   const purlin = analyse(m).splices.find((s) => s.key === 'purlin');
-  assert.equal(purlin.unstable, true, 'кусок 6000–9000 ложится на один столб');
-  assert.equal(purlin.cuts.find((c) => c.unstable).x0, 6000);
+  assert.equal(purlin.impossible, true, 'расчёт обязан сказать, что так не собрать');
 });
 
 test('столбы попадают в отчёт при коротком хлысте, но схему по ним не судим', () => {
@@ -139,10 +156,11 @@ test('стык на конце балки ничего не рвёт', () => {
 test('накладка оставляет балку неразрезной, стык встык — нет', () => {
   const m = defaultModel();
   m.geom.B = 9000;
-  assert.deepEqual(spliceHinges(m, 9000), [6000], 'встык по умолчанию — шарнир при 6000');
-  assert.deepEqual(spliceHinges(m, 6000), [], 'элемент по длине хлыста стыка не требует');
+  const sup = [0, 2250, 4500, 6750, 9000];
+  assert.deepEqual(spliceHinges(m, 9000, sup), [4500], 'встык по умолчанию — шарнир на опоре 4500');
+  assert.deepEqual(spliceHinges(m, 6000, sup), [], 'элемент по длине хлыста стыка не требует');
   m.opts.spliceJoint = 'plate';
-  assert.deepEqual(spliceHinges(m, 9000), [], 'накладка восстанавливает сечение — шарнира нет');
+  assert.deepEqual(spliceHinges(m, 9000, sup), [], 'накладка восстанавливает сечение — шарнира нет');
 });
 
 test('расчёт по умолчанию не зависит от типа стыка: стыков там нет', () => {
@@ -164,8 +182,98 @@ test('стык встык поднимает момент в прогоне пр
     return analyse(m).purlin;
   };
   const plate = build('plate'), butt = build('butt');
-  assert.ok(butt.U > plate.U * 1.2, `шарнир должен заметно грузить прогон: ${plate.U.toFixed(3)} → ${butt.U.toFixed(3)}`);
+  assert.ok(butt.U > plate.U * 1.15, `шарнир должен заметно грузить прогон: ${plate.U.toFixed(3)} → ${butt.U.toFixed(3)}`);
   assert.ok(plate.U < 1 && butt.U > 1, 'сечение, проходящее неразрезным, со стыком встык не проходит');
   const sum = (b) => b.reactions.reduce((a, r) => a + r.R, 0);
   assert.ok(Math.abs(sum(plate) - sum(butt)) < 0.01 * sum(plate), 'сумма реакций не зависит от схемы');
+});
+
+/* ───────── узел стыка ───────── */
+
+test('двухсрезный нагель: берётся наименьшее из трёх по табл. 20 СП 64', () => {
+  // нагель М12 в балке 50 мм с накладками 25 мм: смятие балки 0,5·c·d = 3 кН
+  const a = dowelDouble({ d: 12, plate: 25, beam: 50 });
+  assert.equal(Math.round(a.T), 3000);
+  assert.equal(a.governs, 'смятие балки');
+
+  // тонкие накладки 10 мм: 2·0,8·a·d = 1,92 кН — теперь правят они
+  const b = dowelDouble({ d: 12, plate: 10, beam: 50 });
+  assert.equal(Math.round(b.T), 1920);
+  assert.equal(b.governs, 'смятие накладок');
+
+  // толстая балка и толстые накладки: упираемся в изгиб нагеля 2·1,8·d²
+  const c = dowelDouble({ d: 12, plate: 50, beam: 200 });
+  assert.equal(Math.round(c.T), Math.round(2 * 1.8 * 1.2 * 1.2 * 1000));
+  assert.equal(c.governs, 'изгиб нагеля');
+
+  // влажность снижает всё разом
+  assert.equal(dowelDouble({ d: 12, plate: 25, beam: 50, mv: 0.9 }).T, 0.9 * a.T);
+});
+
+test('при стыке встык узла нет, при накладке — есть и он посчитан', () => {
+  const build = (joint) => {
+    const m = defaultModel();
+    m.geom.B = 9000;
+    m.rafters.xs = spread(9000, 16);
+    m.posts.xs = spread(9000, 5);
+    m.wallPosts.xs = spread(9000, 7);
+    m.opts.spliceJoint = joint;
+    return analyse(m);
+  };
+  assert.deepEqual(build('butt').spliceJoints, [], 'стык встык лежит на опоре и ничего не передаёт');
+
+  const res = build('plate');
+  assert.ok(res.spliceJoints.length >= 2, 'прогон и обвязка стыкуются, и у каждого свой узел');
+  assert.ok(!res.spliceJoints.some((j) => j.key === 'battens'), 'обрешётку стыкуют на стропиле, накладок на неё не ставят');
+
+  const wall = res.spliceJoints.find((j) => j.key === 'wallPurlin');
+  assert.equal(wall.material, 'timber');
+  assert.ok(wall.n >= 4 && wall.d >= 12, `нагели подобраны: ${wall.solution}`);
+  assert.ok(wall.U <= 0.85, 'узел подбирается с тем же целевым запасом, что и сечения');
+  assert.match(wall.solution, /накладки .*мм, \d+ нагелей М\d+/);
+
+  const purlin = res.spliceJoints.find((j) => j.key === 'purlin');
+  assert.equal(purlin.material, 'steel');
+  assert.ok(purlin.weldLength > 0 && purlin.kf >= 3, `шов подобран: ${purlin.solution}`);
+
+  assert.ok(res.summary.some((s) => s.key === 'spliceJoints'), 'узел стыка виден в сводке');
+});
+
+test('нагели не вылезают за кромку низкого сечения', () => {
+  const m = defaultModel();
+  m.geom.B = 9000;
+  m.rafters.xs = spread(9000, 16);
+  m.posts.xs = spread(9000, 5);
+  m.wallPosts.xs = spread(9000, 7);
+  m.wallPurlin.sectionId = 't50x100'; // 100 мм высоты — два ряда нагелей М20 не встанут
+  m.opts.spliceJoint = 'plate';
+  const wall = analyse(m).spliceJoints.find((j) => j.key === 'wallPurlin');
+  if (wall && !wall.impossible) {
+    const halfH = 100 / 2;
+    assert.ok(wall.rows === 1 || halfH - 3 * wall.d >= 1.75 * wall.d,
+      `при ${wall.rows} рядах нагели М${wall.d} должны помещаться в 100 мм`);
+  }
+});
+
+test('накладки и нагели попадают в смету', () => {
+  const m = defaultModel();
+  m.geom.B = 9000;
+  m.rafters.xs = spread(9000, 16);
+  m.posts.xs = spread(9000, 5);
+  m.wallPosts.xs = spread(9000, 7);
+  m.opts.spliceJoint = 'plate';
+  const b = billOfMaterials(analyse(m));
+  const plates = b.fasteners.filter((f) => f.name.startsWith('Накладка стыка'));
+  assert.ok(plates.length >= 2, 'накладки обоих стыков в спецификации');
+  assert.ok(plates.every((f) => f.mass > 0 && f.cost > 0), 'у накладок есть масса и цена');
+  assert.ok(b.fasteners.some((f) => f.name.startsWith('Нагель')), 'нагели тоже');
+
+  const butt = defaultModel();
+  Object.assign(butt.geom, { B: 9000 });
+  butt.rafters.xs = spread(9000, 16);
+  butt.posts.xs = spread(9000, 5);
+  butt.wallPosts.xs = spread(9000, 7);
+  const bb = billOfMaterials(analyse(butt));
+  assert.ok(!bb.fasteners.some((f) => f.name.startsWith('Накладка стыка')), 'при стыке встык накладок нет');
+  assert.ok(b.costs.total > bb.costs.total, 'накладки стоят денег, и это видно в смете');
 });

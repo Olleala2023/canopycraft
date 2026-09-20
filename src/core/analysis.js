@@ -5,7 +5,7 @@
  *
  * Единицы: мм, Н, Н/мм (= кН/м), МПа, кПа.
  */
-import { section } from './sections.js';
+import { section, DENSITY } from './sections.js';
 import { propsFor } from './materials.js';
 import { ROOFING, snowProfile, windPressure, GAMMA_F } from './loads.js';
 import { solveBeam, deflectionSpans } from './beam.js';
@@ -18,11 +18,17 @@ import {
   tieShear, tieFit, steelHoleBearing,
   weldMetal, weldFusion, weldLeg, boltTension, timberWasherBearing,
   concreteBearing, plateBending, anchorCone, embedDepth, anchorMass,
+  spliceDowel,
+  splicePlateBending,
 } from './checks.js';
 import {
   fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D,
   beamTie, weldLine, weldMinLeg, WELD, BOLT_RT, BOLT_AN, WASHER_SIDE,
   postBase, anchorSpan, minEmbed, CONCRETE, CONCRETE_DENSITY,
+  dowelDouble,
+  SPLICE_PLATES,
+  SPLICE_DOWELS,
+  SPLICE_GAP,
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -68,7 +74,7 @@ function analyseRafter(model, x, trib, ctx) {
   // Схема Б.8 требует считать нижнее покрытие в двух вариантах — равномерном
   // и со снеговым мешком. За расчётное принимается худшее из них, причём
   // поэлементно: у стены правит мешок, в дальней части — равномерный снег.
-  const hinges = spliceHinges(model, Ls);
+  const hinges = spliceHinges(model, Ls, supports);
   const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, hinges, nEl: 120 });
   const byVariant = ctx.snow.variants.map((v) => {
     const snowAt = (xs) => (v.at(xs * ca) * trib) / 1000 * ca * ca;
@@ -165,7 +171,7 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (Math.max(...ctx.snow.variants.map((v) => v.at(0))) * sp) / 1000 * ca * ca;
 
-  const hinges = spliceHinges(model, B);
+  const hinges = spliceHinges(model, B, xs, { always: true });
   const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, hinges, nEl: 160 });
 
@@ -214,7 +220,7 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   const self = sec.weight * gammaDead;
 
   // элемент длиннее хлыста собирается из кусков: стык встык момент не передаёт
-  const hinges = spliceHinges(model, B);
+  const hinges = spliceHinges(model, B, supports);
 
   const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
@@ -564,6 +570,191 @@ export function analysePostBases(model, posts, wallPosts, ctx) {
   };
 }
 
+
+/* ───────────────── СТЫК БАЛКИ ПО ДЛИНЕ ───────────────── */
+
+/**
+ * Узел стыка: накладка, которая восстанавливает сечение.
+ *
+ * Стык встык не передаёт ничего, поэтому он обязан лежать на опоре — это
+ * решает раскладка. Накладка же ставится там, где удобно резать, и обязана
+ * пропустить через себя и момент, и поперечную силу того сечения, в котором
+ * стоит. Считаем её как настоящий узел и выдаём типоразмер.
+ *
+ * Дерево: две боковые накладки на нагелях, симметричное двухсрезное
+ * соединение. Момент воспринимается группой нагелей по обе стороны стыка,
+ * поперечная сила делится между ними поровну.
+ *
+ * Сталь: две накладки по боковым стенкам на угловых швах по контуру.
+ *
+ * Подбор идёт снизу — от самого тонкого и дешёвого исполнения, как и сечения
+ * при подборе по цене.
+ */
+const SPLICE_TARGET = 0.85;
+const SPLICE_LENGTH_STEP = 50;
+
+/** Момент и поперечная сила в сечении стыка. Q берётся худшая из двух сторон. */
+function forcesAt(res, x) {
+  const xs = res.x;
+  let i = 0;
+  for (let k = 0; k < xs.length; k++) if (Math.abs(xs[k] - x) < Math.abs(xs[i] - x)) i = k;
+  const lo = Math.max(0, i - 1), hi = Math.min(xs.length - 1, i + 1);
+  let M = 0, V = 0;
+  for (let k = lo; k <= hi; k++) {
+    if (Math.abs(res.M[k]) > Math.abs(M)) M = res.M[k];
+    if (Math.abs(res.V[k]) > Math.abs(V)) V = res.V[k];
+  }
+  return { M, V };
+}
+
+/**
+ * Расстановка нагелей с одной стороны стыка: два ряда по высоте, колонки
+ * с шагом S1 от торца. Возвращает координаты относительно центра стыка.
+ */
+function dowelGrid(d, h, cols) {
+  const s1 = 7 * d, s2 = 3.5 * d, s3 = 3 * d;
+  // второй ряд помещается, только если между рядами остаётся S2, а до кромок S3
+  const y = h / 2 - s3;
+  const rows = 2 * y >= s2 ? [y, -y] : [0];
+  const pts = [];
+  for (let c = 0; c < cols; c++) {
+    const x = SPLICE_GAP / 2 + s1 * (c + 1);
+    for (const yy of rows) pts.push({ x, y: yy });
+  }
+  const reach = pts[pts.length - 1].x;
+  return { pts, rows: rows.length, s1, s2, s3, reach, plateLength: 2 * (reach + s1) };
+}
+
+/**
+ * Наибольшее усилие на нагель группы: момент относительно центра тяжести плюс срез.
+ *
+ * Группы две — по обе стороны стыка, и эксцентриситет у них противоположный.
+ * У одной поперечная сила момент разгружает, у другой добавляет, поэтому
+ * переносим по модулю: считаем ту группу, которой хуже.
+ */
+function dowelForce(pts, M, V) {
+  const n = pts.length;
+  const xc = pts.reduce((a, p) => a + p.x, 0) / n;
+  const r2 = pts.reduce((a, p) => a + (p.x - xc) ** 2 + p.y * p.y, 0);
+  const Mg = Math.abs(M) + Math.abs(V) * xc;
+  let max = 0;
+  for (const p of pts) {
+    const fx = (-Mg * p.y) / r2;
+    const fy = (Mg * (p.x - xc)) / r2 + V / n;
+    max = Math.max(max, Math.hypot(fx, fy));
+  }
+  return { force: max, n, xc, r2 };
+}
+
+function timberSplice(sec, mat, M, V) {
+  let best = null;
+  // сверлить двадцать отверстий вместо восьми никто не станет: сначала ищем
+  // решение с наименьшим числом нагелей, и только потом с меньшим диаметром
+  for (let cols = 2; cols <= 5 && !best; cols++) {
+    for (const d of SPLICE_DOWELS) {
+      for (const t of SPLICE_PLATES.timber) {
+        const cap = dowelDouble({ d, plate: t, beam: sec.b, mv: mat.mv ?? 1 });
+        const grid = dowelGrid(d, sec.h, cols);
+        const f = dowelForce(grid.pts, M, V);
+        const perSide = grid.pts.length;
+        const total = 2 * perSide;
+        const len = Math.ceil(grid.plateLength / SPLICE_LENGTH_STEP) * SPLICE_LENGTH_STEP;
+        const checks = [
+          spliceDowel(f.force, cap.T,
+            `${perSide} нагелей М${d} с каждой стороны в ${grid.rows === 2 ? 'два ряда' : 'один ряд'}, T = ${(cap.T / 1000).toFixed(2).replace('.', ',')} кН · ${cap.governs}`),
+          splicePlateBending(M, t, sec.h, mat.Rbend, `накладка ${t}×${sec.h} мм, их две`),
+        ];
+        const w = worstOf(checks);
+        if (w.U <= SPLICE_TARGET) {
+          best = {
+            material: 'timber', d, plateT: t, plateH: sec.h, plateLength: len,
+            cols, rows: grid.rows, n: total, T: cap.T, governs: cap.governs, force: f.force,
+            spacing: { s1: grid.s1, s2: grid.s2, s3: grid.s3 },
+            solution: `две накладки ${t}×${sec.h} мм длиной ${len} мм, ${total} нагелей М${d}`,
+            checks, ...w,
+          };
+          break;
+        }
+      }
+      if (best) break;
+    }
+  }
+  return best;
+}
+
+function steelSplice(sec, mat, M, V) {
+  const tw = sec.t ?? 3;
+  let best = null;
+  // накладка тоньше стенки — решение сомнительное и на катет шва всё равно
+  // не даёт ничего: kf ограничен наименьшей из толщин
+  for (const t of SPLICE_PLATES.steel.filter((x) => x >= tw)) {
+    const kfMin = weldMinLeg(Math.max(t, tw));
+    const kfMax = 1.2 * Math.min(t, tw);
+    if (kfMin > kfMax) continue; // такой накладкой к этой стенке не приварить
+    const kf = kfMin;
+    for (let len = 100; len <= 400; len += SPLICE_LENGTH_STEP) {
+      const line = weldLine(len, sec.h);
+      const Aw = WELD.betaF * kf * line.length, Wf = WELD.betaF * kf * line.W;
+      const Az = WELD.betaZ * kf * line.length, Wz = WELD.betaZ * kf * line.W;
+      // накладок две, каждая берёт половину момента и половину поперечной силы
+      const tauF = Math.hypot(Math.abs(M) / 2 / Wf, Math.abs(V) / 2 / Aw);
+      const tauZ = Math.hypot(Math.abs(M) / 2 / Wz, Math.abs(V) / 2 / Az);
+      const note = `шов по контуру накладки ${len}×${sec.h} мм, катет ${kf} мм`;
+      const checks = [
+        weldMetal(tauF, WELD.Rwf, note),
+        weldFusion(tauZ, mat.Run, note),
+        weldLeg(kf, kfMin, kfMax, `стенка ${tw} мм и накладка ${t} мм`),
+        splicePlateBending(M, t, sec.h, mat.Ry, `накладка ${t}×${sec.h} мм, их две`),
+      ];
+      const w = worstOf(checks);
+      if (w.U <= SPLICE_TARGET) {
+        best = {
+          material: 'steel', plateT: t, plateH: sec.h, plateLength: 2 * len + SPLICE_GAP,
+          weldLength: line.length, kf, tauF, tauZ,
+          solution: `две накладки ${t}×${sec.h} мм длиной ${2 * len + SPLICE_GAP} мм, шов по контуру катетом ${kf} мм`,
+          checks, ...w,
+        };
+        break;
+      }
+    }
+    if (best) break;
+  }
+  return best;
+}
+
+/**
+ * Стыки-накладки всех балок, которые не помещаются в хлыст.
+ * При стыке встык узла нет: там стык лежит на опоре и ничего не передаёт.
+ */
+export function analyseSpliceJoints(model, elements) {
+  if ((model.opts.spliceJoint ?? 'butt') !== 'plate') return [];
+  const out = [];
+  for (const { key, label, el, length, supports } of elements) {
+    const stock = model.opts.stockLength ?? 6000;
+    const plan = splicePlan(length, stock, supports);
+    if (!plan.splices) continue;
+    // худший стык элемента: где больше момент
+    const diag = el.res.uls ?? el.res['ULS-1'];
+    let worstX = plan.at[0], worst = forcesAt(diag, plan.at[0]);
+    for (const x of plan.at) {
+      const f = forcesAt(diag, x);
+      if (Math.abs(f.M) > Math.abs(worst.M)) { worst = f; worstX = x; }
+    }
+    const joint = el.sec.material === 'timber'
+      ? timberSplice(el.sec, el.mat, worst.M, worst.V)
+      : steelSplice(el.sec, el.mat, worst.M, worst.V);
+    out.push(joint
+      ? { key, label, x: worstX, M: worst.M, V: worst.V, count: plan.splices, sec: el.sec, ...joint }
+      : {
+        key, label, x: worstX, M: worst.M, V: worst.V, count: plan.splices, sec: el.sec,
+        material: el.sec.material, impossible: true, U: Infinity,
+        solution: 'из сортамента накладок не собирается — уменьшите пролёт или перенесите стык',
+        checks: [], worst: { name: 'Накладка не подбирается', U: Infinity },
+      });
+  }
+  return out;
+}
+
 /* ───────────────────────── ВСЁ ВМЕСТЕ ───────────────────────── */
 
 /**
@@ -660,10 +851,12 @@ export function supportLoads(model, roof = analyseRoof(model)) {
  * тогда сечение восстановлено и балка остаётся неразрезной. Стык ровно на
  * конце элемента ничего не рвёт, поэтому в схему не идёт.
  */
-export function spliceHinges(model, length) {
-  if ((model.opts.spliceJoint ?? 'butt') !== 'butt') return [];
+export function spliceHinges(model, length, supports = [], opts = {}) {
+  // обрешётку стыкуют на стропиле внахлёст, накладок на неё не ставят —
+  // для неё стык всегда работает шарниром, какой бы тип ни был выбран
+  if (!opts.always && (model.opts.spliceJoint ?? 'butt') !== 'butt') return [];
   const stock = model.opts.stockLength ?? 6000;
-  return splicePlan(length, stock).at.filter((x) => x > 0 && x < length);
+  return splicePlan(length, stock, supports, { onSupports: true }).at.filter((x) => x > 0 && x < length);
 }
 
 export function spliceReport(model) {
@@ -683,12 +876,14 @@ export function spliceReport(model) {
     { key: 'posts', label: 'Столб наружный', beam: false, length: lv.postLength, supports: [] },
     { key: 'wallPosts', label: 'Столб у стены', beam: false, length: lv.wallPostLength, supports: [] },
   ];
+  const butt = (model.opts.spliceJoint ?? 'butt') === 'butt';
   return parts
     .map((p) => {
-      const plan = splicePlan(p.length, stock, p.supports);
-      return { ...p, ...plan, unstable: p.beam && plan.unstable };
+      // стык встык кладётся на опору — иначе куски не связаны ничем
+      const plan = splicePlan(p.length, stock, p.supports, { onSupports: (butt || p.key === 'battens') && p.beam });
+      return { ...p, ...plan, unstable: p.beam && plan.unstable, impossible: p.beam && plan.impossible };
     })
-    .filter((p) => p.splices > 0);
+    .filter((p) => p.splices > 0 || p.impossible);
 }
 
 export function analyse(model) {
@@ -703,6 +898,13 @@ export function analyse(model) {
   const ties = analyseTies(model, rafters, ctx);
   const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
   const bases = analysePostBases(model, posts, wallPosts, ctx);
+  const ca = Math.cos(deg(model.geom.alpha));
+  const worstRafter = rafters.reduce((a, b) => (a.U > b.U ? a : b));
+  const spliceJoints = analyseSpliceJoints(model, [
+    { key: 'purlin', label: 'Прогон наружный', el: purlin, length: model.geom.B, supports: sl.outer.supports },
+    { key: 'wallPurlin', label: 'Обвязка у стены', el: wallPurlin, length: model.geom.B, supports: sl.wall.supports },
+    { key: 'rafters', label: 'Стропило', el: worstRafter, length: worstRafter.Ls, supports: [0, model.geom.L / ca] },
+  ]);
 
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
@@ -727,12 +929,17 @@ export function analyse(model) {
     { key: 'bases', label: 'База столба', U: Math.max(bases.outer.U, bases.wall.U),
       worst: (bases.outer.U > bases.wall.U ? bases.outer : bases.wall).worst },
   ];
+  if (spliceJoints.length) {
+    const worstSplice = spliceJoints.reduce((a, b) => (a.U > b.U ? a : b));
+    all.push({ key: 'spliceJoints', label: 'Стык по длине', U: worstSplice.U, worst: worstSplice.worst });
+  }
 
   return {
     model, ctx, dead, snow, wind,
     rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
     thrust: sl.thrust,
     splices: spliceReport(model),
+    spliceJoints,
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
   };
@@ -864,6 +1071,33 @@ export function billOfMaterials(result) {
     }
   }
 
+  // накладки стыков: то, чего в смете не было совсем, хотя купить придётся
+  for (const j of result.spliceJoints ?? []) {
+    if (j.impossible) continue;
+    const plates = 2 * j.count;
+    const volume = (j.plateT * j.plateH * j.plateLength) / 1e9; // м³ одной накладки
+    if (j.material === 'timber') {
+      fasteners.push({
+        name: `Накладка стыка ${j.plateT}×${j.plateH}×${j.plateLength} мм · ${j.label.toLowerCase()}`,
+        count: plates, note: 'две на стык, с обеих сторон', mass: plates * volume * DENSITY.timber,
+        cost: plates * volume * pr.timberM3,
+      });
+      const dowels = j.n * j.count;
+      const dowelMass = (Math.PI / 4) * j.d ** 2 * (j.sec.b + 2 * j.plateT + 40) * 7.85e-6 * 1.6;
+      fasteners.push({
+        name: `Нагель М${j.d} с гайкой и шайбами · ${j.label.toLowerCase()}`, count: dowels,
+        note: `${j.n} шт на стык, сетка ${j.cols}×${j.rows} с каждой стороны`,
+        mass: dowels * dowelMass, cost: dowels * dowelMass * pr.steelKg,
+      });
+    } else {
+      fasteners.push({
+        name: `Накладка стыка ${j.plateT}×${j.plateH}×${j.plateLength} мм · ${j.label.toLowerCase()}`,
+        count: plates, note: `две на стык, шов по контуру катетом ${j.kf} мм`,
+        mass: plates * volume * DENSITY.steel, cost: plates * volume * DENSITY.steel * pr.steelKg,
+      });
+    }
+  }
+
   const nAllPosts = m.posts.xs.length + m.wallPosts.xs.length;
   const pb = result.bases.outer.base;
   if (pb.kind === 'plate') {
@@ -944,5 +1178,6 @@ export function billOfMaterials(result) {
     ],
   };
 
-  return { items, fasteners, weights, costs, timberVolume, timberMass, steelMass, steelLength, stock, total };
+  return { items, fasteners, weights, costs, timberVolume, timberMass, steelMass, steelLength, stock, total,
+    spliceJoints: result.spliceJoints ?? [] };
 }

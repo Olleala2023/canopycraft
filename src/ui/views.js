@@ -308,6 +308,12 @@ export function pickElement(res, sel) {
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
       title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
   }
+  if (sel.type === 'splice') {
+    const list = res.spliceJoints ?? [];
+    const j = list.find((x) => x.key === sel.key) ?? list[0];
+    return j && { ...j, kind: 'splice', sec: { label: j.sec.label },
+      title: `СТЫК ПО ДЛИНЕ · ${j.label.toUpperCase()}` };
+  }
   if (sel.type === 'tie') {
     const t = res.ties[sel.side ?? 'outer'];
     return t && { ...t, kind: 'tie', sec: t.fastener,

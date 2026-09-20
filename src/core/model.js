@@ -173,18 +173,71 @@ export function levels(m) {
  * @param {number} stock длина хлыста в продаже, мм
  * @param {number[]} supports координаты опор по длине элемента, мм
  */
-export function splicePlan(length, stock, supports = []) {
-  const EPS = 1; // мм: округления сечений и длин не должны плодить лишний стык
-  const pieces = Math.max(1, Math.ceil((length - EPS) / stock));
-  const at = Array.from({ length: pieces - 1 }, (_, i) => stock * (i + 1));
+const SPLICE_EPS = 1; // мм: округления сечений и длин не должны плодить лишний стык
+
+/** Куски, на которые заданные стыки делят элемент, и опирание каждого. */
+function splicePieces(length, at, supports) {
   const sup = [...supports].sort((a, b) => a - b);
   const bounds = [0, ...at, length];
   const cuts = bounds.slice(0, -1).map((x0, i) => {
     const x1 = bounds[i + 1];
-    const on = sup.filter((x) => x >= x0 - EPS && x <= x1 + EPS).length;
+    const on = sup.filter((x) => x >= x0 - SPLICE_EPS && x <= x1 + SPLICE_EPS).length;
     return { x0, x1, length: x1 - x0, supports: on, unstable: on < 2 };
   });
-  return { stock, pieces, splices: pieces - 1, at, cuts, unstable: cuts.some((c) => c.unstable) };
+  return { pieces: at.length + 1, splices: at.length, at, cuts, unstable: cuts.some((c) => c.unstable) };
+}
+
+/**
+ * Стыки встык — только по опорам.
+ *
+ * Стык без накладки не передаёт ни момента, ни поперечной силы: два торца
+ * просто стоят рядом. Значит, он обязан лежать на опоре, иначе куски не
+ * связаны ничем и каждый должен стоять на своих ногах. Кладём стык на самую
+ * дальнюю опору в пределах хлыста — так и режут на практике.
+ *
+ * Если опоры в пределах хлыста нет, собрать нельзя: возвращается impossible.
+ */
+export function spliceAtSupports(length, stock, supports) {
+  const inner = [...supports].sort((a, b) => a - b)
+    .filter((x) => x > SPLICE_EPS && x < length - SPLICE_EPS);
+  const at = [];
+  let start = 0;
+  while (length - start > stock + SPLICE_EPS) {
+    let pick = -1;
+    for (const x of inner) if (x > start + SPLICE_EPS && x <= start + stock + SPLICE_EPS) pick = x;
+    if (pick < 0) return { at, impossible: true, from: start };
+    at.push(pick);
+    start = pick;
+  }
+  return { at, impossible: false, from: null };
+}
+
+/**
+ * Раскладка стыков линейного элемента по длине хлыста.
+ *
+ * Элемент длиннее хлыста купить нельзя — его собирают из кусков. По умолчанию
+ * стыки идут от левого конца через длину хлыста: так режут, когда стык держит
+ * накладка и место его не принципиально. С opts.onSupports стыки кладутся на
+ * опоры — это обязательно для стыка встык.
+ *
+ * Отдельно проверяется опирание каждого куска. Кусок, попавший меньше чем на
+ * две опоры, — это уже не балка с пониженным запасом, а геометрически
+ * изменяемая схема. Опора точно в месте стыка засчитывается обоим кускам:
+ * физически они оба на неё ложатся.
+ *
+ * @param {number} length длина элемента, мм
+ * @param {number} stock длина хлыста в продаже, мм
+ * @param {number[]} supports координаты опор по длине элемента, мм
+ * @param {{onSupports?:boolean}} [opts]
+ */
+export function splicePlan(length, stock, supports = [], opts = {}) {
+  if (opts.onSupports) {
+    const s = spliceAtSupports(length, stock, supports);
+    return { stock, impossible: s.impossible, from: s.from, ...splicePieces(length, s.at, supports) };
+  }
+  const pieces = Math.max(1, Math.ceil((length - SPLICE_EPS) / stock));
+  const at = Array.from({ length: pieces - 1 }, (_, i) => stock * (i + 1));
+  return { stock, impossible: false, from: null, ...splicePieces(length, at, supports) };
 }
 
 /**
