@@ -144,10 +144,11 @@ const CONTROLS = [
   { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
 
   { group: 'Площадка', side: 'right' },
-  { k: 'site.snowRegion', label: 'Снеговой район', type: 'select', options: () => Object.entries(SNOW_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
-  { k: 'site.windRegion', label: 'Ветровой район', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
-  { k: 'site.terrain', label: 'Тип местности', type: 'select', options: () => [
-      { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }] },
+  { k: 'site.snowRegion', label: 'Снеговой район', help: 'site.html', helpTitle: 'где взять район и на что он влияет', type: 'select', options: () => Object.entries(SNOW_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
+  { k: 'site.windRegion', label: 'Ветровой район', help: 'site.html', helpTitle: 'где взять район и на что он влияет', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
+  { k: 'site.terrain', label: 'Тип местности', help: 'site.html', helpTitle: 'тип местности и пульсации ветра', type: 'select', options: () => [
+      { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }],
+    note: 'Районы берутся по картам приложения Е СП 20. По умолчанию стоит Воронеж: снег III, ветер II, местность B — если строите не там, это первое, что нужно поменять.' },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'check' },
   { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
   { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },

@@ -415,3 +415,17 @@ test('подбор по цене: варианты в запасе, отсорт
   assert.equal(r.options[0].model.geom.L, m.geom.L);
   assert.equal(r.options[0].model.geom.alpha, m.geom.alpha);
 });
+
+test('массы в сводке — числа, а не функции: отчёт печатает их напрямую', () => {
+  const b = billOfMaterials(analyse(defaultModel()));
+  for (const [key, w] of Object.entries(b.weights)) {
+    if (w && typeof w === 'object' && 'mass' in w) {
+      assert.equal(typeof w.mass, 'number', `${key}: масса должна быть числом`);
+      assert.ok(Number.isFinite(w.mass) && w.mass > 0, `${key}: масса ${w.mass}`);
+    }
+  }
+  const group = b.weights.groups.find((g) => g.name === 'Метизы');
+  assert.ok(Math.abs(group.mass - b.weights.fasteners.mass) < 1e-9,
+    'метизы в группах и в сводке — одно и то же число');
+  assert.equal(b.weights.fasteners.count, b.fasteners.reduce((a, f) => a + (f.count ?? 0), 0));
+});
