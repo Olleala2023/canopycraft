@@ -166,6 +166,12 @@ const CONTROLS = [
     options: () => Object.keys(CONCRETE).map((id) => ({ id, label: `${id} — R_b ${String(CONCRETE[id].Rb).replace('.', ',')} МПа` })) },
   { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
     options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
+  { k: 'opts.spliceJoint', label: 'Стык по длине', type: 'select',
+    options: () => [
+      { id: 'butt', label: 'встык — момент не передаётся' },
+      { id: 'plate', label: 'накладка — сечение восстановлено' },
+    ],
+    note: 'Что делать, когда элемент длиннее хлыста. Простой стык встык работает шарниром: опорный момент в нём исчезает, а пролётные растут. Накладка с восстановлением сечения оставляет балку неразрезной — но её саму расчёт пока не проверяет, это на вас.' },
 
   { group: 'Цены — подставьте свои', side: 'right' },
   { k: 'prices.timberM3', label: 'Доска обрезная, ₽/м³', type: 'number', min: 0, step: 500 },
@@ -391,6 +397,22 @@ function renderInspector(res) {
       if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
     }
     kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
+  } else if (el.kind === 'splice') {
+    kv.push(['Решение', el.solution]);
+    kv.push(['Сечение стыка', `${Math.round(el.x)} мм от левого края`]);
+    kv.push(['Момент в стыке', `${f2(el.M / 1e6)} кН·м`]);
+    kv.push(['Поперечная сила', `${f2(el.V / 1000)} кН`]);
+    kv.push(['Стыков на элементе', `${el.count} шт`]);
+    if (el.material === 'timber' && el.d) {
+      kv.push(['Нагели', `${el.n} × М${el.d} · ${plural(el.cols, 'колонка', 'колонки', 'колонок')} в ${el.rows === 2 ? 'два ряда' : 'один ряд'}`]);
+      kv.push(['На крайний нагель', `${f2(el.force / 1000)} кН при T = ${f2(el.T / 1000)} кН`]);
+      kv.push(['Шаги S1 / S2 / S3', `${Math.round(el.spacing.s1)} / ${Math.round(el.spacing.s2)} / ${Math.round(el.spacing.s3)} мм`]);
+    }
+    if (el.weldLength) {
+      kv.push(['Длина шва по контуру', `${Math.round(el.weldLength)} мм · катет ${el.kf} мм`]);
+      kv.push(['Напряжение в шве', `${f2(el.tauF)} / ${f2(el.tauZ)} МПа`]);
+    }
+    if (el.plateT) kv.push(['Накладки', `2 × ${el.plateT}×${el.plateH} мм, длина ${el.plateLength} мм`]);
   } else if (el.kind === 'base') {
     kv.push(['Сжатие', `${f2(el.N / 1000)} кН`]);
     kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
@@ -427,17 +449,78 @@ const SEL_FOR = {
   ties: { type: 'tie', side: 'outer' },
   beamTies: { type: 'beamTie', side: 'outer' },
   bases: { type: 'base', side: 'outer' },
+  spliceJoints: { type: 'splice' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
   if (key === 'ties') return { type: 'tie', side: res.ties.outer.U >= res.ties.wall.U ? 'outer' : 'wall' };
   if (key === 'beamTies') return { type: 'beamTie', side: res.beamTies.outer.U >= res.beamTies.wall.U ? 'outer' : 'wall' };
   if (key === 'bases') return { type: 'base', side: res.bases.outer.U >= res.bases.wall.U ? 'outer' : 'wall' };
+  if (key === 'spliceJoints') {
+    const worst = res.spliceJoints.reduce((a, b) => (a.U > b.U ? a : b), res.spliceJoints[0]);
+    return { type: 'splice', key: worst?.key };
+  }
   const row = ROW_OF[key];
   if (!row) return { ...SEL_FOR[key] };
   const list = res[row[0]];
   const i = list.reduce((bi, e, idx) => (e.U > list[bi].U ? idx : bi), 0);
   return { type: row[1], index: i };
+}
+
+/**
+ * Предупреждения над сводкой: то, о чём расчёт молчит, хотя обязан сказать.
+ *
+ * Балки решаются неразрезными по всей ширине, но элемент длиннее хлыста
+ * придётся стыковать, и стык без накладки работает шарниром. Отдельной
+ * строкой — случай, когда кусок ложится меньше чем на две опоры: это уже
+ * не пониженный запас, а геометрически изменяемая схема.
+ */
+function renderWarns(res) {
+  const list = res.splices;
+  const host = $('warns');
+  if (!list.length) { host.innerHTML = ''; return; }
+  const stock = res.model.opts.stockLength ?? 6000;
+  const butt = (res.model.opts.spliceJoint ?? 'butt') === 'butt';
+  const mm = (x) => Math.round(x);
+  const out = [];
+
+  for (const s of list.filter((e) => e.impossible)) {
+    out.push(`<div class="warn bad"><b>${s.label}: стык встык сюда не поставить.</b>
+      Элемент длиной ${mm(s.length)} мм не помещается в хлыст ${(stock / 1000).toFixed(0)} м,
+      а опоры в пределах хлыста от отметки ${mm(s.from)} мм нет. Стык встык обязан лежать на
+      опоре — он не передаёт ни момента, ни поперечной силы. Поставьте опору ближе или
+      выберите стык с накладкой.</div>`);
+  }
+
+  for (const s of list.filter((e) => e.unstable && !e.impossible)) {
+    const bad = s.cuts.filter((c) => c.unstable)
+      .map((c) => `${mm(c.x0)}–${mm(c.x1)} мм (опор: ${c.supports})`).join(', ');
+    out.push(butt
+      ? `<div class="warn bad"><b>${s.label}: стык оставляет кусок меньше чем на двух опорах.</b>
+          Куски ${bad} — при стыке встык это геометрически изменяемая схема, считать там нечего.
+          Переставьте опоры так, чтобы каждый кусок лёг минимум на две, или выполните стык накладкой.</div>`
+      : `<div class="warn bad"><b>${s.label}: кусок держится только накладкой.</b>
+          Куски ${bad} — без накладки, восстанавливающей сечение, это изменяемая схема.
+          Расчёт верит, что накладка есть, и сам её не проверяет.</div>`);
+  }
+
+  const spliced = list.filter((s) => s.splices > 0);
+  if (!spliced.length) { host.innerHTML = out.join(''); return; }
+  const items = spliced.map((s) => `${s.label} — ${plural(s.pieces, 'хлыст', 'хлыста', 'хлыстов')}, ${plural(s.splices, 'стык', 'стыка', 'стыков')} при ${s.at.map(mm).join(' и ')} мм`);
+  out.push(`<div class="warn"><b>Длиннее хлыста ${(stock / 1000).toFixed(0)} м — потребуются стыки.</b>
+    ${items.join('; ')}. ${butt
+      ? 'Стык принят встык и посчитан шарниром: момент через него не идёт, опорный момент исчезает, а пролётные растут. Если стык будет с накладкой, переключите «Стык по длине» в блоке «Материалы».'
+      : 'Стык принят с накладкой, и балка считается неразрезной. Сама накладка посчитана — решение в карточке «Стык по длине» внизу; накладку надо выполнить именно так, иначе неразрезности не будет.'}
+    <a href="help/limits.html" target="_blank" rel="noopener">Что считается, а что нет</a>.</div>`);
+
+  host.innerHTML = out.join('');
+}
+
+/** Склонение числительного: 1 стык, 2 стыка, 5 стыков. */
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  const word = a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
+  return `${n} ${word}`;
 }
 
 function renderSummary(res) {
@@ -453,6 +536,37 @@ function renderSummary(res) {
       state.sel = selectRow(res, c.getAttribute('data-sel'));
       render();
     }));
+}
+
+/**
+ * Строка под спецификацией: сколько стыков придётся сделать.
+ *
+ * Цена считается по чистому объёму и массе, поэтому сам стык в неё не входит —
+ * ни накладка, ни метизы. Сказать об этом надо там же, где человек смотрит,
+ * что покупать.
+ */
+function spliceReportNote(b) {
+  const spliced = b.items.filter((i) => i.splices > 0);
+  if (!spliced.length) return '';
+  const list = spliced.map((i) => `${i.name.toLowerCase()} — ${i.splices} на ${i.count} шт`).join(', ');
+  const joints = b.spliceJoints ?? [];
+  return `<p><b>Стыки по длине.</b> Элементы длиннее хлыста ${(b.stock / 1000).toFixed(0)} м собираются
+    из кусков: ${list}. ${joints.length
+      ? 'Стыки выполняются накладками, и балка считается неразрезной. Решение по каждому: '
+        + joints.map((j) => `${j.label.toLowerCase()} — ${j.solution}`).join('; ') + '.'
+      : 'Стыки выполняются встык и по расчёту лежат на опорах: момент через них не передаётся, накладки не нужны.'}</p>`;
+}
+
+function spliceNote(b) {
+  const spliced = b.items.filter((i) => i.splices > 0);
+  if (!spliced.length) return '';
+  const total = spliced.reduce((a, i) => a + i.splices, 0);
+  const list = spliced.map((i) => `${i.name.toLowerCase()} — ${i.splices}`).join(', ');
+  const plated = (b.spliceJoints ?? []).length > 0;
+  return `<div class="hint" style="border:0;padding:6px 0 0">
+    Стыков по длине: <b>${total}</b> (${list}). ${plated
+      ? 'Накладки и их метизы посчитаны и включены в смету — смотрите строки «Накладка стыка».'
+      : 'Стык встык лежит на опоре и ничего не передаёт, поэтому накладок в смете нет.'}</div>`;
 }
 
 function renderBom(res, b) {
@@ -473,6 +587,7 @@ function renderBom(res, b) {
     <tr><th>Элемент</th><th>Сечение</th><th>Материал</th><th>Шт</th><th>Длина, мм</th><th>Всего, м</th><th>Купить</th><th>Объём, м³</th><th>Масса, кг</th><th>Стоимость, ${c.currency}</th></tr>
     ${rows}${fast}
     <tr><td colspan="7"><b>Итого</b></td><td class="n"><b>${w.timber.volume.toFixed(3)}</b></td><td class="n"><b>${w.total.toFixed(0)}</b></td><td class="n"><b>${money(c.total - c.roofing)}</b></td></tr></table></div>
+    ${spliceNote(b)}
 
     <div class="pane-title" style="margin-top:14px">Масса конструкции</div>
     <div class="row2" style="gap:14px">
@@ -502,7 +617,7 @@ function renderBom(res, b) {
     </div>
     <div class="hint" style="border:0;padding:8px 0 0">
       Цены задаются в панели слева: дерево по объёму, металл по массе, кровля по площади, метизы поштучно.
-      Работа, фундамент, доставка и крепёж стропил сюда не входят.
+      Метизы посчитанных узлов сюда входят, а работа, фундамент, доставка и раскрой — нет.
     </div>
 
     ${res.snow.drift && res.snow.drift.applies ? `
@@ -1005,7 +1120,8 @@ function buildReport(res) {
     </table>
 
     <h2>6. Стоимость материалов</h2>
-    <p>Цены — те, что заданы в расчёте; работа, фундамент, доставка и крепёж стропил не учтены.</p>
+    <p>Цены — те, что заданы в расчёте; метизы посчитанных узлов в смете есть, а работа, фундамент,
+    доставка и раскрой не учтены.</p>
     <table><tr><th>Группа</th><th>Расчёт</th><th>Стоимость, ${b.costs.currency}</th></tr>
       ${b.costs.groups.map((g) => `<tr><td>${g.name}</td><td>${g.base}</td><td>${Math.round(g.cost).toLocaleString('ru-RU')}</td></tr>`).join('')}
       <tr><td colspan="2"><b>Всего</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')}</b></td></tr>
@@ -1017,9 +1133,11 @@ function buildReport(res) {
       ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : '—'}</td><td>${i.mass.toFixed(1)} кг</td><td>${Math.round(i.cost).toLocaleString('ru-RU')} ${b.costs.currency}</td></tr>`).join('')}
       <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³</b></td><td><b>${b.weights.total.toFixed(0)} кг</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')} ${b.costs.currency}</b></td></tr></table>
     <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
+    ${spliceReportNote(b)}
     <h2>8. Ограничения</h2>
-    <p>Расчёт не охватывает: сварные швы, расчёт основания по грунту, ветровые связи, огнестойкость,
-    температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
+    <p>Расчёт не охватывает: расчёт основания по грунту, ветровые связи, огнестойкость,
+    температурные воздействия, стыки линейных элементов по длине. Сварные швы считаются только
+    в узле «прогон — столб». Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
     <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016: формула (Б.5),
     перечисление «в» для m₂, перечисление «г» с формулой (Б.6) для длины зоны, перечисление «д»
@@ -1052,6 +1170,7 @@ function render(hint) {
   syncParams();
   renderCanvas(res);
   renderInspector(res);
+  renderWarns(res);
   renderSummary(res);
   renderBom(res, bom);
   renderCost(bom);

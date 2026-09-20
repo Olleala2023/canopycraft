@@ -68,6 +68,19 @@ export function drawPlan(res, sel) {
     <line x1="${X(0)}" y1="${Y(g.L)}" x2="${X(g.B)}" y2="${Y(g.L)}" stroke="${uColor(res.purlin.U)}" stroke-width="5"/>
     <title>Прогон ${res.purlin.sec.label} · U ${f2(res.purlin.U)}</title></g>`);
 
+  // стыки по длине: балка длиннее хлыста собрана из кусков, и это видно на плане
+  for (const [key, y] of [['wallPurlin', Y(0) + 5], ['purlin', Y(g.L)]]) {
+    const plan = res.splices.find((sp) => sp.key === key);
+    if (!plan) continue;
+    const hinge = (res.model.opts.spliceJoint ?? 'butt') === 'butt';
+    const color = hinge ? 'var(--u-bad)' : 'var(--u-warn)';
+    for (const at of plan.at) {
+      const x = X(at);
+      s.push(`<line x1="${x}" y1="${y - 10}" x2="${x}" y2="${y + 10}" stroke="${color}" stroke-width="2.4"/>`);
+      s.push(`<text x="${x + 5}" y="${y - 12}" font-size="9" font-family="${mono}" fill="${color}">стык ${Math.round(at)}${hinge ? ' · шарнир' : ' · накладка'}</text>`);
+    }
+  }
+
   // столбы
   res.posts.forEach((p, i) => {
     const px = X(p.x), py = Y(g.L), sz = 11;
@@ -252,6 +265,12 @@ export function drawDiagrams(res, sel) {
   s.push(chart(vertical ? 'ПОПЕРЕЧНАЯ СИЛА' : 'ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
   s.push(chart(vertical ? 'ГОРИЗОНТАЛЬНОЕ СМЕЩЕНИЕ' : 'ПРОГИБ (нормативные нагрузки)',
     xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
+  // стык по длине: в этом сечении момент не передаётся, и излом эпюры именно здесь
+  for (const h of el.hinges ?? []) {
+    const x = pad.l + (W * h) / xs[xs.length - 1];
+    s.push(`<line x1="${x}" y1="${pad.t - 8}" x2="${x}" y2="${vh - 8}" stroke="var(--u-bad)" stroke-dasharray="5 3" opacity=".8"/>`);
+    s.push(`<text x="${x + 3}" y="${pad.t - 10}" font-size="9" font-family="${mono}" fill="var(--u-bad)">стык ${Math.round(h)} · M = 0</text>`);
+  }
   for (const sup of r.reactions) {
     const x = pad.l + (W * sup.x) / xs[xs.length - 1];
     s.push(`<line x1="${x}" y1="${pad.t}" x2="${x}" y2="${vh - 8}" stroke="var(--ink-3)" stroke-dasharray="2 4" opacity=".7"/>`);
@@ -288,6 +307,12 @@ export function pickElement(res, sel) {
     const t = res.beamTies[sel.side ?? 'outer'];
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
       title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
+  }
+  if (sel.type === 'splice') {
+    const list = res.spliceJoints ?? [];
+    const j = list.find((x) => x.key === sel.key) ?? list[0];
+    return j && { ...j, kind: 'splice', sec: { label: j.sec.label },
+      title: `СТЫК ПО ДЛИНЕ · ${j.label.toUpperCase()}` };
   }
   if (sel.type === 'tie') {
     const t = res.ties[sel.side ?? 'outer'];
