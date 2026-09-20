@@ -122,6 +122,15 @@ g.draggable{cursor:ew-resize}
 .kv span{overflow-wrap:anywhere; min-width:0}
 
 /* ── сводка ── */
+/* ── предупреждения над сводкой: то, чего расчёт не видит ── */
+.warns{display:flex; flex-direction:column; gap:8px; margin-bottom:12px}
+.warns:empty{display:none}
+.warn{border-left:3px solid var(--u-warn); background:var(--surface-2); padding:10px 13px;
+  font-size:12.5px; color:var(--ink-2); line-height:1.5}
+.warn.bad{border-left-color:var(--u-bad)}
+.warn b{color:var(--ink)}
+.warn a{color:var(--accent-2)}
+
 .summary{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px}
 .card{border:1px solid var(--rule-2); background:var(--surface); padding:10px 12px; display:flex; flex-direction:column; gap:5px; cursor:pointer}
 .card:hover{border-color:var(--accent-2)}

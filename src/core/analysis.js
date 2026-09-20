@@ -9,7 +9,7 @@ import { section } from './sections.js';
 import { propsFor } from './materials.js';
 import { ROOFING, snowProfile, windPressure, GAMMA_F } from './loads.js';
 import { solveBeam, deflectionSpans } from './beam.js';
-import { tributaries, levels, boltHeights } from './model.js';
+import { tributaries, levels, boltHeights, splicePlan } from './model.js';
 import {
   timberBending, timberShear, timberCombined, timberLateral, timberBearing,
   steelBending, steelShear, steelStability, steelBeamColumn, steelSlenderness,
@@ -634,6 +634,45 @@ export function supportLoads(model, roof = analyseRoof(model)) {
   };
 }
 
+/**
+ * Стыки по длине: какие элементы не помещаются в хлыст.
+ *
+ * Балки считаются неразрезными по всей ширине навеса, а купить их целиком
+ * можно только пока элемент короче хлыста. Дальше расчёт опирается на
+ * элемент, которого не существует, и об этом надо сказать вслух: стык без
+ * накладки — шарнир, он снимает опорный момент и поднимает пролётные.
+ *
+ * Отдельно ловится случай, когда кусок ложится меньше чем на две опоры:
+ * это уже не пониженный запас, а геометрически изменяемая схема.
+ *
+ * Столбы попадают в список при коротком хлысте, но схему по ним не судим —
+ * стойка не балка на опорах, стык в ней конструируется отдельно.
+ */
+export function spliceReport(model) {
+  const { geom } = model;
+  const stock = model.opts.stockLength ?? 6000;
+  const ca = Math.cos(deg(geom.alpha));
+  const lv = levels(model);
+  const parts = [
+    { key: 'rafters', label: 'Стропило', beam: true,
+      length: (geom.L + geom.a) / ca + 100, supports: [0, geom.L / ca] },
+    { key: 'battens', label: 'Обрешётка', beam: true,
+      length: geom.B, supports: [...model.rafters.xs] },
+    { key: 'wallPurlin', label: 'Обвязка у стены', beam: true,
+      length: geom.B, supports: [...model.wallPosts.xs] },
+    { key: 'purlin', label: 'Прогон наружный', beam: true,
+      length: geom.B, supports: [...model.posts.xs] },
+    { key: 'posts', label: 'Столб наружный', beam: false, length: lv.postLength, supports: [] },
+    { key: 'wallPosts', label: 'Столб у стены', beam: false, length: lv.wallPostLength, supports: [] },
+  ];
+  return parts
+    .map((p) => {
+      const plan = splicePlan(p.length, stock, p.supports);
+      return { ...p, ...plan, unstable: p.beam && plan.unstable };
+    })
+    .filter((p) => p.splices > 0);
+}
+
 export function analyse(model) {
   const { ctx, dead, snow, wind, rafters, battens } = analyseRoof(model);
   const sl = supportLoads(model, { ctx, dead, snow, wind, rafters, battens });
@@ -675,6 +714,7 @@ export function analyse(model) {
     model, ctx, dead, snow, wind,
     rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
     thrust: sl.thrust,
+    splices: spliceReport(model),
     summary: all,
     maxU: Math.max(...all.map((a) => a.U)),
   };
@@ -707,6 +747,10 @@ export function billOfMaterials(result) {
     const perStock = Math.max(1, Math.floor(stock / lengthMm));
     const volume = (sec.props.A * lengthMm * count) / 1e9; // м³
     const mass = (sec.massPerM * lengthMm * count) / 1000;
+    // элемент длиннее хлыста собирается из кусков: столько же хлыстов на штуку,
+    // и на один стык меньше. Раньше здесь стоял прочерк — человек не видел
+    // ни числа хлыстов, ни того, что элемент вообще придётся стыковать
+    const plan = splicePlan(lengthMm, stock);
     items.push({
       name,
       section: sec.label,
@@ -714,7 +758,8 @@ export function billOfMaterials(result) {
       count,
       length: Math.round(lengthMm),
       totalLength: (lengthMm * count) / 1000,
-      stockPieces: lengthMm > stock ? null : Math.ceil(count / perStock),
+      stockPieces: plan.pieces > 1 ? plan.pieces * count : Math.ceil(count / perStock),
+      splices: plan.splices * count,
       volume: isT ? volume : null,
       mass,
       unitPrice: isT ? pr.timberM3 : pr.steelKg,
