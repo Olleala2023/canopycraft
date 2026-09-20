@@ -3151,7 +3151,9 @@ function billOfMaterials(result) {
     timber: { volume: timberVolume, mass: timberMass, density: 500 },
     steel: { mass: steelMass, length: steelLength, density: 7850 },
     roofing: { area: roofArea, mass: roofMass, label: ROOFING[m.roofing].label },
-    fasteners: { mass: fastenerMass, count: boltCount * 2 },
+    // fastenerMass — импортированная функция, а нужна посчитанная масса:
+    // из-за этой опечатки отчёт падал на b.weights.fasteners.mass.toFixed
+    fasteners: { mass: fastenerTotal, count: fasteners.reduce((a, f) => a + (f.count ?? 0), 0) },
     total,
     perSqm: total / planArea,
     planArea,
