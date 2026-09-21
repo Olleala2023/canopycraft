@@ -32,6 +32,8 @@ import {
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
+/** Ускорение свободного падения, м/с² — вес бетона против отрыва. */
+const G0 = 9.80665;
 
 /** Жёсткости сечения для решателя. */
 function stiffness(sec, mat) {
@@ -526,16 +528,30 @@ function analysePostBase(model, cfg, posts, ctx) {
   const checks = [];
   let detail = {};
 
+  // Бетонный блок под столбом — один и тот же и для забетонированного столба,
+  // и для базы на плите: сторона и глубина задаются в панели. Его вес —
+  // единственное, что держит навес от вырыва вверх, поэтому размеры не
+  // угадываются, а проверяются. У забетонированного столба блок не может быть
+  // мельче заделки: столб в нём стоит.
+  const side = Math.max(sec.h + 100, model.postBase.footing ?? 400);
+  const depth = Math.max(model.postBase.depth ?? 800, base.kind === 'embed' ? base.embed : 0);
+  const mass = ((side * side * depth) / 1e9) * CONCRETE_DENSITY;
+  const needMass = uplift / 0.9 / G0;
+  // подсказки «сделайте так»: какой глубины хватит при этой стороне и наоборот
+  const needVolume = needMass / CONCRETE_DENSITY; // м³
+  const step50 = (mm) => Math.ceil(mm / 50) * 50;
+  const needDepth = step50((needVolume / ((side / 1000) ** 2)) * 1000);
+  const needSide = step50(Math.sqrt(needVolume / (depth / 1000)) * 1000);
+  const block = { side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass };
+
   if (base.kind === 'embed') {
-    const side = Math.max(sec.h + 100, model.postBase.footing ?? 400);
-    const mass = (side * side * base.embed) / 1e9 * CONCRETE_DENSITY;
     if (needsFixity) {
       checks.push(embedDepth(base.embed, minEmbed(sec.h),
         `сечение ${sec.label}, схема с защемлением внизу`));
     }
-    checks.push(anchorMass(uplift, mass, `стакан ${side}×${side}×${base.embed} мм ≈ ${mass.toFixed(0)} кг`));
+    checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
     checks.push(concreteBearing(N / (side * side), conc.Rb, `подошва ${side}×${side} мм`));
-    detail = { side, mass, needEmbed: minEmbed(sec.h) };
+    detail = { ...block, needEmbed: minEmbed(sec.h) };
   } else {
     const A = base.plate * base.plate;
     const W = (base.plate ** 3) / 6;
@@ -552,9 +568,10 @@ function analysePostBase(model, cfg, posts, ctx) {
       `${base.n} × М${base.d}, разнос ${span} мм: отрыв ${(uplift / base.n / 1000).toFixed(2).replace('.', ',')} + момент ${(M / span / rows / 1000).toFixed(2).replace('.', ',')} кН`));
     checks.push(anchorCone(Na, base.hef, conc.Rbt, `заделка ${base.hef} мм в бетон ${model.opts.concreteClass ?? 'B20'}`));
     checks.push(boltShear(H / base.n, base.d, base.grade));
-    // анкеры держат столб, но сам блок ещё должен не выдернуться из земли
-    const needMass = uplift / 0.9 / 9.80665;
-    detail = { sigma, sigmaPlate, span, Na, c, needMass };
+    // анкеры держат столб за бетон, но сам блок ещё должен не уехать вверх:
+    // раньше это число только выводилось в инспекторе и в U не входило
+    checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
+    detail = { sigma, sigmaPlate, span, Na, c, ...block };
   }
 
   return {
@@ -909,7 +926,10 @@ export function analyse(model) {
   const maxUplift = Math.max(0, ...posts.map((p) => p.Nup));
   const foundation = {
     uplift: maxUplift,
-    requiredMass: maxUplift / 0.9 / 1000,
+    /** сила, которую фундамент обязан удержать, кН — с коэффициентом 0,9 на вес */
+    requiredHold: maxUplift / 0.9 / 1000,
+    /** та же величина в килограммах бетона: человек считает фундамент весом, а не ньютонами */
+    requiredMassKg: maxUplift / 0.9 / G0,
     cubeSide: Math.cbrt(Math.max(0.001, maxUplift / 0.9 / 1000 / 24)) * 1000,
     maxDown: Math.max(...posts.map((p) => p.N)),
   };
@@ -965,7 +985,6 @@ export function billOfMaterials(result) {
   const m = result.model;
   const stock = m.opts.stockLength ?? 6000;
   const pr = m.prices ?? { timberM3: 0, steelKg: 0, roofingM2: 0, fastenerPc: 0, currency: '₽' };
-  const G0 = 9.80665;
   const items = [];
   const add = (name, sec, lengthMm, count) => {
     const isT = sec.material === 'timber';

@@ -429,3 +429,21 @@ test('массы в сводке — числа, а не функции: отч�
     'метизы в группах и в сводке — одно и то же число');
   assert.equal(b.weights.fasteners.count, b.fasteners.reduce((a, f) => a + (f.count ?? 0), 0));
 });
+
+test('фундамент против отрыва: сила в кН и масса в кг — одно и то же число', () => {
+  const res = analyse(defaultModel());
+  const f = res.foundation;
+  assert.ok(f.requiredHold > 0 && f.requiredMassKg > 0);
+  // 1 кН удерживается примерно 102 кг веса: проверяем, что перевод не разъехался
+  assert.ok(Math.abs(f.requiredMassKg * 9.80665 / 1000 - f.requiredHold) < 1e-9,
+    'масса в кг и сила в кН должны быть одной величиной в разных единицах');
+  // сторона куба считается от той же величины при весе бетона 24 кН/м³
+  const side = Math.cbrt(f.requiredHold / 24) * 1000;
+  assert.ok(Math.abs(side - f.cubeSide) < 1e-6, 'сторона куба — от той же силы');
+  // и всё это сходится с проверкой базы забетонированного столба
+  const m = defaultModel();
+  m.postBase = { id: 'embed1200', footing: 400 };
+  const base = analyse(m).bases.outer;
+  const need = base.uplift / 0.9 / 9.80665;
+  assert.ok(Math.abs(need - f.requiredMassKg) < 1, 'инспектор базы и сводка считают одно и то же');
+});
