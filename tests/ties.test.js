@@ -194,8 +194,10 @@ test('узлы прогонов попадают в сводку и специф
 
 test('база держит момент, и разнос анкеров решает', () => {
   const m = defaultModel();
-  const two = analyse({ ...m, postBase: { id: 'plate2m12', footing: 400 } }).bases.outer;
-  const four = analyse({ ...m, postBase: { id: 'plate4m12', footing: 400 } }).bases.outer;
+  // блок заведомо тяжёлый, чтобы вес его не определял: смотрим только анкеры
+  const heavy = { footing: 900, depth: 1500 };
+  const two = analyse({ ...m, postBase: { id: 'plate2m12', ...heavy } }).bases.outer;
+  const four = analyse({ ...m, postBase: { id: 'plate4m12', ...heavy } }).bases.outer;
 
   // момент в базе — это консольный столб: эксцентриситет плюс ветер на плече высоты
   assert.ok(two.M > 1e6, `${(two.M / 1e6).toFixed(2)} кН·м`);
@@ -217,24 +219,49 @@ test('у раскреплённого ряда момента в базе нет
 
 test('забетонированный столб: вес блока против отрыва и глубина заделки', () => {
   const m = defaultModel();
-  const shallow = analyse({ ...m, postBase: { id: 'embed600', footing: 400 } }).bases.outer;
+  const shallow = analyse({ ...m, postBase: { id: 'embed600', footing: 400, depth: 600 } }).bases.outer;
   // блок 400×400×600 весит 230 кг, а против отрыва нужно 600 с лишним
   assert.equal(shallow.side, 400);
   assert.ok(Math.abs(shallow.mass - 0.4 * 0.4 * 0.6 * 2400) < 1);
   assert.ok(shallow.U > 1);
+  assert.equal(shallow.enough, false);
 
   // шире и глубже — проходит
-  const big = analyse({ ...m, postBase: { id: 'embed1200', footing: 700 } }).bases.outer;
+  const big = analyse({ ...m, postBase: { id: 'embed1200', footing: 700, depth: 1200 } }).bases.outer;
   assert.ok(big.U <= 1, `U = ${big.U.toFixed(2)}`);
+  assert.equal(big.enough, true);
+
+  // блок не может быть мельче заделки: столб в нём стоит
+  const forced = analyse({ ...m, postBase: { id: 'embed1200', footing: 400, depth: 400 } }).bases.outer;
+  assert.equal(forced.depth, 1200, 'в расчёт идёт заделка, а не заданная глубина');
 
   // при схеме с защемлением требуется заделка не менее десяти размеров сечения
   assert.equal(shallow.needEmbed, 10 * 100);
   const pinned = defaultModel();
   pinned.posts.muX = 1; pinned.posts.muY = 1;
-  pinned.postBase = { id: 'embed600', footing: 700 };
+  pinned.postBase = { id: 'embed600', footing: 700, depth: 600 };
   const noFix = analyse(pinned).bases.outer;
   assert.equal(noFix.needsFixity, false);
   assert.ok(!noFix.checks.some((c) => c.name === 'Глубина заделки'), 'шарнирной схеме заделка не нужна');
+});
+
+test('вес блока проверяется у обеих баз одинаково', () => {
+  const m = defaultModel();
+  const light = { footing: 400, depth: 600 }; // 230 кг против нужных 606
+  for (const id of ['plate4m12', 'embed600']) {
+    const b = analyse({ ...m, postBase: { id, ...light } }).bases.outer;
+    assert.ok(b.checks.some((c) => c.name === 'Вес фундамента против отрыва'),
+      `${id}: проверка веса блока должна быть у обеих баз`);
+    assert.ok(b.U > 1, `${id}: лёгкий блок не должен проходить, U = ${b.U.toFixed(2)}`);
+    assert.equal(b.enough, false);
+  }
+
+  // подсказки «сделайте так» согласованы с проверкой: по ним блок проходит
+  const b0 = analyse({ ...m, postBase: { id: 'plate4m12', ...light } }).bases.outer;
+  const deeper = analyse({ ...m, postBase: { id: 'plate4m12', footing: 400, depth: b0.needDepth } }).bases.outer;
+  assert.equal(deeper.enough, true, `глубины ${b0.needDepth} мм должно хватить`);
+  const wider = analyse({ ...m, postBase: { id: 'plate4m12', footing: b0.needSide, depth: 600 } }).bases.outer;
+  assert.equal(wider.enough, true, `стороны ${b0.needSide} мм должно хватить`);
 });
 
 test('база попадает в сводку, подбор и спецификацию', () => {

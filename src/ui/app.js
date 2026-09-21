@@ -66,6 +66,12 @@ const timberOpts = () => SECTIONS.filter((s) => s.material === 'timber');
 const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
 const anyOpts = () => SECTIONS;
 
+/**
+ * Кнопки «подобрать» у блока фундамента целятся в тот же запас 0,9, что и
+ * подбор сечений: needDepth и needSide из расчёта — это ровно единица.
+ */
+const blockMargin = (mm) => Math.ceil(mm / 0.9 / 50) * 50;
+
 const CONTROLS = [
   { group: 'Геометрия', open: true },
   { k: 'geom.B', label: 'Ширина навеса', type: 'range', min: 3000, max: 12000, step: 250, unit: 'мм' },
@@ -100,8 +106,26 @@ const CONTROLS = [
   { k: 'postBase.id', label: 'База столба', type: 'select',
     options: () => POST_BASES.map((b) => ({ id: b.id, label: b.label })),
     note: 'Расчёт столба при μ = 2 или 0,7 предполагает защемление внизу — значит, база обязана воспринять момент. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
-  { k: 'postBase.footing', label: 'Подошва фундамента', type: 'range', min: 300, max: 900, step: 50, unit: 'мм',
-    note: 'Для забетонированного столба: сторона бетонного блока. Его вес — единственное, что держит навес от вырыва вверх.' },
+  { k: 'postBase.footing', label: 'Сторона блока фундамента', type: 'range', min: 300, max: 1200, step: 50, unit: 'мм',
+    actions: [['подобрать сторону', (m) => {
+      const r = analyse(m);
+      const need = blockMargin(Math.max(r.bases.outer.needSide, r.bases.wall.needSide));
+      m.postBase.footing = Math.min(1200, Math.max(300, need));
+      return need > 1200
+        ? `При такой глубине нужна сторона ${need} мм — копайте глубже`
+        : `Сторона ${m.postBase.footing} мм — блок держит отрыв`;
+    }]],
+    note: 'Сторона бетонного блока под столбом — и для забетонированного, и под плитой. Его вес держит навес от вырыва вверх: проверка «Вес фундамента против отрыва» в карточке «База столба».' },
+  { k: 'postBase.depth', label: 'Глубина блока фундамента', type: 'range', min: 300, max: 2000, step: 50, unit: 'мм',
+    actions: [['подобрать глубину', (m) => {
+      const r = analyse(m);
+      const need = blockMargin(Math.max(r.bases.outer.needDepth, r.bases.wall.needDepth));
+      m.postBase.depth = Math.min(2000, Math.max(300, need));
+      return need > 2000
+        ? `При такой стороне нужна глубина ${need} мм — делайте блок шире`
+        : `Глубина ${m.postBase.depth} мм — блок держит отрыв`;
+    }]],
+    note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Промерзание и пучение грунта калькулятор не считает: глубину по морозу выбирайте отдельно.' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
       { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
       { id: '1', label: '1,0 — верх удержан связями от смещения' },
@@ -320,6 +344,15 @@ function syncParams() {
       let extra = '';
       if (c.k === '#rafterCount') extra = ` · шаг ${Math.round(state.model.geom.B / (v - 1))}`;
       if (c.k === '#postCount' || c.k === '#wallPostCount') extra = ` · пролёт ${Math.round(state.model.geom.B / (v - 1))}`;
+      // размеры блока сразу показывают, держит он отрыв или нет
+      if (c.k === 'postBase.footing' || c.k === 'postBase.depth') {
+        const bs = state.result?.bases;
+        if (bs) {
+          const b0 = bs.outer.mass - bs.outer.needMass <= bs.wall.mass - bs.wall.needMass ? bs.outer : bs.wall;
+          const forced = c.k === 'postBase.depth' && b0.depth !== v ? ` (в расчёте ${b0.depth} — не мельче заделки)` : '';
+          extra = `${forced} · блок ${Math.round(b0.mass)} кг из ${Math.round(b0.needMass)} нужных${b0.enough ? '' : ' — не держит'}`;
+        }
+      }
       b.textContent = `${v} ${c.unit ?? ''}${extra}`;
     }
   }
@@ -420,15 +453,19 @@ function renderInspector(res) {
     kv.push(['Момент в базе', `${f2(el.M / 1e6)} кН·м`]);
     kv.push(['Схема столба', el.needsFixity ? 'с защемлением внизу — база держит момент' : 'шарнир внизу, связи вверху']);
     if (el.base.kind === 'embed') {
-      kv.push(['Блок бетона', `${el.side}×${el.side}×${el.base.embed} мм ≈ ${Math.round(el.mass)} кг`]);
-      kv.push(['Нужно против отрыва', `${Math.round(el.uplift / 0.9 / 9.80665)} кг`]);
       if (el.needsFixity) kv.push(['Заделка для защемления', `не менее ${el.needEmbed} мм`]);
     } else {
       kv.push(['На анкер: растяжение', `${f2(el.Na / 1000)} кН`]);
       kv.push(['Разнос анкеров', `${el.span} мм · вылет плиты ${Math.round(el.c)} мм`]);
       kv.push(['Под плитой', `${f2(el.sigma)} МПа при R_b ${f2((CONCRETE[el.concrete] ?? CONCRETE.B20).Rb)}`]);
-      kv.push(['Масса фундамента', `не менее ${Math.round(el.needMass)} кг на столб`]);
     }
+    // блок бетона — общая часть обеих баз: вес против отрыва и как его добрать
+    kv.push(['Блок бетона', `${el.side}×${el.side}×${el.depth} мм = ${Math.round(el.mass)} кг`]);
+    kv.push(['Нужно против отрыва', `${Math.round(el.needMass)} кг`]);
+    kv.push([el.enough ? 'Запас по весу' : 'Не хватает',
+      el.enough
+        ? `${Math.round(el.mass - el.needMass)} кг`
+        : `${Math.round(el.needMass - el.mass)} кг — глубина ${el.needDepth} мм при этой стороне или сторона ${el.needSide} мм при этой глубине`]);
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);

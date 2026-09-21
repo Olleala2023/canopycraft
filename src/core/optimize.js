@@ -2,7 +2,7 @@
 import { ladder, section } from './sections.js';
 import { analyse } from './analysis.js';
 import { spread } from './model.js';
-import { FASTENERS, BEAM_TIES, POST_BASES } from './fasteners.js';
+import { FASTENERS, BEAM_TIES, POST_BASES, CONCRETE_DENSITY } from './fasteners.js';
 
 const PATH = {
   rafters: (m, id) => ({ ...m, rafters: { ...m.rafters, sectionId: id } }),
@@ -68,6 +68,11 @@ export function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
  * число крепежей подбирается с коэффициентом 0,85, — а вместимость узла и
  * катет шва величины дискретные, половины болта не бывает.
  */
+/** Пределы бетонного блока при автоподборе — те же, что у ползунков в панели. */
+const BLOCK_MAX = { side: 1200, depth: 2000 };
+/** Размер с тем же целевым запасом 0,9, что и у сечений, округлённый до шага ползунка. */
+const withMargin = (mm) => Math.ceil(mm / 0.9 / 50) * 50;
+
 export function pickTies(model, target = 1) {
   let m = model;
   const log = [];
@@ -91,7 +96,38 @@ export function pickTies(model, target = 1) {
   tryAll('rafterTie', FASTENERS, (r) => Math.max(r.ties.outer.U, r.ties.wall.U));
   tryAll('purlinTie', forBeam('purlin'), (r) => r.beamTies.outer.U);
   tryAll('wallPurlinTie', forBeam('wallPurlin'), (r) => r.beamTies.wall.U);
+  // блок фундамента — такой же подбираемый размер, как сечение: сначала растим
+  // вглубь (копать дешевле, чем расширять яму), и только упёршись в предел —
+  // вширь. Без этого никакое исполнение базы не пройдёт: вес блока общий
+  m = { ...m, postBase: { ...m.postBase } };
+  for (let i = 0; i < 8; i += 1) {
+    const b = analyse(m).bases;
+    // needDepth — глубина, которой хватит при нынешней стороне: она же растит
+    // блок, когда его не хватает, и подрезает, когда он с лишним
+    // как и сечения, блок подбирается до U ≤ 0,9, а не впритык к единице
+    const needDepth = withMargin(Math.max(b.outer.needDepth, b.wall.needDepth));
+    if (needDepth <= BLOCK_MAX.depth) {
+      if (m.postBase.depth === needDepth) break;
+      m.postBase.depth = needDepth;
+      continue;
+    }
+    // глубже уже нельзя — расширяем яму ровно настолько, чтобы хватило
+    if (m.postBase.footing >= BLOCK_MAX.side) break;
+    const needMass = Math.max(b.outer.needMass, b.wall.needMass);
+    const sideAtMax = withMargin(Math.sqrt((needMass / CONCRETE_DENSITY) / (BLOCK_MAX.depth / 1000)) * 1000);
+    m.postBase.footing = Math.min(BLOCK_MAX.side, Math.max(m.postBase.footing + 50, sideAtMax));
+    m.postBase.depth = BLOCK_MAX.depth;
+  }
+  log.push({ key: 'postBase.block', label: `блок ${m.postBase.footing}×${m.postBase.footing}×${m.postBase.depth} мм`, U: null });
+
   tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.U, r.bases.wall.U));
+  // у забетонированного столба блок не может быть мельче заделки: если подбор
+  // подрезал глубину ниже неё, в расчёт всё равно пойдёт заделка — приводим
+  // ползунок к тому, что реально считается
+  const chosen = POST_BASES.find((b) => b.id === m.postBase.id);
+  if (chosen?.kind === 'embed' && m.postBase.depth < chosen.embed) {
+    m = { ...m, postBase: { ...m.postBase, depth: chosen.embed } };
+  }
   return { model: m, log };
 }
 
