@@ -70,6 +70,10 @@ npm run build     # пересобрать index.html и docs/app.artifact.html
 
 `index.html` — сгенерированный файл. Правьте исходники в `src/`, потом `npm run build`.
 
+На каждый PR и на `main` запускается CI (`.github/workflows/ci.yml`): тесты и проверка, что
+собранные `index.html`, `docs/app.artifact.html` и `help/help.css` соответствуют исходникам.
+Забыли пересобрать — проверка покраснеет и скажет, какие файлы разошлись.
+
 ## Что считается
 
 | Элемент | Схема | Проверки |
