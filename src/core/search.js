@@ -162,24 +162,34 @@ export async function searchByCost(model, opts = {}) {
       if (!beamSec) continue;
       const beam = analyseLineBeam(m, beamSec.id, xs, cfg.loads, cfg.label);
       const postCfg = m[cfg.postsKey];
-      const postSec = await cheapest(postList, async (s) => {
-        const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
-        return Math.max(...row.map((p) => p.U));
-      }, target, budget);
+      let postSec = null, brace = null;
+      if (along === 'cross') {
+        // столб с крестом проходит, только если к нему приваривается проходящая
+        // диагональ: катет не меньше табличного и не больше 1,2 толщины стенки,
+        // и к стенке 2 мм не приварить ничего. Отсев по доминированию здесь
+        // не годится — отказ по шву с несущей способностью не монотонен
+        for (const s of postList) {
+          budget.n++;
+          await maybeBreathe(budget);
+          const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+          if (Math.max(...row.map((p) => p.U)) > target) continue;
+          const withPost = { ...m, [cfg.postsKey]: { ...postCfg, sectionId: s.id, xs } };
+          const b = await cheapest(braceList, async (bs) =>
+            analyseCross({ ...withPost, bracing: { ...m.bracing, sectionId: bs.id } }, row)?.U ?? Infinity, target, budget);
+          if (b) { postSec = s; brace = b.id; break; }
+        }
+      } else {
+        postSec = await cheapest(postList, async (s) => {
+          const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+          return Math.max(...row.map((p) => p.U));
+        }, target, budget);
+      }
       if (!postSec) continue;
       const t = clone(m);
       t[cfg.postsKey].xs = xs;
       t[cfg.postsKey].sectionId = postSec.id;
       t[cfg.beamKey].sectionId = beamSec.id;
-      let brace = null;
-      if (along === 'cross') {
-        const row = analysePostRow(t, t[cfg.postsKey], beam, sl.ctx, cfg.extra);
-        const sec = await cheapest(braceList, async (b) =>
-          analyseCross({ ...t, bracing: { ...t.bracing, sectionId: b.id } }, row)?.U ?? Infinity, target, budget);
-        if (!sec) continue;
-        brace = sec.id;
-        t.bracing.sectionId = brace;
-      }
+      if (brace) t.bracing.sectionId = brace;
       const bom = billOfMaterials(analyse(t));
       const cost = items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
       if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n, along, brace };

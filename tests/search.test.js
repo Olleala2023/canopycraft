@@ -28,7 +28,9 @@ const U_OF = {
   battens: (r) => r.battens.U,
   purlin: (r) => r.purlin.U,
   wallPurlin: (r) => r.wallPurlin.U,
-  posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+  // при кресте к столбу должна привариваться диагональ — как и в подборе
+  posts: (r) => Math.max(...r.posts.map((x) => x.U),
+    r.cross?.checks.find((c) => c.name === 'Катет шва')?.U ?? 0),
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
   bracing: (r) => r.cross?.U ?? 0,
 };

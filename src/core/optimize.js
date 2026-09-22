@@ -14,6 +14,9 @@ const PATH = {
   bracing: (m, id) => ({ ...m, bracing: { ...m.bracing, sectionId: id } }),
 };
 
+/** Помещается ли катет шва диагонали креста между стенками — 0, если креста нет. */
+export const crossWeldFit = (r) => r.cross?.checks.find((c) => c.name === 'Катет шва')?.U ?? 0;
+
 /** Коэффициент использования по группе элементов. */
 export const U_OF = {
   rafters: (r) => Math.max(...r.rafters.map((x) => x.U)),
@@ -21,7 +24,9 @@ export const U_OF = {
   purlin: (r) => r.purlin.U,
   wallPurlin: (r) => r.wallPurlin.U,
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
-  posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+  // при кресте столб должен ещё и позволять приварить диагональ: к стенке 2 мм
+  // по правилам катета не приварить ничего, и такой столб не годится
+  posts: (r) => Math.max(...r.posts.map((x) => x.U), crossWeldFit(r)),
   // связей нет — подбирать нечего, годится любое сечение
   bracing: (r) => r.cross?.U ?? 0,
 };
