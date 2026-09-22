@@ -31,7 +31,7 @@ import {
   SPLICE_DOWELS,
   SPLICE_GAP,
   frostDepth,
-  heaveTau, HEAVE_SURFACES, HEAVE_GAMMA_C, HEAVE_GAMMA_N,
+  heaveTau, HEAVE_STATES, HEAVE_SURFACES, HEAVE_GAMMA_C, HEAVE_GAMMA_N, skinFriction, FRICTION_LAYER,
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -834,8 +834,9 @@ function analysePostBase(model, cfg, posts, ctx) {
  * (прим. 4) и геотехническая категория 1 (прим. 5, ×0,9).
  *
  * F_rf — трение о талый грунт ниже промерзания, формула (6.38): ΣR_f·A_f.
- * R_f СП 22 велит брать по нормам на сваи; пока таблица не заведена, трение
- * не учитывается — в запас, и так и пишем в примечании.
+ * R_f — по нормам на сваи: табл. 7.3 СП 24, слои не толще 2 м, в запас —
+ * см. skinFriction. Надбавки из примечаний 3 и 4 к таблице (плотные пески,
+ * малый коэффициент пористости) не берутся.
  */
 function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure }) {
   if (!frostApplies) return { applies: false, reason: frost.set ? 'nonHeaving' : 'noFrost' };
@@ -854,15 +855,27 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
   const pull = tau * A * 1000;                                    // Н
   const blockWeight = GAMMA_F.relieving * mass * G0;
   const F = post.Nperm + blockWeight;
-  const Frf = 0;
+  // трение о талый грунт ниже промерзания: слои не толще 2 м, f по средней глубине слоя
+  const IL = (HEAVE_STATES[stateId] ?? HEAVE_STATES.wet).IL;
+  const layers = [];
+  for (let z = frost.df; z < depth - 1e-6; z += FRICTION_LAYER) {
+    const h = Math.min(FRICTION_LAYER, depth - z);
+    const zMid = (z + h / 2) / 1000;
+    const f = skinFriction(zMid, IL);
+    layers.push({ from: z, h, zMid, f, A: (perimeter * h) / 1e6 });
+  }
+  const Frf = layers.reduce((a, l) => a + l.f * l.A * 1000, 0);    // Н
   const gcgn = HEAVE_GAMMA_C / HEAVE_GAMMA_N;
   const f2 = (v) => (v / 1000).toFixed(1).replace('.', ',');
   const check = frostHeave(pull, F, Frf, gcgn,
     `τ_fh = ${Math.round(tauTable)}${surface.k !== 1 ? ` × ${String(surface.k).replace('.', ',')}` : ''}${cat1 ? ' × 0,9' : ''} = ${Math.round(tau)} кПа на ${A.toFixed(2).replace('.', ',')} м² — тянет ${f2(pull)} кН; `
-    + `держат постоянная нагрузка ${f2(post.Nperm)} и блок ${f2(blockWeight)} кН; трение о талый грунт ниже промерзания пока не учитывается — в запас`);
+    + `держат постоянная нагрузка ${f2(post.Nperm)} и блок ${f2(blockWeight)} кН`
+    + (layers.length
+      ? `, трение о талый грунт ниже промерзания ${f2(Frf)} кН на ${Abelow.toFixed(2).replace('.', ',')} м² (f = ${layers.map((l) => l.f).join(', ')} кПа, I_L ${String(IL).replace('.', ',')}) / 1,1`
+      : ', ниже промерзания блок не заходит — трения нет'));
   return {
     applies: true, measure, check, stateId, surface, cat1, tauTable, tau, perimeter, hFrozen, hThawed,
-    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, gcgn, x: post.x,
+    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gcgn, x: post.x,
     ratio: pull / Math.max(1, F + gcgn * Frf),
   };
 }

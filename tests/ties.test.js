@@ -358,6 +358,13 @@ test('касательные силы пучения — формула (6.35) �
   assert.equal(heaveTau('wet', 4000), 70);
   assert.equal(heaveTau('plastic', 1000), 90);
   assert.equal(heaveTau('firm', 3000), 40);
+  // табл. 7.3 СП 24 — в запас: строка по меньшей глубине, столбец по большему I_L
+  const { skinFriction } = await import('../src/core/fasteners.js');
+  assert.equal(skinFriction(1, 0.2), 35);
+  assert.equal(skinFriction(2.9, 0.5), 17);
+  assert.equal(skinFriction(3, 0.3), 35);
+  assert.equal(skinFriction(0.5, 1.0), 2);
+  assert.equal(skinFriction(10, 0.25), 46);       // I_L 0,25 → столбец 0,3
 
   const m = defaultModel();
   m.site.frostDepth = 1200;                       // суглинок: d_fn 1200, d_f 1320
@@ -372,7 +379,11 @@ test('касательные силы пучения — формула (6.35) �
   assert.ok(Math.abs(h.blockWeight - 0.9 * 0.5 * 0.5 * 1.4 * 2400 * 9.80665) < 1e-6);
   assert.ok(Math.abs(h.F - (h.Nperm + h.blockWeight)) < 1e-9);
   assert.ok(h.Nperm > 0 && h.Nperm < analyse(m).posts[1].N, 'постоянная меньше расчётной со снегом');
-  assert.equal(h.check.U, h.pull / h.F);         // трение пока не учитывается
+  // трение о талый грунт ниже промерзания: блок заходит на 80 мм ниже d_f,
+  // средняя глубина слоя 1,36 м → строка 1 м табл. 7.3 СП 24, I_L = 1,0 → 2 кПа
+  assert.deepEqual(h.layers.map((l) => l.f), [2]);
+  assert.ok(Math.abs(h.Frf - 2 * 4 * 0.5 * 0.08 * 1000) < 1e-6);
+  assert.ok(Math.abs(h.check.U - h.pull / (h.F + h.Frf / 1.1)) < 1e-12);
   // обычный блок в пучинистом грунте выдавливает — с большим запасом «не туда»
   assert.ok(h.check.U > 10, `U = ${h.check.U.toFixed(1)}`);
 
@@ -381,6 +392,14 @@ test('касательные силы пучения — формула (6.35) �
   assert.ok(Math.abs(rough.tau - 110 * 1.5) < 1e-9);
   const cat1 = analyse({ ...m, site: { ...m.site, geoCat1: true } }).bases.outer.heave;
   assert.ok(Math.abs(cat1.tau - 110 * 0.9) < 1e-9);
+
+  // глубокий блок: слои ниже промерзания не толще 2 м, f растёт с глубиной
+  const deep = analyse({ ...m, postBase: { ...m.postBase, depth: 3000 } }).bases.outer.heave;
+  assert.equal(deep.layers.length, 1);
+  assert.equal(deep.layers[0].f, 4);              // средняя глубина 2,16 м → строка 2 м
+  const deeper = analyse({ ...m, postBase: { ...m.postBase, depth: 3000 },
+    site: { ...m.site, frostDepth: 400 } }).bases.outer.heave;
+  assert.ok(deeper.layers.length === 2 && deeper.layers[0].h === 2000, 'слой не толще 2 м');
 
   // непучинистый грунт, мороз не задан, замена грунта — проверки нет
   for (const [label, mm] of [
