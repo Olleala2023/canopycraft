@@ -1327,6 +1327,12 @@ function embedDepth(h, need, note) {
   return chk('Глубина заделки', need, h, 'мм', 'h ≥ 10·h_сечения — иначе защемления нет', note);
 }
 
+/** Подошва блока ниже расчётной глубины промерзания — для пучинистых грунтов. */
+function foundationFrost(df, depth, note) {
+  return chk('Подошва ниже промерзания', df, depth, 'мм',
+    'd ≥ d_f = k_h·d_fn, k_h = 1,1 — СП 22 п. 5.5', note);
+}
+
 /** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
 function anchorMass(uplift, mass, note) {
   return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',
@@ -1667,6 +1673,40 @@ const CONCRETE = {
   B30: { Rb: 17.0, Rbt: 1.15 },
 };
 
+/**
+ * Грунты основания для глубины промерзания, СП 22.13330.2016 п. 5.5.3.
+ *
+ * d₀ — коэффициент в формуле нормативной глубины d_fn = d₀·√M_t, м.
+ * heaving — пучинистый ли грунт: для пучинистых подошва обязана быть не выше
+ * расчётной глубины промерзания, для непучинистых глубина заложения от
+ * промерзания не зависит (табл. 5.3).
+ */
+const SOILS = {
+  clay: { label: 'суглинки и глины', d0: 0.23, heaving: true },
+  sandyLoam: { label: 'супеси, пески мелкие и пылеватые', d0: 0.28, heaving: true },
+  sand: { label: 'пески гравелистые, крупные и средней крупности', d0: 0.30, heaving: false },
+  gravel: { label: 'крупнообломочные с песчаным заполнителем', d0: 0.34, heaving: false },
+};
+
+/** k_h для неотапливаемого сооружения — навес не греется, СП 22 п. 5.5.3. */
+const FROST_KH = 1.1;
+
+/**
+ * Глубина промерзания под навесом, мм.
+ *
+ * Карты нормативной глубины даются для суглинков и глин — это то, что человек
+ * найдёт для своего места. На другой грунт пересчитываем отношением d₀: оно
+ * точное, потому что √M_t у одного места общий.
+ *
+ * @param {number} dfnClay нормативная глубина для суглинков по карте, мм (0 — не задана)
+ * @param {string} soilId ключ из SOILS
+ */
+function frostDepth(dfnClay, soilId) {
+  const soil = SOILS[soilId] ?? SOILS.clay;
+  const dfn = (dfnClay * soil.d0) / SOILS.clay.d0;
+  return { set: dfnClay > 0, soil, dfn, df: FROST_KH * dfn };
+}
+
 /** Отступ анкера от края плиты, мм. */
 const ANCHOR_EDGE = 40;
 /** Плотность железобетона, кг/м³ — для массы фундамента против отрыва. */
@@ -1719,6 +1759,14 @@ function defaultModel() {
       parapet: false,        // сплошной парапет у перепада → m₁ = 0 (прим. 4)
       ce: 1.0, ct: 1.0,
       cUp: 1.4, cUnder: 0.8, cDown: 0.5,
+      /**
+       * Мороз: нормативная глубина промерзания для суглинков по карте, мм, и
+       * грунт на площадке. 0 — не задано: подставлять глубину по памяти нельзя,
+       * поэтому по умолчанию фундамент по морозу не проверен, и об этом
+       * предупреждение над сводкой.
+       */
+      frostDepth: 0,
+      soil: 'clay',
     },
     roofing: 'prof8',
     rafters: {
@@ -2550,7 +2598,18 @@ function analysePostBase(model, cfg, posts, ctx) {
   const step50 = (mm) => Math.ceil(mm / 50) * 50;
   const needDepth = step50((needVolume / ((side / 1000) ** 2)) * 1000);
   const needSide = step50(Math.sqrt(needVolume / (depth / 1000)) * 1000);
-  const block = { side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass };
+  // мороз: для пучинистого грунта подошва не выше расчётной глубины промерзания
+  const frost = frostDepth(model.site.frostDepth ?? 0, model.site.soil ?? 'clay');
+  const frostApplies = frost.set && frost.soil.heaving;
+  const needFrostDepth = frostApplies ? step50(frost.df) : 0;
+  const block = {
+    side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass,
+    frost: { ...frost, applies: frostApplies, needDepth: needFrostDepth, ok: depth >= needFrostDepth },
+  };
+  const frostCheck = () => (frostApplies
+    ? [foundationFrost(frost.df, depth,
+      `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
+    : []);
 
   if (base.kind === 'embed') {
     if (needsFixity) {
@@ -2559,6 +2618,7 @@ function analysePostBase(model, cfg, posts, ctx) {
     }
     checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
     checks.push(concreteBearing(N / (side * side), conc.Rb, `подошва ${side}×${side} мм`));
+    checks.push(...frostCheck());
     detail = { ...block, needEmbed: minEmbed(sec.h) };
   } else {
     const A = base.plate * base.plate;
@@ -2579,6 +2639,7 @@ function analysePostBase(model, cfg, posts, ctx) {
     // анкеры держат столб за бетон, но сам блок ещё должен не уехать вверх:
     // раньше это число только выводилось в инспекторе и в U не входило
     checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
+    checks.push(...frostCheck());
     detail = { sigma, sigmaPlate, span, Na, c, ...block };
   }
 
@@ -3282,7 +3343,7 @@ function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
  * катет шва величины дискретные, половины болта не бывает.
  */
 /** Пределы бетонного блока при автоподборе — те же, что у ползунков в панели. */
-const BLOCK_MAX = { side: 1200, depth: 2000 };
+const BLOCK_MAX = { side: 1200, depth: 3000 };
 /** Размер с тем же целевым запасом 0,9, что и у сечений, округлённый до шага ползунка. */
 const withMargin = (mm) => Math.ceil(mm / 0.9 / 50) * 50;
 
@@ -3317,8 +3378,13 @@ function pickTies(model, target = 1) {
     const b = analyse(m).bases;
     // needDepth — глубина, которой хватит при нынешней стороне: она же растит
     // блок, когда его не хватает, и подрезает, когда он с лишним
-    // как и сечения, блок подбирается до U ≤ 0,9, а не впритык к единице
-    const needDepth = withMargin(Math.max(b.outer.needDepth, b.wall.needDepth));
+    // как и сечения, блок подбирается до U ≤ 0,9, а не впритык к единице;
+    // промерзание — требование геометрическое, запаса к нему не добавляем:
+    // k_h = 1,1 уже внутри расчётной глубины
+    const needDepth = Math.max(
+      withMargin(Math.max(b.outer.needDepth, b.wall.needDepth)),
+      b.outer.frost.needDepth,
+    );
     if (needDepth <= BLOCK_MAX.depth) {
       if (m.postBase.depth === needDepth) break;
       m.postBase.depth = needDepth;
@@ -4413,16 +4479,19 @@ const CONTROLS = [
         : `Сторона ${m.postBase.footing} мм — блок держит отрыв`;
     }]],
     note: 'Сторона бетонного блока под столбом — и для забетонированного, и под плитой. Его вес держит навес от вырыва вверх: проверка «Вес фундамента против отрыва» в карточке «База столба».' },
-  { k: 'postBase.depth', label: 'Глубина блока фундамента', type: 'range', min: 300, max: 2000, step: 50, unit: 'мм',
+  { k: 'postBase.depth', label: 'Глубина блока фундамента', type: 'range', min: 300, max: 3000, step: 50, unit: 'мм',
     actions: [['подобрать глубину', (m) => {
       const r = analyse(m);
-      const need = blockMargin(Math.max(r.bases.outer.needDepth, r.bases.wall.needDepth));
-      m.postBase.depth = Math.min(2000, Math.max(300, need));
-      return need > 2000
-        ? `При такой стороне нужна глубина ${need} мм — делайте блок шире`
-        : `Глубина ${m.postBase.depth} мм — блок держит отрыв`;
+      const byWeight = blockMargin(Math.max(r.bases.outer.needDepth, r.bases.wall.needDepth));
+      const byFrost = r.bases.outer.frost.needDepth;
+      const need = Math.max(byWeight, byFrost);
+      m.postBase.depth = Math.min(3000, Math.max(300, need));
+      if (need > 3000) return `При такой стороне нужна глубина ${need} мм — делайте блок шире`;
+      return byFrost >= byWeight
+        ? `Глубина ${m.postBase.depth} мм — определяет промерзание, по весу хватило бы ${byWeight}`
+        : `Глубина ${m.postBase.depth} мм — блок держит отрыв${byFrost ? ' и ниже промерзания' : ''}`;
     }]],
-    note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Промерзание и пучение грунта калькулятор не считает: глубину по морозу выбирайте отдельно.' },
+    note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Если задана глубина промерзания, подошва для пучинистого грунта должна быть не выше неё.' },
   { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
       { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
       { id: '1', label: '1,0 — верх удержан связями от смещения' },
@@ -4470,6 +4539,10 @@ const CONTROLS = [
   { k: 'site.terrain', label: 'Тип местности', help: 'site.html', helpTitle: 'тип местности и пульсации ветра', type: 'select', options: () => [
       { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }],
     note: 'Районы берутся по картам приложения Е СП 20. По умолчанию стоит Воронеж: снег III, ветер II, местность B — если строите не там, это первое, что нужно поменять.' },
+  { k: 'site.frostDepth', label: 'Глубина промерзания для суглинков', help: 'frost.html', helpTitle: 'мороз, пучение и глубина фундамента', type: 'range', min: 0, max: 3000, step: 50, unit: 'мм',
+    note: 'С карты нормативных глубин промерзания — она даётся для суглинков и глин, на ваш грунт калькулятор пересчитает сам. 0 — не задано: тогда фундамент по морозу не проверяется.' },
+  { k: 'site.soil', label: 'Грунт на площадке', help: 'frost.html', helpTitle: 'мороз, пучение и глубина фундамента', type: 'select',
+    options: () => Object.entries(SOILS).map(([id, v]) => ({ id, label: `${v.label}${v.heaving ? ' — пучинистый' : ''}` })) },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'check' },
   { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
   { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },
@@ -4641,6 +4714,13 @@ function syncParams() {
       let extra = '';
       if (c.k === '#rafterCount') extra = ` · шаг ${Math.round(state.model.geom.B / (v - 1))}`;
       if (c.k === '#postCount' || c.k === '#wallPostCount') extra = ` · пролёт ${Math.round(state.model.geom.B / (v - 1))}`;
+      if (c.k === 'site.frostDepth') {
+        const f = state.result?.bases?.outer?.frost;
+        if (!v) extra = ' — не задано, по морозу не проверяется';
+        else if (f) extra = f.soil.heaving
+          ? ` · под навесом d_f = ${Math.round(f.df)} мм`
+          : ` · грунт непучинистый — глубина от мороза не зависит`;
+      }
       // размеры блока сразу показывают, держит он отрыв или нет
       if (c.k === 'postBase.footing' || c.k === 'postBase.depth') {
         const bs = state.result?.bases;
@@ -4759,6 +4839,13 @@ function renderInspector(res) {
     // блок бетона — общая часть обеих баз: вес против отрыва и как его добрать
     kv.push(['Блок бетона', `${el.side}×${el.side}×${el.depth} мм = ${Math.round(el.mass)} кг`]);
     kv.push(['Нужно против отрыва', `${Math.round(el.needMass)} кг`]);
+    if (el.frost?.set) {
+      kv.push(['Промерзание', el.frost.soil.heaving
+        ? `d_fn ${Math.round(el.frost.dfn)} мм, расчётная ${Math.round(el.frost.df)} мм · ${el.frost.soil.label}`
+        : `${el.frost.soil.label} — непучинистый, глубина от мороза не зависит`]);
+    } else {
+      kv.push(['Промерзание', 'не задано — по морозу не проверено']);
+    }
     kv.push([el.enough ? 'Запас по весу' : 'Не хватает',
       el.enough
         ? `${Math.round(el.mass - el.needMass)} кг`
@@ -4813,7 +4900,8 @@ function selectRow(res, key) {
 function renderWarns(res) {
   const list = res.splices;
   const host = $('warns');
-  if (!list.length) { host.innerHTML = ''; return; }
+  const frostWarns = frostWarnings(res);
+  if (!list.length) { host.innerHTML = frostWarns.join(''); return; }
   const stock = res.model.opts.stockLength ?? 6000;
   const butt = (res.model.opts.spliceJoint ?? 'butt') === 'butt';
   const mm = (x) => Math.round(x);
@@ -4840,7 +4928,7 @@ function renderWarns(res) {
   }
 
   const spliced = list.filter((s) => s.splices > 0);
-  if (!spliced.length) { host.innerHTML = out.join(''); return; }
+  if (!spliced.length) { host.innerHTML = [...frostWarns, ...out].join(''); return; }
   const items = spliced.map((s) => `${s.label} — ${plural(s.pieces, 'хлыст', 'хлыста', 'хлыстов')}, ${plural(s.splices, 'стык', 'стыка', 'стыков')} при ${s.at.map(mm).join(' и ')} мм`);
   out.push(`<div class="warn"><b>Длиннее хлыста ${(stock / 1000).toFixed(0)} м — потребуются стыки.</b>
     ${items.join('; ')}. ${butt
@@ -4848,7 +4936,32 @@ function renderWarns(res) {
       : 'Стык принят с накладкой, и балка считается неразрезной. Сама накладка посчитана — решение в карточке «Стык по длине» внизу; накладку надо выполнить именно так, иначе неразрезности не будет.'}
     <a href="help/limits.html" target="_blank" rel="noopener">Что считается, а что нет</a>.</div>`);
 
-  host.innerHTML = out.join('');
+  host.innerHTML = [...frostWarns, ...out].join('');
+}
+
+/**
+ * Мороз: два честных предупреждения. Глубина промерзания не задана — значит,
+ * фундамент по морозу не проверен вовсе. Задана, грунт пучинистый — подошва
+ * ниже промерзания проверена, но это условие необходимое, а не достаточное:
+ * касательные силы пучения тянут столб за боковую поверхность, и их расчёт
+ * пока не сделан. Зелёная проверка глубины не должна выглядеть как «по морозу
+ * всё хорошо».
+ */
+function frostWarnings(res) {
+  const f = res.bases.outer.frost;
+  const more = '<a href="help/frost.html" target="_blank" rel="noopener">мороз и пучение</a>';
+  if (!f.set) {
+    return [`<div class="warn"><b>Глубина промерзания не задана — фундамент по морозу не проверен.</b>
+      Задайте её в блоке «Площадка» по карте нормативных глубин для суглинков и выберите грунт.
+      Для пучинистых грунтов глубину фундамента в средней полосе обычно определяет именно мороз,
+      а не вес против отрыва — ${more}.</div>`];
+  }
+  if (!f.soil.heaving) return [];
+  return [`<div class="warn"><b>Касательные силы пучения не проверены.</b>
+    Подошва ниже промерзания — условие необходимое, но не достаточное: пучинистый грунт
+    (${f.soil.label}) смерзается с боковой поверхностью столба и тянет его вверх, даже если
+    подошва глубже промерзания. Этот расчёт пока не сделан — что с этим делают на практике:
+    ${more}.</div>`];
 }
 
 /** Склонение числительного: 1 стык, 2 стыка, 5 стыков. */

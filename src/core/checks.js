@@ -226,6 +226,12 @@ export function embedDepth(h, need, note) {
   return chk('Глубина заделки', need, h, 'мм', 'h ≥ 10·h_сечения — иначе защемления нет', note);
 }
 
+/** Подошва блока ниже расчётной глубины промерзания — для пучинистых грунтов. */
+export function foundationFrost(df, depth, note) {
+  return chk('Подошва ниже промерзания', df, depth, 'мм',
+    'd ≥ d_f = k_h·d_fn, k_h = 1,1 — СП 22 п. 5.5', note);
+}
+
 /** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
 export function anchorMass(uplift, mass, note) {
   return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',

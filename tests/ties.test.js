@@ -5,8 +5,9 @@ import { analyse, billOfMaterials } from '../src/core/analysis.js';
 import {
   FASTENERS, fastener, shearCapacity, fitCount, spacingRules, WELD, weldLine,
   postBase, anchorSpan,
+  frostDepth,
 } from '../src/core/fasteners.js';
-import { pickAll } from '../src/core/optimize.js';
+import { pickAll, pickTies } from '../src/core/optimize.js';
 
 test('несущая способность крепежа — по табл. 20 СП 64', () => {
   // гвоздь 4 мм: изгиб 2,5·d² = 2,5·0,4² = 0,40 кН, смятие 0,35·c·d при c = 42 мм
@@ -281,4 +282,57 @@ test('база попадает в сводку, подбор и специфи�
   const picked = pickAll(windy, 0.9).model;
   assert.ok(analyse(picked).bases.outer.U <= 1);
   assert.notEqual(picked.postBase.id, defaultModel().postBase.id, 'под сильный ветер нужна база крупнее');
+});
+
+/* ─────────────── мороз ─────────────── */
+
+test('глубина промерзания по СП 22: пересчёт на грунт отношением d₀ и k_h = 1,1', () => {
+  // карта даёт 1200 мм для суглинков
+  const clay = frostDepth(1200, 'clay');
+  assert.equal(Math.round(clay.dfn), 1200);
+  assert.equal(Math.round(clay.df), 1320, 'неотапливаемый навес: d_f = 1,1·d_fn');
+
+  // супесь промерзает глубже: 1200 · 0,28 / 0,23
+  assert.equal(Math.round(frostDepth(1200, 'sandyLoam').dfn), Math.round(1200 * 0.28 / 0.23));
+  // песок ещё глубже, но он непучинистый
+  const sand = frostDepth(1200, 'sand');
+  assert.ok(sand.dfn > clay.dfn);
+  assert.equal(sand.soil.heaving, false);
+
+  assert.equal(frostDepth(0, 'clay').set, false, '0 — не задано');
+});
+
+test('подошва ниже промерзания проверяется только для пучинистого грунта', () => {
+  const run = (site) => {
+    const m = defaultModel();
+    Object.assign(m.site, site);
+    return analyse(m).bases.outer;
+  };
+  const name = 'Подошва ниже промерзания';
+
+  const unset = run({});
+  assert.ok(!unset.checks.some((c) => c.name === name), 'не задано — проверки нет');
+  assert.equal(unset.frost.set, false);
+
+  // блок по умолчанию 1200 мм, а расчётная глубина 1320 — не проходит
+  const shallow = run({ frostDepth: 1200, soil: 'clay' });
+  const chk = shallow.checks.find((c) => c.name === name);
+  assert.ok(chk, 'для суглинка проверка есть');
+  assert.ok(chk.U > 1, `U = ${chk.U.toFixed(2)}`);
+  assert.equal(shallow.frost.needDepth, 1350, 'нужная глубина округлена до шага 50');
+
+  const sand = run({ frostDepth: 1200, soil: 'sand' });
+  assert.ok(!sand.checks.some((c) => c.name === name), 'непучинистый грунт — от мороза не зависит');
+});
+
+test('подбор блока учитывает и вес, и мороз', () => {
+  const m = defaultModel();
+  m.site.frostDepth = 1200;
+  m.site.soil = 'clay';
+  const picked = pickTies(m).model;
+  const b = analyse(picked).bases.outer;
+  assert.ok(picked.postBase.depth >= 1320, `глубина ${picked.postBase.depth} мм — не мельче промерзания`);
+  assert.ok(b.frost.ok, 'после подбора подошва ниже промерзания');
+  assert.ok(b.enough, 'и вес по-прежнему держит отрыв');
+  assert.ok(b.U <= 1, `U базы ${b.U.toFixed(2)}`);
 });
