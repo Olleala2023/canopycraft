@@ -169,6 +169,7 @@ g.draggable{cursor:ew-resize}
 .kv{display:flex; justify-content:space-between; gap:10px; font-size:12px; border-bottom:1px dotted var(--rule); padding:2px 0}
 .kv span:last-child{font-family:"IBM Plex Mono",monospace; text-align:right}
 .kv span{overflow-wrap:anywhere; min-width:0}
+.kv span:first-child{flex-shrink:0; max-width:45%; overflow-wrap:normal}
 
 /* ── сводка ── */
 /* ── предупреждения над сводкой: то, чего расчёт не видит ── */
@@ -1235,6 +1236,67 @@ function steelBeamColumn(N, M, props, mat, lef, axis = 'x') {
   return c;
 }
 
+/**
+ * Сжатие с изгибом в двух плоскостях — у наружного столба, когда вдоль стены
+ * связей нет: поперёк ряда момент от эксцентриситета опирания, вдоль — от
+ * ветра на консоль. Моменты складываются линейно, φ берётся по худшей
+ * плоскости — это верхняя оценка по отношению к формулам СП 16 для
+ * двухосного изгиба, в запас.
+ */
+function steelBeamColumn2(N, Mx, My, props, mat, lefX, lefY) {
+  const Rd = mat.Ry * mat.gammaC;
+  const plane = (lef, i, I) => {
+    const { phi } = phiBuckling(lef / i, mat.Ry, mat.E);
+    const Ncr = (Math.PI * Math.PI * mat.E * I) / (lef * lef);
+    return { phi, amp: 1 / Math.max(0.2, 1 - Math.abs(N) / Ncr) };
+  };
+  const x = plane(lefX, props.ix, props.Ix);
+  const y = plane(lefY, props.iy, props.Iy);
+  const phi = Math.min(x.phi, y.phi);
+  const value = Math.abs(N) / (phi * props.A * Rd)
+    + (Math.abs(Mx) * x.amp) / (props.Wx * Rd) + (Math.abs(My) * y.amp) / (props.Wy * Rd);
+  const c = chk('Сжатие с изгибом', value, 1.0, '',
+    'N/(φ·A·R_y·γ_c) + M_x·η_x/(W_x·R_y·γ_c) + M_y·η_y/(W_y·R_y·γ_c) ≤ 1',
+    `изгиб в двух плоскостях, φ = ${phi.toFixed(3)} по худшей, η_x = ${x.amp.toFixed(2)}, η_y = ${y.amp.toFixed(2)}`);
+  c.phi = phi;
+  return c;
+}
+
+/**
+ * Условная поперечная сила в сжатом стержне, Н — формула (18) СП 16:
+ *   Q_fic = 7,15·10⁻⁶·(2330 − E/R_y)·N/φ.
+ * На неё считают связи, которые уменьшают расчётную длину сжатых стержней
+ * (правило СНиП II-23-81* п. 5.8*, перенесённое в СП 16): чтобы удержать
+ * столб от выпучивания, связь должна что-то держать, даже когда ветра нет.
+ * φ — в той плоскости, которую связь раскрепляет.
+ */
+function qFic(N, phi, mat) {
+  return 7.15e-6 * (2330 - mat.E / mat.Ry) * Math.max(0, N) / Math.max(1e-6, phi);
+}
+
+/** Растяжение диагонали связи: N ≤ A·R_y·γ_c. */
+function braceTension(N, A, mat, note) {
+  return chk('Растяжение связи', Math.abs(N), A * mat.Ry * mat.gammaC, 'Н', 'N ≤ A·R_y·γ_c', note);
+}
+
+/**
+ * Предельная гибкость растянутой связи: 400 (СП 16, табл. 33). Слишком
+ * тонкая диагональ провисает и болтается — держать она начинает, только
+ * когда верх уже уехал.
+ */
+function braceSlenderness(lambda, note) {
+  return chk('Гибкость связи', lambda, 400, '', 'λ ≤ 400 для растянутых связей — табл. 33 СП 16', note);
+}
+
+/**
+ * Изгиб балки из своей плоскости горизонтальными силами — у обвязки у стены
+ * это распор, который приносят стропила: через них держится верх наружного
+ * ряда и ветер на кровлю.
+ */
+function lateralBending(M, W, R, note) {
+  return chk('Изгиб из плоскости от распора', Math.abs(M) / W, R, 'МПа', 'σ = M_y/W_y ≤ R', note);
+}
+
 /** Предельная гибкость сжатого элемента: λ_u = 180 − 60α. */
 function steelSlenderness(lambda, alpha) {
   const a = Math.min(1, Math.max(0.5, alpha));
@@ -1782,12 +1844,21 @@ function defaultModel() {
     posts: {
       xs: Array.from({ length: nPosts }, (_, i) => (B * i) / (nPosts - 1)),
       sectionId: 's100x100x3',
-      // коэффициенты расчётной длины в двух плоскостях: поперёк ряда — к дому и
-      // от дома, вдоль ряда — вдоль стены. Условия закрепления там разные, и
-      // считать надо по каждой отдельно
-      muX: 2.0,
-      muY: 2.0,
     },
+    /**
+     * Что держит верх наружного ряда от смещения — отсюда и μ столбов.
+     * Выбирается не μ, а схема: μ из списка можно было поставить 1,0 без
+     * единой связи, и столб проходил, хотя верх ничем не удержан.
+     *
+     * Поперёк ряда верх держат сами стропила — это распорки до стены; их
+     * крепление и обвязка у стены на это усилие проверяются, выбирать нечего.
+     * Вдоль стены стропила на шарнирах — параллелограмм, держать может только
+     * связь: 'none' — ничего, столбы консоли, μ = 2; 'cross' — крест из двух
+     * диагоналей в крайнем пролёте ряда (bays — в одном или в обоих крайних),
+     * μ = 1. По умолчанию ничего, как и раньше: программа не вправе считать,
+     * что связь есть.
+     */
+    bracing: { along: 'none', bays: 1, sectionId: 's40x40x3' },
     purlin: { sectionId: 's80x140x4' },
     /** Крепление стропила к опоре от ветрового отрыва — см. core/fasteners.js */
     rafterTie: { id: 'nail4x50' },
@@ -1805,8 +1876,6 @@ function defaultModel() {
     wallPosts: {
       xs: Array.from({ length: nWallPosts }, (_, i) => (B * i) / (nWallPosts - 1)),
       sectionId: 's60x60x3',
-      muX: 1.0,           // раскреплён стеной по всей высоте — в обеих плоскостях
-      muY: 1.0,
       boltCount: 3,       // шпилек на столб
       boltDiameter: 16,   // М16
       boltGrade: '5.8',
@@ -2045,21 +2114,35 @@ function fromBase64Url(code) {
 }
 
 /**
- * Старые ссылки: до разделения μ по плоскостям в модели было одно поле mu.
- * mergeModel неизвестные ключи молча выбрасывает, и такая ссылка тихо
- * считалась бы с текущими умолчаниями — поэтому переносим значение в оба поля.
+ * Старые ссылки.
+ *
+ * До разделения по плоскостям в модели было одно поле mu, потом muX и muY,
+ * которые выбирались из списка. Теперь μ следует из схемы связей
+ * (model.bracing), а полей μ нет вовсе. mergeModel неизвестные ключи молча
+ * выбрасывает, и такая ссылка тихо считалась бы с умолчаниями — поэтому
+ * переводим: μ ≤ 1 вдоль ряда у наружного столба значило «верх удержан
+ * связями», то есть крест в ряду. Поперёк ряда выбирать больше нечего —
+ * верх там держат стропила. Что перевели, говорим словами.
  */
-function migrate(patch) {
-  if (!isPlain(patch)) return patch;
+function migrate(patch, where = 'В ссылке') {
+  const notes = [];
+  if (!isPlain(patch)) return { patch, notes };
   const out = { ...patch };
   for (const row of ['posts', 'wallPosts']) {
     const r = out[row];
-    if (isPlain(r) && 'mu' in r) {
-      const { mu, ...rest } = r;
-      out[row] = { muX: mu, muY: mu, ...rest };
+    if (!isPlain(r) || !('mu' in r || 'muX' in r || 'muY' in r)) continue;
+    const { mu, muX, muY, ...rest } = r;
+    out[row] = rest;
+    const along = muY ?? mu;
+    if (row === 'posts' && along !== undefined && along <= 1) {
+      out.bracing = { along: 'cross', ...(isPlain(out.bracing) ? out.bracing : {}) };
+      notes.push(`${where} у наружных столбов стояло μ = ${String(along).replace('.', ',')} вдоль ряда — верх удержан связями. `
+        + 'Теперь μ задаётся схемой: поставлен крест в крайнем пролёте, и он проверяется.');
+    } else if (row === 'posts' && (muX ?? mu) !== undefined && (muX ?? mu) !== 2) {
+      notes.push(`μ поперёк ряда ${where === 'В ссылке' ? 'из ссылки' : 'из сохранённого расчёта'} больше не выбирается: верх там держат стропила, и это проверяется.`);
     }
   }
-  return out;
+  return { patch: out, notes };
 }
 
 /** Модель → строка для адресной строки. */
@@ -2070,12 +2153,30 @@ function encodeModel(model) {
 /** Строка из адресной строки → модель. null, если строка испорчена. */
 function decodeModel(code) {
   try {
-    const patch = migrate(JSON.parse(fromBase64Url(code)));
+    const { patch } = migrate(JSON.parse(fromBase64Url(code)));
     if (!isPlain(patch)) return null;
     return mergeModel(patch);
   } catch {
     return null;
   }
+}
+
+/** Что пришлось перевести при чтении старой ссылки — для сообщения человеку. */
+function decodeNotes(code) {
+  try {
+    return migrate(JSON.parse(fromBase64Url(code))).notes;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Модель из прошлой версии программы (сохранённая в браузере): те же
+ * переводы, что и для ссылки, плюс недостающие поля из умолчаний.
+ */
+function upgradeModel(model) {
+  const { patch, notes } = migrate(model, 'В сохранённом расчёте');
+  return { model: mergeModel(patch), notes };
 }
 
 /* ── src/core/analysis.js ── */
@@ -2321,7 +2422,7 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
  */
 const TIE_TARGET = 0.85;
 
-function analyseTie(model, rafters, side, support, ctx) {
+function analyseTie(model, rafters, side, support, ctx, hold = 0) {
   const f = fastener(model.rafterTie.id);
   const sec = section(model.rafters.sectionId);
   const mat = propsFor(sec, model.opts);
@@ -2335,7 +2436,12 @@ function analyseTie(model, rafters, side, support, ctx) {
   }, { up: -Infinity, r: rafters[0] });
   const uplift = Math.max(0, worst.up);
   // скатная составляющая доходит до нижней опоры — она у наружного прогона
-  const along = side === 'outer' ? Math.abs(worst.r.reactions.alongUplift) : 0;
+  const slope = side === 'outer' ? Math.abs(worst.r.reactions.alongUplift) : 0;
+  // стропило — распорка, которой держится верх наружного ряда: через узел
+  // идёт то, что ряд отдаёт стропилам, а у стены — ещё и ветер на кровлю.
+  // Сила горизонтальная, вдоль стропила; складываем её со скатной по модулю,
+  // не раскладывая по углу, — в запас
+  const along = slope + hold;
   const force = Math.hypot(uplift, along);
 
   const cap = shearCapacity(f, { woodWidth: sec.b, mv: mat.mv ?? 1 });
@@ -2366,18 +2472,45 @@ function analyseTie(model, rafters, side, support, ctx) {
   }
 
   return {
-    side, fastener: f, force, uplift, along, T, need, fit, spacing: sp,
+    side, fastener: f, force, uplift, along, slope, hold, T, need, fit, spacing: sp,
     penetration: cap.pen, governs: cap.governs,
     support: supSec, x: worst.r.x,
     ...worstOf(checks),
   };
 }
 
-function analyseTies(model, rafters, ctx) {
+/**
+ * @param {{outer:number, wall:number}} [hold] горизонтальная сила на одно
+ *   стропило, Н: сколько приходится держать узлу у прогона и у стены
+ */
+function analyseTies(model, rafters, ctx, hold = { outer: 0, wall: 0 }) {
   return {
-    outer: analyseTie(model, rafters, 'outer', model.purlin, ctx),
-    wall: analyseTie(model, rafters, 'wall', model.wallPurlin, ctx),
+    outer: analyseTie(model, rafters, 'outer', model.purlin, ctx, hold.outer),
+    wall: analyseTie(model, rafters, 'wall', model.wallPurlin, ctx, hold.wall),
   };
+}
+
+/**
+ * Обвязка у стены из своей плоскости. Стропила упираются в неё и приносят
+ * горизонтальную силу: ветер на кровлю и то, что держит верх наружного ряда.
+ * Между стеновыми столбами обвязка работает балкой на ребро — считаем её
+ * неразрезной на тех же опорах и с теми же стыками, что и в плоскости.
+ * Прижимает ли её к стене — неизвестно, поэтому стена в расчёт не берётся.
+ */
+function wallPurlinLateral(model, beam, supports, Htotal) {
+  const sec = beam.sec;
+  const mat = beam.mat;
+  const xs = [...model.rafters.xs].sort((a, b) => a - b);
+  const tr = tributaries(xs, model.geom.B);
+  const point = xs.map((x, i) => ({ x, P: (Htotal * tr[i]) / model.geom.B }));
+  const EI = mat.E * sec.props.Iy;
+  const res = solveBeam({ length: model.geom.B, supports, EI, point, hinges: beam.hinges ?? [], nEl: 120 });
+  let M = 0;
+  for (let k = 0; k < res.M.length; k++) if (Math.abs(res.M[k]) > Math.abs(M)) M = res.M[k];
+  const R = sec.material === 'timber' ? mat.Rbend : mat.Ry * mat.gammaC;
+  const f2 = (v) => (v / 1000).toFixed(2).replace('.', ',');
+  return lateralBending(M, sec.props.Wy, R,
+    `${f2(Htotal)} кН на ${xs.length} стропил, M_y = ${f2(Math.abs(M) / 1000)} кН·м, W_y = ${Math.round(sec.props.Wy / 1000)} см³`);
 }
 
 /* ──────────────── УЗЕЛ «ПРОГОН — СТОЛБ» ──────────────── */
@@ -2399,9 +2532,9 @@ function analyseBeamTie(model, tieId, beam, posts) {
   const beamMat = beam.mat;
 
   // худший столб ряда: по отрыву, а при равном отрыве — по горизонтальной силе
-  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Hpost > a.Hpost) ? p : a));
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Htie > a.Htie) ? p : a));
   const uplift = Math.max(0, post.Nup);
-  const H = Math.abs(post.Hpost);
+  const H = Math.abs(post.Htie);
   const Mecc = Math.abs(post.N * model.opts.postEccentricity);
 
   const checks = [];
@@ -2467,43 +2600,117 @@ function analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts) {
 /* ───────────────────────── СТОЛБЫ ───────────────────────── */
 
 /**
+ * Коэффициенты расчётной длины из схемы: μ не выбирается, а следует из того,
+ * что держит верх столба. Раскреплённому верху даём 1,0, а не 0,7: для 0,7
+ * нужно ещё и защемление внизу, а на него база не рассчитывается — в запас.
+ *
+ *   стеновой ряд — притянут к стене шпильками, в обеих плоскостях 1,0;
+ *   наружный поперёк ряда — верх держат стропила, распорки до стены: 1,0,
+ *     их крепление и обвязка у стены на это усилие проверяются;
+ *   наружный вдоль стены — стропила на шарнирах держать не могут, это
+ *     параллелограмм; 1,0 только при кресте в ряду, иначе консоль, 2,0.
+ */
+function postMu(model, row) {
+  if (row === 'wall') return { muX: 1, muY: 1, heldX: 'стена', heldY: 'стена' };
+  const cross = model.bracing?.along === 'cross';
+  return { muX: 1, muY: cross ? 1 : 2, heldX: 'стропила', heldY: cross ? 'крест' : null };
+}
+
+/** Отступ точек крепления диагоналей креста от базы и от оголовка, мм. */
+const CROSS_INSET = 150;
+
+/**
+ * Пролёты наружного ряда, в которых стоит крест: крайний или оба крайних.
+ * Индексы — по столбам ряда слева направо.
+ */
+function crossBays(model, xs) {
+  if (model.bracing?.along !== 'cross' || xs.length < 2) return [];
+  const s = [...xs].sort((a, b) => a - b);
+  const pairs = [[0, 1]];
+  if ((model.bracing.bays ?? 1) >= 2 && s.length >= 3) pairs.push([s.length - 2, s.length - 1]);
+  return pairs.map(([i, j]) => ({ i, j, x0: s[i], x1: s[j], span: s[j] - s[i] }));
+}
+
+/** Геометрия диагонали: высота между точками крепления, длина и доли усилия. */
+function crossGeometry(H, span) {
+  const hd = Math.max(100, H - 2 * CROSS_INSET);
+  const length = Math.hypot(span, hd);
+  // горизонтальная сила F растягивает диагональ усилием F·l/s и тянет
+  // столбы пролёта по вертикали силой F·h/s — один вверх, другой вниз
+  return { hd, length, tension: length / span, vertical: hd / span };
+}
+
+/**
  * Ряд столбов под прогоном.
  * @param {object} cfg model.posts или model.wallPosts
  * @param {object} purlin результат расчёта прогона, лежащего на этом ряду
  * @param {{braced:boolean, thrust:number, alongWall:number}} extra
  *   braced — столб раскреплён стеной (сквозные шпильки);
- *   thrust — суммарный горизонтальный распор от ската и ветра на весь ряд, Н;
+ *   thrust — горизонтальная сила поперёк ряда на весь ряд, Н (только у стены:
+ *     наружный ряд свою отдаёт через стропила);
  *   alongWall — ветровая сила вдоль стены на весь ряд, Н.
  */
 function analysePostRow(model, cfg, purlin, ctx, extra) {
   const sec = section(cfg.sectionId);
   const mat = propsFor(sec, model.opts);
   const lv = levels(model);
-  const H = extra.braced ? lv.wallPostTop : lv.postTop;
+  const wall = !!extra.braced;
+  const H = wall ? lv.wallPostTop : lv.postTop;
+  const mu = postMu(model, wall ? 'wall' : 'outer');
   // расчётные длины в двух плоскостях: поперёк ряда (x — к дому и от дома,
-  // в этой же плоскости действуют ветровой распор и эксцентриситет) и вдоль
-  // ряда (y — вдоль стены). Закрепления там разные, поэтому и μ разные
-  const lefX = cfg.muX * H;
-  const lefY = cfg.muY * H;
+  // в этой же плоскости эксцентриситет опирания) и вдоль ряда (y — вдоль стены)
+  const lefX = mu.muX * H;
+  const lefY = mu.muY * H;
   const lef = Math.max(lefX, lefY);
   const fascia = sec.h + 200;
   const n = purlin.reactions.length;
   const EI = mat.E * sec.props.Ix;
   const GAs = mat.G * sec.props.As;
+  const phiX = phiBuckling(lefX / sec.props.ix, mat.Ry, mat.E).phi;
+  const phiY = phiBuckling(lefY / sec.props.iy, mat.Ry, mat.E).phi;
+  const alongShare = (extra.alongWall ?? 0) / n;
 
-  return purlin.reactions.map((r, i) => {
+  // первый проход: осевые силы и то, что уходит в связи
+  const pre = purlin.reactions.map((r, i) => {
     const N = Math.max(0, r.R) + sec.weight * H * GAMMA_F.steel;
     const trib = i === 0 || i === n - 1 ? model.geom.B / (2 * Math.max(1, n - 1)) : model.geom.B / Math.max(1, n - 1);
-    const Hwind = extra.braced ? 0 : (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
-    const Hpost = (extra.thrust ?? 0) / n + Hwind;
-    const Mecc = N * model.opts.postEccentricity;
-    const Nup = -(purlin.uplift[i]?.R ?? 0);
+    const Hwind = wall ? 0 : (ctx.wind.lateral * fascia * trib) / 1e6 * 1000;
+    // верх, удержанный от смещения, связь обязана держать и без ветра:
+    // условная поперечная сила от выпучивания самого столба
+    const QficX = wall ? 0 : qFic(N, phiX, mat);
+    const QficY = !wall && mu.heldY ? qFic(N, phiY, mat) : 0;
+    return { r, N, Hwind, QficX, QficY, Nup: -(purlin.uplift[i]?.R ?? 0) };
+  });
 
-    // эпюры по высоте столба: горизонтальная сила и момент от эксцентриситета
-    // приложены вверху, в уровне опирания прогона
-    let diagram, bolts = null;
-    if (extra.braced) {
+  // крест: вся сила вдоль ряда приходит по прогону в пролёт со связью
+  const bays = wall ? [] : crossBays(model, pre.map((p) => p.r.x));
+  const holdYTotal = mu.heldY && !wall ? pre.reduce((a, p) => a + alongShare + p.QficY, 0) : 0;
+  const Fcross = bays.length ? holdYTotal / bays.length : 0;
+  // в отрыв идёт только ветровая часть: условная сила — от сжатия столбов
+  // под снегом, а отрыв считается при ветре без снега
+  const FcrossWind = bays.length && mu.heldY && !wall ? (alongShare * n) / bays.length : 0;
+  const down = new Map(), up = new Map();
+  for (const b of bays) {
+    const g = crossGeometry(H, b.span);
+    for (const k of [b.i, b.j]) {
+      down.set(k, (down.get(k) ?? 0) + Fcross * g.vertical);
+      up.set(k, (up.get(k) ?? 0) + FcrossWind * g.vertical);
+    }
+  }
+
+  return pre.map((p, i) => {
+    const Vcross = down.get(i) ?? 0;
+    const VcrossUp = up.get(i) ?? 0;
+    // ветер в обе стороны: у каждого столба пролёта связь и прижимает, и отрывает
+    const N = p.N + Vcross;
+    const Nup = p.Nup + VcrossUp;
+    const Mecc = N * model.opts.postEccentricity;
+
+    let diagram, diagramY = null, bolts = null;
+    let Hpost = 0, Hy = 0, Htie, Hbase, Mbase, My = 0;
+    if (wall) {
       // столб держат сквозные шпильки — балка на опорах в их отметках плюс база
+      Hpost = (extra.thrust ?? 0) / n;
       const zs = boltHeights(H, Math.max(1, cfg.boltCount));
       diagram = solveBeam({
         length: H, supports: [0, ...zs], EI, GAs,
@@ -2513,17 +2720,48 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
       const Nbolt = Math.max(0, ...forces);
       const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / Math.max(1, cfg.boltCount);
       bolts = { Nbolt, Vbolt, count: cfg.boltCount, heights: zs, forces };
+      Htie = Hpost;
+      Hbase = Hpost;
+      Mbase = Math.abs(diagram.M[0]);
     } else {
-      // отдельно стоящий столб — консоль, защемлённая в фундаменте
+      // поперёк ряда верх удержан стропилами: столб — стойка на двух опорах,
+      // вверху момент от эксцентриситета опирания. Горизонтальная сила сюда
+      // не идёт — её забирают стропила
       const nS = 121, x = new Float64Array(nS), M = new Float64Array(nS), V = new Float64Array(nS), w = new Float64Array(nS);
       for (let k = 0; k < nS; k++) {
         const z = (H * k) / (nS - 1);
         x[k] = z;
-        V[k] = Hpost;
-        M[k] = Mecc + Hpost * (H - z);
-        w[k] = (Hpost * z * z * (3 * H - z)) / 6 / EI + (Mecc * z * z) / 2 / EI;
+        M[k] = (Mecc * z) / H;
+        V[k] = Mecc / H;
+        w[k] = (Mecc * z * (H * H - z * z)) / (6 * EI * H);
       }
-      diagram = { x, M, V, w, reactions: [{ x: 0, R: Hpost }], maxM: M[0], maxV: Hpost };
+      diagram = { x, M, V, w, reactions: [{ x: 0, R: Mecc / H }], maxM: Mecc };
+      if (!mu.heldY) {
+        // вдоль стены верх свободен: консоль, защемлённая в фундаменте, и ветер
+        // вдоль стены делится между столбами ряда
+        Hy = alongShare;
+        const xy = new Float64Array(nS), My_ = new Float64Array(nS), Vy = new Float64Array(nS), wy = new Float64Array(nS);
+        const EIy = mat.E * sec.props.Iy;
+        for (let k = 0; k < nS; k++) {
+          const z = (H * k) / (nS - 1);
+          xy[k] = z;
+          Vy[k] = Hy;
+          My_[k] = Hy * (H - z);
+          wy[k] = (Hy * z * z * (3 * H - z)) / 6 / EIy;
+        }
+        diagramY = { x: xy, M: My_, V: Vy, w: wy, reactions: [{ x: 0, R: Hy }], maxM: My_[0] };
+        My = Hy * H;
+      }
+      // через узел «прогон — столб» проходит то, что столб отдаёт связям,
+      // а у столба с крестом — ещё и вся сила вдоль ряда, собранная прогоном
+      const tieY = mu.heldY ? (Vcross ? Fcross : p.QficY) : Hy;
+      Htie = Math.hypot(p.QficX, tieY);
+      // база: низ диагонали креста упирается в базу своего столба
+      Hbase = Math.abs(Hy) + (Vcross ? Fcross : 0);
+      // поперёк ряда низ столба при удержанном верхе принимается шарниром,
+      // но плита с анкерами часть момента всё равно заберёт: при защемлении
+      // внизу это половина верхнего — её и даём базе, в запас
+      Mbase = Math.abs(Mecc) / 2 + Math.abs(My);
     }
     let M = 0;
     for (let k = 0; k < diagram.M.length; k++) if (Math.abs(diagram.M[k]) > Math.abs(M)) M = diagram.M[k];
@@ -2537,7 +2775,9 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
     const checks = [
       stabX,
       stabY,
-      steelBeamColumn(N, M, sec.props, mat, lefX, 'x'),
+      wall
+        ? steelBeamColumn(N, M, sec.props, mat, lefX, 'x')
+        : steelBeamColumn2(N, M, My, sec.props, mat, lefX, lefY),
       // гибкость и местная устойчивость — по той плоскости, которая правит
       // общей устойчивостью: там наибольшая λ и наименьший φ
       steelSlenderness(Math.max(stabX.lambda, stabY.lambda), stab.U),
@@ -2554,10 +2794,70 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
     }
 
     return {
-      x: r.x, N, M, Nup, Hpost, sec, mat, lef, lefX, lefY, H, bolts, diagram,
-      braced: !!extra.braced, ...worstOf(checks),
+      x: p.r.x, N, M, My, Nup, Hpost, Hy, Htie, Hbase, Mbase, sec, mat, lef, lefX, lefY, H, bolts,
+      diagram, diagramY, braced: wall, muX: mu.muX, muY: mu.muY,
+      // что столб отдаёт тем, кто держит его верх
+      Hwind: p.Hwind, QficX: p.QficX, QficY: p.QficY,
+      holdX: p.Hwind + p.QficX,
+      holdY: mu.heldY && !wall ? alongShare + p.QficY : 0,
+      Vcross, VcrossUp,
+      ...worstOf(checks),
     };
   });
+}
+
+/**
+ * Крест в наружном ряду: две диагонали в пролёте между столбами, работают на
+ * растяжение по очереди — при ветре в одну сторону тянет одна, в другую —
+ * другая. Сжатую диагональ не учитываем: тонкая, она выпучится сразу.
+ *
+ * Держит всю силу вдоль ряда: ветер, пришедший на наружный ряд, и условные
+ * поперечные силы всех столбов ряда — прогон собирает их в пролёт со связью.
+ * Диагональ приварена к столбам швом по контуру торца.
+ */
+function analyseCross(model, posts) {
+  const bays = crossBays(model, posts.map((p) => p.x));
+  if (!bays.length) return null;
+  const sec = section(model.bracing.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const post = posts[0].sec;
+  const H = posts[0].H;
+  const wind = posts.reduce((a, p) => a + (p.holdY - p.QficY), 0);
+  const qfic = posts.reduce((a, p) => a + p.QficY, 0);
+  const F = (wind + qfic) / bays.length;
+  // худший пролёт — самый короткий: там диагональ круче и усилие в ней больше
+  const bay = bays.reduce((a, b) => (b.span < a.span ? b : a));
+  const g = crossGeometry(H, bay.span);
+  const T = F * g.tension;
+  const V = F * g.vertical;
+  const Vup = (wind / bays.length) * g.vertical;
+  const i = Math.min(sec.props.ix, sec.props.iy);
+  const lambda = g.length / i;
+
+  const tMin = Math.min(sec.t ?? 2, post.t ?? 3);
+  const kfMin = weldMinLeg(Math.max(sec.t ?? 2, post.t ?? 3));
+  const kfMax = 1.2 * tMin;
+  const kf = kfMin;
+  const line = weldLine(sec.b, sec.h);
+  const tauF = T / (WELD.betaF * kf * line.length);
+  const tauZ = T / (WELD.betaZ * kf * line.length);
+  const weldNote = `шов ${Math.round(line.length)} мм по контуру торца ${sec.label}, катет ${kf} мм`;
+  const f2 = (v) => (v / 1000).toFixed(2).replace('.', ',');
+
+  const checks = [
+    braceTension(T, sec.props.A, mat,
+      `${sec.label}: ветер ${f2(wind / bays.length)} + условная сила столбов ${f2(qfic / bays.length)} кН, диагональ ${Math.round(g.length)} мм`),
+    braceSlenderness(lambda, `l = ${Math.round(g.length)} мм, i = ${i.toFixed(1).replace('.', ',')} мм`),
+    weldMetal(tauF, WELD.Rwf, weldNote),
+    weldFusion(tauZ, mat.Run, weldNote),
+    weldLeg(kf, kfMin, kfMax, `стенки ${sec.t} и ${post.t} мм`),
+  ];
+  return {
+    sec, mat, bays, count: 2 * bays.length, F, T, V, Vup, wind, qfic,
+    span: bay.span, hd: g.hd, length: g.length, lambda,
+    kf, weldLength: line.length, tauF, tauZ,
+    ...worstOf(checks),
+  };
 }
 
 /* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
@@ -2576,16 +2876,17 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
  */
 function analysePostBase(model, cfg, posts, ctx) {
   const base = postBase(model.postBase.id);
-  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && Math.abs(p.diagram.M[0]) > Math.abs(a.diagram.M[0])) ? p : a));
+  const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Mbase > a.Mbase) ? p : a));
   const sec = post.sec;
   const mat = post.mat;
   const conc = CONCRETE[model.opts.concreteClass] ?? CONCRETE.B20;
   const N = Math.max(0, post.N);
   const uplift = Math.max(0, post.Nup);
-  const H = Math.abs(post.Hpost);
-  const M = Math.abs(post.diagram.M[0]);
-  // защемление внизу предполагается всюду, кроме шарнирной схемы μ = 1
-  const needsFixity = cfg.muX !== 1 || cfg.muY !== 1;
+  const H = Math.abs(post.Hbase);
+  const M = Math.abs(post.Mbase);
+  // защемление внизу нужно, если хоть в одной плоскости верх свободен:
+  // консоль держится только за фундамент
+  const needsFixity = post.muX !== 1 || post.muY !== 1;
 
   const checks = [];
   let detail = {};
@@ -2902,16 +3203,22 @@ function supportLoads(model, roof = analyseRoof(model)) {
   const thrustFascia = roof.wind.lateral * ((fasciaH * geom.B) / 1e6) * 1000;
   const thrust = thrustRoof + thrustFascia;
   const alongWall = roof.wind.lateral * ((fasciaH * geom.L) / 1e6) * 1000;
+  // вдоль стены стропила на шарнирах не держат: доля ветра на торец кровли,
+  // которая приходится на наружную опору стропила, идёт в наружный ряд —
+  // в консоли столбов или в крест. Реакция равномерной нагрузки по длине
+  // L + a на опоре L. Шпильки у стены по-прежнему считаются на всю силу:
+  // если кровля всё же работает диском, вся она уходит к дому — в запас
+  const alongOuter = alongWall * Math.min(1, (geom.L + geom.a) / (2 * geom.L));
 
   return {
     roof,
     ctx: roof.ctx,
-    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall },
+    thrust: { total: thrust, roof: thrustRoof, fascia: thrustFascia, alongWall, alongOuter },
     outer: {
       beamKey: 'purlin', postsKey: 'posts', label: 'Прогон по столбам',
       supports: [...model.posts.xs].sort((a, b) => a - b),
       loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') },
-      extra: { braced: false, thrust: 0, alongWall: 0 },
+      extra: { braced: false, thrust: 0, alongWall: alongOuter },
     },
     wall: {
       beamKey: 'wallPurlin', postsKey: 'wallPosts', label: 'Обвязка у стены',
@@ -2986,8 +3293,16 @@ function analyse(model) {
   const wallPurlin = analyseLineBeam(model, model.wallPurlin.sectionId, sl.wall.supports, sl.wall.loads, sl.wall.label);
 
   const posts = analysePostRow(model, model.posts, purlin, ctx, sl.outer.extra);
-  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, sl.wall.extra);
-  const ties = analyseTies(model, rafters, ctx);
+  // верх наружного ряда поперёк держат стропила: всё, что ряд им отдаёт,
+  // по стропилам уходит к стене — в узлы крепления, обвязку и стеновой ряд
+  const holdX = posts.reduce((a, p) => a + p.holdX, 0);
+  const toWall = sl.thrust.total + holdX;
+  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { ...sl.wall.extra, thrust: toWall });
+  const nR = Math.max(1, model.rafters.xs.length);
+  const ties = analyseTies(model, rafters, ctx, { outer: holdX / nR, wall: toWall / nR });
+  const lateral = wallPurlinLateral(model, wallPurlin, sl.wall.supports, toWall);
+  Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]), { lateral, lateralH: toWall });
+  const cross = analyseCross(model, posts);
   const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
   const bases = analysePostBases(model, posts, wallPosts, ctx);
   const ca = Math.cos(deg(model.geom.alpha));
@@ -3024,6 +3339,7 @@ function analyse(model) {
     { key: 'bases', label: 'База столба', U: Math.max(bases.outer.U, bases.wall.U),
       worst: (bases.outer.U > bases.wall.U ? bases.outer : bases.wall).worst },
   ];
+  if (cross) all.push({ key: 'bracing', label: 'Связи ряда', U: cross.U, worst: cross.worst });
   if (spliceJoints.length) {
     const worstSplice = spliceJoints.reduce((a, b) => (a.U > b.U ? a : b));
     all.push({ key: 'spliceJoints', label: 'Стык по длине', U: worstSplice.U, worst: worstSplice.worst });
@@ -3032,6 +3348,8 @@ function analyse(model) {
   return {
     model, ctx, dead, snow, wind,
     rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
+    cross,
+    bracing: { ...postMu(model, 'outer'), holdX, toWall, alongOuter: sl.thrust.alongOuter },
     thrust: sl.thrust,
     splices: spliceReport(model),
     spliceJoints,
@@ -3095,6 +3413,7 @@ function billOfMaterials(result) {
   const lv = levels(m);
   add('Столбы наружные', section(m.posts.sectionId), lv.postLength, m.posts.xs.length);
   add('Столбы у стены', section(m.wallPosts.sectionId), lv.wallPostLength, m.wallPosts.xs.length);
+  if (result.cross) add('Связи наружного ряда', result.cross.sec, result.cross.length, result.cross.count);
 
   // кровля
   const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату
@@ -3229,6 +3548,7 @@ function billOfMaterials(result) {
     { name: 'Стропила', mass: byName('Стропила'), note: 'сосна' },
     { name: 'Прогоны и обвязка', mass: byName('Прогон наружный') + byName('Обвязка у стены'), note: 'сталь + сосна' },
     { name: 'Столбы', mass: byName('Столбы наружные') + byName('Столбы у стены'), note: 'сталь' },
+    ...(result.cross ? [{ name: 'Связи', mass: byName('Связи наружного ряда'), note: 'сталь' }] : []),
     { name: 'Метизы', mass: fastenerTotal, note: 'шпильки, пластины и крепёж узлов' },
   ];
 
@@ -3291,7 +3611,11 @@ const PATH = {
   wallPurlin: (m, id) => ({ ...m, wallPurlin: { ...m.wallPurlin, sectionId: id } }),
   wallPosts: (m, id) => ({ ...m, wallPosts: { ...m.wallPosts, sectionId: id } }),
   posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
+  bracing: (m, id) => ({ ...m, bracing: { ...m.bracing, sectionId: id } }),
 };
+
+/** Помещается ли катет шва диагонали креста между стенками — 0, если креста нет. */
+const crossWeldFit = (r) => r.cross?.checks.find((c) => c.name === 'Катет шва')?.U ?? 0;
 
 /** Коэффициент использования по группе элементов. */
 const U_OF = {
@@ -3300,7 +3624,11 @@ const U_OF = {
   purlin: (r) => r.purlin.U,
   wallPurlin: (r) => r.wallPurlin.U,
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
-  posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+  // при кресте столб должен ещё и позволять приварить диагональ: к стенке 2 мм
+  // по правилам катета не приварить ничего, и такой столб не годится
+  posts: (r) => Math.max(...r.posts.map((x) => x.U), crossWeldFit(r)),
+  // связей нет — подбирать нечего, годится любое сечение
+  bracing: (r) => r.cross?.U ?? 0,
 };
 
 /**
@@ -3310,7 +3638,11 @@ const U_OF = {
 function pickSection(model, key, target = 0.95) {
   const current = section(model[key].sectionId);
   const candidates = ladder(current.material).filter((s) =>
-    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2 : true
+    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2
+      // диагональ креста — квадратная труба: прямоугольная не дешевле по массе,
+      // а в узле неудобна
+      : key === 'bracing' ? s.h === s.b
+      : true
   );
   const tried = [];
   for (const cand of candidates) {
@@ -3420,7 +3752,8 @@ function pickTies(model, target = 1) {
 function pickAll(model, target = 0.9) {
   let m = model;
   const log = [];
-  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts']) {
+  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts', 'bracing']) {
+    if (key === 'bracing' && m.bracing?.along !== 'cross') continue;
     const r = pickSection(m, key, target);
     if (r) {
       m = PATH[key](m, r.id);
@@ -3447,6 +3780,12 @@ function pickAll(model, target = 0.9) {
  *   2. лучшие по цене варианты кровельной части идут дальше, для каждого
  *      перебираются число столбов и сечения прогонов и стоек;
  *   3. собранный вариант проверяется целиком.
+ *
+ * Наружный ряд перебирается в двух схемах: без связей и с крестом в крайнем
+ * пролёте. Без связей столб — консоль, и его сечение определяет гибкость при
+ * μ = 2; с крестом столбы легче, но появляются диагонали. Что дешевле, зависит
+ * от высоты, числа столбов и цен — поэтому считаются обе, и в списке видно,
+ * какая выбрана.
  *
  * Внутри одного материала стоимость пропорциональна площади сечения (дерево
  * считается по объёму, металл по массе), поэтому сортамент, упорядоченный по A,
@@ -3532,6 +3871,8 @@ async function searchByCost(model, opts = {}) {
   const wallPurlinList = ladderFor(model.wallPurlin.sectionId);
   const postList = ladderFor(model.posts.sectionId, { square: true });
   const wallPostList = ladderFor(model.wallPosts.sectionId, { square: true });
+  // диагональ креста — квадратная труба небольшого сечения
+  const braceList = ladder('steel').filter((s) => s.h === s.b && s.h <= 80);
 
   // разумный диапазон шага стропил: от 1200 до 300 мм
   const counts = [];
@@ -3577,7 +3918,9 @@ async function searchByCost(model, opts = {}) {
      Считается только сам ряд — балка и стойки под ней; кровля к этому моменту
      уже посчитана и её результат переиспользуется. */
   const options = [];
-  const pickRow = async (m, side, beamList, postList, items) => {
+  const pickRow = async (m0, side, beamList, postList, items, along = null) => {
+    // схема связей меняет μ наружных столбов, поэтому ряд считается в своей
+    const m = along ? { ...m0, bracing: { ...m0.bracing, along, bays: 1 } } : m0;
     const sl = supportLoads(m);
     const cfg = sl[side];
     let best = null;
@@ -3588,35 +3931,60 @@ async function searchByCost(model, opts = {}) {
       if (!beamSec) continue;
       const beam = analyseLineBeam(m, beamSec.id, xs, cfg.loads, cfg.label);
       const postCfg = m[cfg.postsKey];
-      const postSec = await cheapest(postList, async (s) => {
-        const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
-        return Math.max(...row.map((p) => p.U));
-      }, target, budget);
+      let postSec = null, brace = null;
+      if (along === 'cross') {
+        // столб с крестом проходит, только если к нему приваривается проходящая
+        // диагональ: катет не меньше табличного и не больше 1,2 толщины стенки,
+        // и к стенке 2 мм не приварить ничего. Отсев по доминированию здесь
+        // не годится — отказ по шву с несущей способностью не монотонен
+        for (const s of postList) {
+          budget.n++;
+          await maybeBreathe(budget);
+          const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+          if (Math.max(...row.map((p) => p.U)) > target) continue;
+          const withPost = { ...m, [cfg.postsKey]: { ...postCfg, sectionId: s.id, xs } };
+          const b = await cheapest(braceList, async (bs) =>
+            analyseCross({ ...withPost, bracing: { ...m.bracing, sectionId: bs.id } }, row)?.U ?? Infinity, target, budget);
+          if (b) { postSec = s; brace = b.id; break; }
+        }
+      } else {
+        postSec = await cheapest(postList, async (s) => {
+          const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+          return Math.max(...row.map((p) => p.U));
+        }, target, budget);
+      }
       if (!postSec) continue;
       const t = clone(m);
       t[cfg.postsKey].xs = xs;
       t[cfg.postsKey].sectionId = postSec.id;
       t[cfg.beamKey].sectionId = beamSec.id;
+      if (brace) t.bracing.sectionId = brace;
       const bom = billOfMaterials(analyse(t));
       const cost = items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
-      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n };
+      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n, along, brace };
     }
     return best;
   };
 
   for (let i = 0; i < finalists.length; i++) {
     const base = finalists[i].model;
-    const outer = await pickRow(base, 'outer', purlinList, postList,
-      ['Прогон наружный', 'Столбы наружные']);
+    const outers = [];
+    for (const along of ['none', 'cross']) {
+      const o = await pickRow(base, 'outer', purlinList, postList,
+        ['Прогон наружный', 'Столбы наружные', 'Связи наружного ряда'], along);
+      if (o) outers.push(o);
+    }
     const wall = await pickRow(base, 'wall', wallPurlinList, wallPostList,
       ['Обвязка у стены', 'Столбы у стены']);
     report('опоры', i + 1, finalists.length);
-    if (!outer || !wall) continue;
+    if (!outers.length || !wall) continue;
 
+    for (const outer of outers) {
     const m = clone(base);
     m.posts.xs = spread(B, outer.n);
     m.posts.sectionId = outer.post;
     m.purlin.sectionId = outer.beam;
+    m.bracing = { ...m.bracing, along: outer.along, bays: 1, ...(outer.brace ? { sectionId: outer.brace } : {}) };
     m.wallPosts.xs = spread(B, wall.n);
     m.wallPosts.sectionId = wall.post;
     m.wallPurlin.sectionId = wall.beam;
@@ -3636,6 +4004,7 @@ async function searchByCost(model, opts = {}) {
     Object.assign(m, withTies);
     const bom = billOfMaterials(res);
     options.push({ model: m, cost: bom.costs.total, res, bom });
+    }
   }
 
   options.sort((a, b) => a.cost - b.cost);
@@ -3650,6 +4019,9 @@ async function searchByCost(model, opts = {}) {
       purlin: section(o.model.purlin.sectionId).label,
       wallPurlin: section(o.model.wallPurlin.sectionId).label,
       posts: `${section(o.model.posts.sectionId).label} × ${o.model.posts.xs.length}`,
+      bracing: o.model.bracing.along === 'cross'
+        ? `крест ${section(o.model.bracing.sectionId).label}`
+        : 'без связей',
       wallPosts: `${section(o.model.wallPosts.sectionId).label} × ${o.model.wallPosts.xs.length}`,
     },
   }));
@@ -3736,6 +4108,26 @@ function drawPlan(res, sel) {
       const x = X(at);
       s.push(`<line x1="${x}" y1="${y - 10}" x2="${x}" y2="${y + 10}" stroke="${color}" stroke-width="2.4"/>`);
       s.push(`<text x="${x + 5}" y="${y - 12}" font-size="9" font-family="${mono}" fill="${color}">стык ${Math.round(at)}${hinge ? ' · шарнир' : ' · накладка'}</text>`);
+    }
+  }
+
+  // крест вдоль ряда: он стоит в вертикальной плоскости под прогоном, на плане
+  // это пролёт между столбами, помеченный диагоналями
+  if (res.cross) {
+    const c = res.cross;
+    const col = uColor(c.U);
+    for (const b of c.bays) {
+      const x0 = X(b.x0), x1 = X(b.x1), y = Y(g.L);
+      s.push(`<g class="pickable" data-pick="bracing">
+        <rect x="${x0}" y="${y - 12}" width="${x1 - x0}" height="24" fill="transparent"/>
+        <line x1="${x0 + 8}" y1="${y - 8}" x2="${x1 - 8}" y2="${y + 8}" stroke="${col}" stroke-width="1.8"/>
+        <line x1="${x0 + 8}" y1="${y + 8}" x2="${x1 - 8}" y2="${y - 8}" stroke="${col}" stroke-width="1.8"/>
+        <text x="${(x0 + x1) / 2}" y="${y + 22}" font-size="9" text-anchor="middle" font-family="${mono}" fill="${col}">крест ${c.sec.label} · ${f2(c.U)}</text>
+        <title>Связь-крест ${c.sec.label} · держит ${f2(c.F / 1000)} кН вдоль ряда · U ${f2(c.U)} (${c.worst?.name})</title></g>`);
+    }
+    if (sel.type === 'bracing') {
+      const b = c.bays[0];
+      s.push(`<rect x="${X(b.x0) + 4}" y="${Y(g.L) - 14}" width="${X(b.x1) - X(b.x0) - 8}" height="28" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
     }
   }
 
@@ -3926,12 +4318,18 @@ function drawDiagrams(res, sel) {
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
   const vertical = el.kind === 'post' || el.kind === 'wallPost';
+  // у наружного столба без связей вдоль стены есть и вторая плоскость изгиба
+  const dy = el.kind === 'post' ? el.diagramY : null;
   const W = 720, H = 84, pad = { l: 46, r: 26, t: 48 }; // сверху оставлено место под панель масштаба
-  const vw = W + pad.l + pad.r, vh = 3 * (H + 34) + pad.t;
+  const vw = W + pad.l + pad.r, vh = (dy ? 4 : 3) * (H + 34) + pad.t;
   const xs = Array.from(r.x);
   const s = [`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Эпюры">`];
-  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? ' · по высоте от базы' : ' · на растянутом волокне'}`,
+  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? `${el.kind === 'post' ? ' · поперёк ряда' : ''} · по высоте от базы` : ' · на растянутом волокне'}`,
     xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
+  if (dy) {
+    s.push(chart('ЭПЮРА M · ВДОЛЬ РЯДА · консоль под ветром вдоль стены',
+      Array.from(dy.x), Array.from(dy.M), W, H, pad.l, pad.t + 3 * (H + 34), 'var(--u-bad)', 'кН·м', 1e-6, true));
+  }
   s.push(chart(vertical ? 'ПОПЕРЕЧНАЯ СИЛА' : 'ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
   s.push(chart(vertical ? 'ГОРИЗОНТАЛЬНОЕ СМЕЩЕНИЕ' : 'ПРОГИБ (нормативные нагрузки)',
     xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
@@ -3977,6 +4375,10 @@ function pickElement(res, sel) {
     const t = res.beamTies[sel.side ?? 'outer'];
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
       title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
+  }
+  if (sel.type === 'bracing') {
+    const c = res.cross;
+    return c && { ...c, kind: 'bracing', title: 'СВЯЗИ НАРУЖНОГО РЯДА · КРЕСТ' };
   }
   if (sel.type === 'splice') {
     const list = res.spliceJoints ?? [];
@@ -4282,6 +4684,56 @@ function nodeSplice(d, box, clip) {
   return s.join('');
 }
 
+/**
+ * Связь-крест: вид на пролёт ряда сбоку. Два столба, прогон поверху и две
+ * диагонали между точками крепления — с расчётными размерами, усилием и
+ * катетом шва. Стрелка вверху — сила вдоль ряда, которую прогон собирает
+ * в этот пролёт.
+ */
+function nodeCross(c, post, H, box, clip) {
+  const p = inner(box);
+  const span = c.span, postB = post.b;
+  const sc = Math.min(p.w / (span + postB + 260), (p.h - 20) / (H + 120));
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const base = p.y + p.h - 18;
+  const top = base - mm(H);
+  const xL = cx - mm(span / 2), xR = cx + mm(span / 2);
+  const col = uColor(c.U);
+  const s = [`<g clip-path="url(#${clip})">`];
+  s.push(`<line x1="${xL - mm(postB) - 14}" y1="${base}" x2="${xR + mm(postB) + 14}" y2="${base}" stroke="var(--ink)" stroke-width="1.6"/>`);
+  for (const x of [xL, xR]) {
+    s.push(`<rect x="${x - mm(postB / 2)}" y="${top}" width="${Math.max(3, mm(postB))}" height="${mm(H)}"
+      fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.2"/>`);
+  }
+  // прогон поверху
+  s.push(`<rect x="${xL - mm(postB) - 10}" y="${top - Math.max(5, mm(140))}" width="${xR - xL + 2 * mm(postB) + 20}" height="${Math.max(5, mm(140))}"
+    fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.1"/>`);
+  const zHi = top + mm(150), zLo = base - mm(150);
+  const a = xL + mm(postB / 2), b = xR - mm(postB / 2);
+  s.push(`<line x1="${a}" y1="${zHi}" x2="${b}" y2="${zLo}" stroke="${col}" stroke-width="2.4"/>`);
+  s.push(`<line x1="${a}" y1="${zLo}" x2="${b}" y2="${zHi}" stroke="${col}" stroke-width="2.4" stroke-dasharray="6 4"/>`);
+  for (const [x, y] of [[a, zHi], [b, zLo], [a, zLo], [b, zHi]]) {
+    s.push(`<circle cx="${x}" cy="${y}" r="2.4" fill="var(--u-warn)"/>`);
+  }
+  s.push(`<text x="${cx}" y="${(zHi + zLo) / 2 - 8}" font-size="9" text-anchor="middle" font-family="${mono}" fill="${col}">${esc(c.sec.label)} · l = ${Math.round(c.length)}</text>`);
+  s.push(`<text x="${cx}" y="${(zHi + zLo) / 2 + 16}" font-size="9" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">тянет ${f2(c.T / 1000)} кН, вторая выключена</text>`);
+  s.push(`<text x="${b + 6}" y="${zLo + 3}" font-size="9" font-family="${mono}" fill="var(--ink-2)">k = ${c.kf}</text>`);
+  s.push(dimH(xL, xR, base + 12, `${Math.round(span)}`));
+  s.push(dimV(zHi, zLo, xR + mm(postB / 2) + 16, `${Math.round(c.hd)}`));
+  // сила вдоль ряда и вертикали на столбы
+  const ay = top - Math.max(5, mm(140)) - 8;
+  s.push(`<g pointer-events="none">
+    <line x1="${xL - 30}" y1="${ay}" x2="${xL + 10}" y2="${ay}" stroke="var(--u-bad)" stroke-width="1.6"/>
+    <path d="M${xL + 4},${ay - 4} L${xL + 13},${ay} L${xL + 4},${ay + 4} z" fill="var(--u-bad)"/>
+    <text x="${xL + 18}" y="${ay + 3}" font-size="9.5" font-family="${mono}" fill="var(--u-bad)">F = ${f2(c.F / 1000)} кН вдоль ряда</text>
+    <text x="${xL - mm(postB / 2) - 4}" y="${base - 6}" font-size="9" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">±${f2(c.V / 1000)}</text>
+    <text x="${xR + mm(postB / 2) + 4}" y="${base - 6}" font-size="9" font-family="${mono}" fill="var(--ink-3)">±${f2(c.V / 1000)}</text>
+  </g>`);
+  s.push('</g>');
+  return s.join('');
+}
+
 function drawNodes(res, sel) {
   const m = res.model;
   const alpha = m.geom.alpha;
@@ -4302,7 +4754,7 @@ function drawNodes(res, sel) {
     .filter(Boolean);
 
   const W = 1080, pad = { l: 16, t: 44 };
-  const rowsN = 2 + (splices.length ? 1 : 0);
+  const rowsN = 2 + (splices.length || res.cross ? 1 : 0);
   const bw = (W - pad.l * 2 - 2 * 18) / 3, bh = 291;
   const H = pad.t + rowsN * bh + (rowsN - 1) * 18 + 16;
   const clips = [];
@@ -4362,6 +4814,20 @@ function drawNodes(res, sel) {
     });
   }
 
+  if (res.cross) {
+    const c = res.cross;
+    const y = pad.t + 2 * (bh + 18);
+    const box = { x: pad.l + splices.length * (bw + 18), y, w: bw, h: bh };
+    const id = 'clip-bracing';
+    const p = inner(box);
+    clips.push(`<clipPath id="${id}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}"/></clipPath>`);
+    s.push(`<g class="pickable" data-pick="bracing">`
+      + detailFrame(box, '5.1 СВЯЗЬ · КРЕСТ В РЯДУ',
+        `${c.count} × ${c.sec.label}, шов по контуру k = ${c.kf} мм`, c.U)
+      + nodeCross(c, res.posts[0].sec, res.posts[0].H, box, id)
+      + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`);
+  }
+
   s.splice(1, 0, `<defs>${clips.join('')}</defs>`);
   s.push('</svg>');
   return { svg: s.join(''), meta: null };
@@ -4380,10 +4846,17 @@ function drawNodes(res, sel) {
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'canopycraft.model.v2';
 
+/**
+ * Что пришлось перевести при чтении старой ссылки или сохранённого расчёта:
+ * поля, которых больше нет, не должны пропадать молча.
+ */
+let upgradeNotes = [];
+
 /** Расчёт из ссылки важнее сохранённого: по ссылке приходят делиться конкретным вариантом. */
 function initialModel() {
   const h = typeof location !== 'undefined' ? location.hash : '';
   const fromLink = h && h.startsWith('#p=') ? decodeModel(h.slice(3)) : null;
+  if (fromLink) upgradeNotes = decodeNotes(h.slice(3));
   return fromLink ?? load() ?? defaultModel();
 }
 
@@ -4400,7 +4873,12 @@ function load() {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return null;
     const m = JSON.parse(raw);
-    return m && m.geom && m.wallPosts && m.wallPurlin && m.prices ? m : null;
+    if (!(m && m.geom && m.wallPosts && m.wallPurlin && m.prices)) return null;
+    // сохранённый в прошлой версии расчёт: недостающие поля — из умолчаний,
+    // исчезнувшие — переводим и говорим об этом
+    const up = upgradeModel(m);
+    upgradeNotes = up.notes;
+    return up.model;
   } catch { return null; }
 }
 function save() {
@@ -4433,6 +4911,9 @@ function shareUrl() {
 
 const timberOpts = () => SECTIONS.filter((s) => s.material === 'timber');
 const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
+/** Диагональ креста — квадратная труба небольшого сечения. */
+const braceOpts = () => SECTIONS.filter((s) => s.material === 'steel' && s.h === s.b && s.h <= 80);
+const kN = (v) => f2(v / 1000);
 const anyOpts = () => SECTIONS;
 
 /**
@@ -4474,7 +4955,7 @@ const CONTROLS = [
   { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
   { k: 'postBase.id', label: 'База столба', type: 'select',
     options: () => POST_BASES.map((b) => ({ id: b.id, label: b.label })),
-    note: 'Расчёт столба при μ = 2 или 0,7 предполагает защемление внизу — значит, база обязана воспринять момент. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
+    note: 'Пока вдоль стены связей нет, столб — консоль, защемлённая внизу: база обязана воспринять момент от ветра. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
   { k: 'postBase.footing', label: 'Сторона блока фундамента', type: 'range', min: 300, max: 1200, step: 50, unit: 'мм',
     actions: [['подобрать сторону', (m) => {
       const r = analyse(m);
@@ -4498,16 +4979,31 @@ const CONTROLS = [
         : `Глубина ${m.postBase.depth} мм — блок держит отрыв${byFrost ? ' и ниже промерзания' : ''}`;
     }]],
     note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Если задана глубина промерзания, подошва для пучинистого грунта должна быть не выше неё.' },
-  { k: 'posts.muX', label: 'μ поперёк ряда (к дому)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
-      { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
-      { id: '1', label: '1,0 — верх удержан связями от смещения' },
-      { id: '0.7', label: '0,7 — верх удержан + низ защемлён' }],
-    note: 'μ — во сколько раз расчётная длина больше высоты столба: l_ef = μ·H. От неё гибкость λ = l_ef/i, а от λ — несущая способность.' },
-  { k: 'posts.muY', label: 'μ вдоль ряда (вдоль стены)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
-      { id: '2', label: '2,0 — верх свободен, ничем не удержан' },
-      { id: '1', label: '1,0 — верх удержан связями от смещения' },
-      { id: '0.7', label: '0,7 — верх удержан + низ защемлён' }],
-    note: 'Связь — это то, что не даёт верху столба уехать вбок: раскос, крест между столбами, жёсткая на сдвиг кровля. Подкос от столба к прогону делает узел жёстким, но раму не держит — права на 1,0 он не даёт.' },
+  { k: 'bracing.along', label: 'Что держит верх ряда вдоль стены', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', options: () => [
+      { id: 'none', label: 'ничего — столбы консоли, μ = 2' },
+      { id: 'cross', label: 'крест в крайнем пролёте — μ = 1' }],
+    live: (r) => {
+      if (!r) return '';
+      if (!r.cross) {
+        return r.model.bracing?.along === 'cross'
+          ? 'Крест не поставить: в ряду нужен хотя бы один пролёт'
+          : `μ вдоль ряда 2,0 — верх свободен, ветер вдоль стены ${kN(r.thrust.alongOuter)} кН идёт в консоли столбов. Поперёк ряда верх держат стропила: μ = 1`;
+      }
+      const c = r.cross;
+      return `μ = 1 в обеих плоскостях. Крест держит ${kN(c.F)} кН: ветер ${kN(c.wind / c.bays.length)} + условная сила столбов ${kN(c.qfic / c.bays.length)} · U ${f2(c.U)}`;
+    },
+    note: 'μ не выбирается, а следует из того, что держит верх. Поперёк ряда это стропила — распорки до стены; их крепление и обвязка у стены на это усилие проверяются. Вдоль стены стропила на шарнирах держать не могут: без креста столб — консоль, и сечение определяет гибкость. Подкос от столба к прогону связью не является.' },
+  { k: 'bracing.bays', label: 'Крест в пролётах', type: 'select', numeric: true, options: () => [
+      { id: '1', label: 'в одном крайнем' },
+      { id: '2', label: 'в обоих крайних — усилие делится пополам' }],
+    live: (r) => (r?.cross
+      ? `пролёт ${Math.round(r.cross.span)} мм, диагонали ${r.cross.count} × ${Math.round(r.cross.length)} мм; столбам пролёта +${kN(r.cross.V)} кН в сжатие и ${kN(r.cross.Vup)} в отрыв`
+      : 'связей нет — не используется') },
+  { k: 'bracing.sectionId', label: 'Сечение диагонали креста', type: 'select', options: braceOpts, pick: 'bracing',
+    live: (r) => (r?.cross
+      ? `растяжение ${kN(r.cross.T)} кН · гибкость ${Math.round(r.cross.lambda)} из 400 · шов k = ${r.cross.kf} мм · U ${f2(r.cross.U)}${r.cross.U > 1 ? ` — не проходит: ${r.cross.worst.name.toLowerCase()}` : ''}`
+      : 'связей нет — не используется'),
+    note: 'Диагонали работают на растяжение по очереди и привариваются к столбам швом по контуру торца. Катет не меньше табличного по толщине столба и не больше 1,2 толщины диагонали: стенку 2 мм к столбу 3 мм не приварить.' },
 
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
@@ -4515,16 +5011,8 @@ const CONTROLS = [
     options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
     note: 'К деревянной обвязке не приварить: если выбрана сварка, расчёт всё равно считает болтовой узел и пишет об этом.' },
   { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
-  { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts' },
-  { k: 'wallPosts.muX', label: 'μ поперёк ряда (от стены)', type: 'select', numeric: true, options: () => [
-      { id: '1', label: '1,0 — раскреплён стеной' },
-      { id: '0.7', label: '0,7 — раскреплён + защемление внизу' },
-      { id: '2', label: '2,0 — крепление к стене не учитывать' }] },
-  { k: 'wallPosts.muY', label: 'μ вдоль ряда (вдоль стены)', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', numeric: true, options: () => [
-      { id: '1', label: '1,0 — раскреплён стеной' },
-      { id: '0.7', label: '0,7 — раскреплён + защемление внизу' },
-      { id: '2', label: '2,0 — крепление к стене не учитывать' }],
-    note: 'Столб притянут к стене шпильками в нескольких точках по высоте — уехать вбок он не может ни в одной плоскости, поэтому здесь 1,0 законно.' },
+  { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts',
+    note: 'Столб притянут к стене шпильками в нескольких точках по высоте — уехать вбок он не может ни в одной плоскости, поэтому μ = 1. Шпильки на это проверяются.' },
   { k: 'wallPosts.boltCount', label: 'Шпилек на столб', type: 'range', min: 2, max: 6, step: 1, unit: 'шт' },
   { k: 'wallPosts.boltDiameter', label: 'Диаметр шпильки', type: 'select', numeric: true, options: () => [
       { id: '12', label: 'М12' }, { id: '16', label: 'М16' }, { id: '20', label: 'М20' }, { id: '24', label: 'М24' }] },
@@ -4655,6 +5143,13 @@ function buildParams() {
       const opts = c.options().map((o) => `<option value="${o.id}">${o.label}</option>`).join('');
       wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)}${c.pick ? ` <button class="btn" data-pick-el="${c.pick}" style="padding:0 6px;font-size:11px">подобрать</button>` : ''}</label><select id="${id}">${opts}</select>`;
     }
+    if (c.live) {
+      // живая подсказка: что эта настройка даёт в расчёте прямо сейчас
+      const n = document.createElement('small');
+      n.className = 'note live';
+      n.setAttribute('data-live', id);
+      wrap.appendChild(n);
+    }
     if (c.note) {
       const n = document.createElement('small');
       n.className = 'note';
@@ -4715,6 +5210,8 @@ function syncParams() {
     const v = readVirtual(c.k);
     if (c.type === 'check') el.checked = !!v;
     else el.value = String(v);
+    const live = c.live && document.querySelector(`[data-live="${id}"]`);
+    if (live) live.textContent = c.live(state.result);
     const b = document.querySelector(`[data-val="${id}"]`);
     if (b) {
       let extra = '';
@@ -4777,10 +5274,19 @@ function renderInspector(res) {
     kv.push(['Реакция на прогон', `${f2(el.reactions.purlin / 1000)} кН`]);
   } else if (el.kind === 'post' || el.kind === 'wallPost') {
     kv.push(['N сжатие', `${f2(el.N / 1000)} кН`]);
-    kv.push(['M', `${f2(el.M / 1e6)} кН·м`]);
+    kv.push([el.bolts ? 'M' : 'M поперёк ряда', `${f2(el.M / 1e6)} кН·м`]);
+    if (el.My) kv.push(['M вдоль ряда', `${f2(el.My / 1e6)} кН·м — ветер вдоль стены ${kN(el.Hy)} кН на консоль`]);
     kv.push(['Отрыв', `${f2(Math.max(0, el.Nup) / 1000)} кН`]);
-    kv.push(['Расчётная длина поперёк ряда', `${Math.round(el.lefX)} мм`]);
-    kv.push(['Расчётная длина вдоль ряда', `${Math.round(el.lefY)} мм`]);
+    const held = el.bolts ? 'стена' : 'стропила';
+    kv.push(['Поперёк ряда', `μ = ${f2(el.muX)} · верх держит ${held} · l_ef ${Math.round(el.lefX)} мм`]);
+    kv.push(['Вдоль ряда', el.muY > 1
+      ? `μ = ${f2(el.muY)} · верх свободен · l_ef ${Math.round(el.lefY)} мм`
+      : `μ = ${f2(el.muY)} · верх держит ${el.bolts ? 'стена' : 'крест'} · l_ef ${Math.round(el.lefY)} мм`]);
+    if (!el.bolts) {
+      kv.push(['Отдаёт стропилам', `${kN(el.holdX)} кН: ветер на прогон ${kN(el.Hwind)} + условная сила ${kN(el.QficX)}`]);
+      if (el.QficY) kv.push(['Отдаёт кресту', `${kN(el.holdY)} кН, условная сила ${kN(el.QficY)}`]);
+      if (el.Vcross) kv.push(['От креста в столб', `${kN(el.Vcross)} кН в сжатие, ${kN(el.VcrossUp)} в отрыв — от ветра`]);
+    }
     if (el.bolts) {
       kv.push(['Горизонт. распор на столб', `${f2(el.Hpost / 1000)} кН`]);
       kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
@@ -4790,7 +5296,8 @@ function renderInspector(res) {
     }
   } else if (el.kind === 'tie') {
     kv.push(['Отрыв ветром', `${f2(el.uplift / 1000)} кН`]);
-    if (el.along > 0) kv.push(['Скатная составляющая', `${f2(el.along / 1000)} кН`]);
+    if (el.slope > 0) kv.push(['Скатная составляющая', `${f2(el.slope / 1000)} кН`]);
+    if (el.hold > 0) kv.push(['Распор через стропило', `${kN(el.hold)} кН — ${el.side === 'wall' ? 'ветер на кровлю и верх наружного ряда' : 'верх наружного ряда'}`]);
     kv.push(['На узел', `${f2(el.force / 1000)} кН`]);
     kv.push(['Крепёж', `${el.need} × ${el.fastener.short}`]);
     kv.push(['Несущая одного', `${f2(el.T / 1000)} кН · ${el.governs}`]);
@@ -4814,6 +5321,14 @@ function renderInspector(res) {
       if (el.washer) kv.push(['Шайба под гайку', `${el.washer}×${el.washer} мм`]);
     }
     kv.push(['Опора', `${el.post.label} · прогон ${el.beam.label}`]);
+  } else if (el.kind === 'bracing') {
+    kv.push(['Где', `${el.bays.length === 2 ? 'оба крайних пролёта' : 'крайний пролёт'} · пролёт ${Math.round(el.span)} мм`]);
+    kv.push(['Диагонали', `${el.count} × ${el.sec.label}, длина ${Math.round(el.length)} мм`]);
+    kv.push(['Держит вдоль ряда', `${kN(el.F)} кН = ветер ${kN(el.wind / el.bays.length)} + условная сила столбов ${kN(el.qfic / el.bays.length)}`]);
+    kv.push(['Растяжение диагонали', `${kN(el.T)} кН`]);
+    kv.push(['В столбы пролёта', `${kN(el.V)} кН в сжатие, ${kN(el.Vup)} в отрыв`]);
+    kv.push(['Гибкость', `${Math.round(el.lambda)} из 400`]);
+    kv.push(['Шов', `${Math.round(el.weldLength)} мм по контуру торца, катет ${el.kf} мм`]);
   } else if (el.kind === 'splice') {
     kv.push(['Решение', el.solution]);
     kv.push(['Сечение стыка', `${Math.round(el.x)} мм от левого края`]);
@@ -4858,6 +5373,9 @@ function renderInspector(res) {
         : `${Math.round(el.needMass - el.mass)} кг — глубина ${el.needDepth} мм при этой стороне или сторона ${el.needSide} мм при этой глубине`]);
   } else if (el.res?.uls) {
     kv.push(['M max', `${f2(Math.abs(el.res.uls.maxM) / 1e6)} кН·м`]);
+    if (el.kind === 'wallPurlin' && el.lateralH) {
+      kv.push(['Распор от стропил', `${kN(el.lateralH)} кН — изгиб из плоскости между столбами`]);
+    }
     kv.push(['Q max', `${f2(Math.abs(el.res.uls.maxV) / 1000)} кН`]);
     const worstSpan = el.spans?.reduce((a, b) => (a.f > b.f ? a : b), { f: 0, limitLength: 1 });
     if (worstSpan) kv.push(['Прогиб', `${f2(worstSpan.f)} мм`]);
@@ -4878,6 +5396,7 @@ const SEL_FOR = {
   beamTies: { type: 'beamTie', side: 'outer' },
   bases: { type: 'base', side: 'outer' },
   spliceJoints: { type: 'splice' },
+  bracing: { type: 'bracing' },
 };
 const ROW_OF = { rafters: ['rafters', 'rafter'], posts: ['posts', 'post'], wallPosts: ['wallPosts', 'wallPost'] };
 function selectRow(res, key) {
@@ -5184,7 +5703,7 @@ function renderSearch(r, before) {
       <td class="n">${f2(o.maxU)}</td>
       <td class="n">${Math.round(o.mass)} кг</td>
       <td>${o.parts.rafters}</td><td>${o.parts.battens}</td>
-      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td>
+      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td><td>${o.parts.bracing}</td>
       <td>${o.parts.wallPurlin}</td><td>${o.parts.wallPosts}</td>
       <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
   }).join('');
@@ -5192,20 +5711,22 @@ function renderSearch(r, before) {
   host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с${SEARCH_HELP}</div>
     <div class="tbl"><table>
       <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
-        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
+        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Связи</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
       <tr><td class="n"><b>${money(before)} ${cur.costs.currency}</b></td><td class="n">текущий</td>
         <td class="n">${f2(state.result.maxU)}</td><td class="n">${Math.round(cur.weights.total)} кг</td>
         <td>${o2(state.model.rafters.sectionId)} × ${state.model.rafters.xs.length}</td>
         <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
         <td>${o2(state.model.purlin.sectionId)}</td>
         <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
+        <td>${state.model.bracing?.along === 'cross' ? `крест ${o2(state.model.bracing.sectionId)}` : 'без связей'}</td>
         <td>${o2(state.model.wallPurlin.sectionId)}</td>
         <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
       ${rows}
     </table></div>
     <div class="row2" style="gap:14px;margin-top:10px">
       <div class="hint" style="border:0;padding:0">
-        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки.
+        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки,
+        а наружный ряд — в двух схемах: без связей и с крестом в крайнем пролёте.
         Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
       </div>
       <div class="hint" style="border:0;padding:0">
@@ -5520,7 +6041,11 @@ function buildReport(res) {
     <table>
       <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
       <tr><td>Крепление стропил</td><td>${res.ties.outer.need} × ${res.ties.outer.fastener.short} у прогона, ${res.ties.wall.need} × ${res.ties.wall.fastener.short} у обвязки; шаги S1 ${Math.round(res.ties.outer.spacing.s1)}, S2 ${Math.round(res.ties.outer.spacing.s2)}, S3 ${Math.round(res.ties.outer.spacing.s3)} мм</td></tr>
-      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${m.posts.muX}/${m.posts.muY}, стеновых ${wp.muX}/${wp.muY} (поперёк/вдоль ряда)</td></tr>
+      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${f2(worstPost.muX)}/${f2(worstPost.muY)}, стеновых ${f2(worstWallPost.muX)}/${f2(worstWallPost.muY)} (поперёк/вдоль ряда)</td></tr>
+      <tr><td>Раскрепление наружного ряда</td><td>поперёк ряда верх держат стропила: сила ${kN(res.bracing.holdX)} кН уходит по ним к стене и проверяется в креплении стропил и в обвязке;
+        вдоль стены ${res.cross
+          ? `крест из диагоналей ${res.cross.sec.label} в ${res.cross.bays.length === 2 ? 'обоих крайних пролётах' : 'крайнем пролёте'}, держит ${kN(res.cross.F)} кН (ветер плюс условная поперечная сила столбов по формуле (18) СП 16)`
+          : 'связей нет — столбы консоли, μ = 2, ветер вдоль стены идёт в них'}</td></tr>
       <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
@@ -5551,9 +6076,10 @@ function buildReport(res) {
     ${checkRows(`Обвязка у стены ${res.wallPurlin.sec.label}`, res.wallPurlin.checks)}
     ${checkRows(`Наружный столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
     ${checkRows(`Стеновой столб ${worstWallPost.sec.label} и его крепление (самый нагруженный)`, worstWallPost.checks)}
+    ${res.cross ? checkRows(`Связи наружного ряда: крест ${res.cross.sec.label}`, res.cross.checks) : ''}
     <h2>4. Узлы и фундамент (оценочно)</h2>
     <table>
-      <tr><td>Горизонтальный распор на стеновой ряд</td><td>${f2(res.thrust.total / 1000)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
+      <tr><td>Горизонтальный распор на стеновой ряд</td><td>${kN(res.bracing.toWall)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)} + верх наружного ряда ${kN(res.bracing.holdX)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
       <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
       <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
       <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
@@ -5593,9 +6119,8 @@ function buildReport(res) {
     <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
     ${spliceReportNote(b)}
     <h2>8. Ограничения</h2>
-    <p>Расчёт не охватывает: расчёт основания по грунту, ветровые связи, огнестойкость,
-    температурные воздействия, стыки линейных элементов по длине. Сварные швы считаются только
-    в узле «прогон — столб». Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
+    <p>Расчёт не охватывает: расчёт основания по грунту, касательные силы морозного пучения,
+    диагонали в плоскости кровли, огнестойкость, температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
     <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016: формула (Б.5),
     перечисление «в» для m₂, перечисление «г» с формулой (Б.6) для длины зоны, перечисление «д»
@@ -5608,9 +6133,10 @@ function buildReport(res) {
     <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
     (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
     на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
-    между шпильками учтена коэффициентом 1,5 на верхнюю. Принято также, что плоскость кровли
-    (обрешётка и крепление стропил к обвязке) передаёт горизонтальный распор на раскреплённый стеновой ряд;
-    иначе наружные столбы нужно раскреплять раскосами.</p>
+    между шпильками учтена коэффициентом 1,5 на верхнюю. Поперёк ряда горизонтальная сила идёт
+    по стропилам к стене, и это проверено: крепление стропил, изгиб обвязки из плоскости, стеновой ряд.
+    Вдоль стены стропила держать не могут, и кровля диском не считается: без креста в ряду наружные
+    столбы работают консолями.</p>
     <p>Результат — инженерная оценка, а не проект, прошедший экспертизу.</p>`;
 }
 
@@ -5849,7 +6375,7 @@ window.addEventListener('hashchange', () => {
   if (!m) return;
   state.model = m;
   resetCostBaseline();
-  render('Загружен расчёт из ссылки');
+  render(['Загружен расчёт из ссылки.', ...decodeNotes(h.slice(3))].join(' '));
 });
 
 function selectWorst(res) {
@@ -5858,7 +6384,7 @@ function selectWorst(res) {
 
 buildParams();
 selectWorst(analyse(state.model));
-render();
+render(upgradeNotes.join(' ') || undefined);
 
 })();
 </script>

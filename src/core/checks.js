@@ -128,6 +128,67 @@ export function steelBeamColumn(N, M, props, mat, lef, axis = 'x') {
   return c;
 }
 
+/**
+ * Сжатие с изгибом в двух плоскостях — у наружного столба, когда вдоль стены
+ * связей нет: поперёк ряда момент от эксцентриситета опирания, вдоль — от
+ * ветра на консоль. Моменты складываются линейно, φ берётся по худшей
+ * плоскости — это верхняя оценка по отношению к формулам СП 16 для
+ * двухосного изгиба, в запас.
+ */
+export function steelBeamColumn2(N, Mx, My, props, mat, lefX, lefY) {
+  const Rd = mat.Ry * mat.gammaC;
+  const plane = (lef, i, I) => {
+    const { phi } = phiBuckling(lef / i, mat.Ry, mat.E);
+    const Ncr = (Math.PI * Math.PI * mat.E * I) / (lef * lef);
+    return { phi, amp: 1 / Math.max(0.2, 1 - Math.abs(N) / Ncr) };
+  };
+  const x = plane(lefX, props.ix, props.Ix);
+  const y = plane(lefY, props.iy, props.Iy);
+  const phi = Math.min(x.phi, y.phi);
+  const value = Math.abs(N) / (phi * props.A * Rd)
+    + (Math.abs(Mx) * x.amp) / (props.Wx * Rd) + (Math.abs(My) * y.amp) / (props.Wy * Rd);
+  const c = chk('Сжатие с изгибом', value, 1.0, '',
+    'N/(φ·A·R_y·γ_c) + M_x·η_x/(W_x·R_y·γ_c) + M_y·η_y/(W_y·R_y·γ_c) ≤ 1',
+    `изгиб в двух плоскостях, φ = ${phi.toFixed(3)} по худшей, η_x = ${x.amp.toFixed(2)}, η_y = ${y.amp.toFixed(2)}`);
+  c.phi = phi;
+  return c;
+}
+
+/**
+ * Условная поперечная сила в сжатом стержне, Н — формула (18) СП 16:
+ *   Q_fic = 7,15·10⁻⁶·(2330 − E/R_y)·N/φ.
+ * На неё считают связи, которые уменьшают расчётную длину сжатых стержней
+ * (правило СНиП II-23-81* п. 5.8*, перенесённое в СП 16): чтобы удержать
+ * столб от выпучивания, связь должна что-то держать, даже когда ветра нет.
+ * φ — в той плоскости, которую связь раскрепляет.
+ */
+export function qFic(N, phi, mat) {
+  return 7.15e-6 * (2330 - mat.E / mat.Ry) * Math.max(0, N) / Math.max(1e-6, phi);
+}
+
+/** Растяжение диагонали связи: N ≤ A·R_y·γ_c. */
+export function braceTension(N, A, mat, note) {
+  return chk('Растяжение связи', Math.abs(N), A * mat.Ry * mat.gammaC, 'Н', 'N ≤ A·R_y·γ_c', note);
+}
+
+/**
+ * Предельная гибкость растянутой связи: 400 (СП 16, табл. 33). Слишком
+ * тонкая диагональ провисает и болтается — держать она начинает, только
+ * когда верх уже уехал.
+ */
+export function braceSlenderness(lambda, note) {
+  return chk('Гибкость связи', lambda, 400, '', 'λ ≤ 400 для растянутых связей — табл. 33 СП 16', note);
+}
+
+/**
+ * Изгиб балки из своей плоскости горизонтальными силами — у обвязки у стены
+ * это распор, который приносят стропила: через них держится верх наружного
+ * ряда и ветер на кровлю.
+ */
+export function lateralBending(M, W, R, note) {
+  return chk('Изгиб из плоскости от распора', Math.abs(M) / W, R, 'МПа', 'σ = M_y/W_y ≤ R', note);
+}
+
 /** Предельная гибкость сжатого элемента: λ_u = 180 − 60α. */
 export function steelSlenderness(lambda, alpha) {
   const a = Math.min(1, Math.max(0.5, alpha));

@@ -60,8 +60,11 @@ test('узел считается от отрыва, а число крепеж�
   for (const r of [calm, windy]) {
     assert.ok(r.ties.outer.force > 0 && r.ties.wall.force > 0);
     // скатная составляющая доходит только до нижней опоры
-    assert.ok(r.ties.outer.along > 0);
-    assert.equal(r.ties.wall.along, 0);
+    assert.ok(r.ties.outer.slope > 0);
+    assert.equal(r.ties.wall.slope, 0);
+    // а горизонтальную силу, которой стропила держат верх наружного ряда
+    // и ветер на кровлю, несут оба узла
+    assert.ok(r.ties.outer.hold > 0 && r.ties.wall.hold > r.ties.outer.hold);
     assert.ok(r.ties.outer.need >= 2 && r.ties.wall.need >= 2, 'минимум два крепежа на узел');
   }
   assert.ok(windy.ties.outer.force > calm.ties.outer.force * 1.8, 'ветер V поднимает сильнее');
@@ -195,12 +198,14 @@ test('узлы прогонов попадают в сводку и специф
 
 test('база держит момент, и разнос анкеров решает', () => {
   const m = defaultModel();
+  m.site.windRegion = 'V';
   // блок заведомо тяжёлый, чтобы вес его не определял: смотрим только анкеры
-  const heavy = { footing: 900, depth: 1500 };
+  const heavy = { footing: 1200, depth: 3000 };
   const two = analyse({ ...m, postBase: { id: 'plate2m12', ...heavy } }).bases.outer;
   const four = analyse({ ...m, postBase: { id: 'plate4m12', ...heavy } }).bases.outer;
 
-  // момент в базе — это консольный столб: эксцентриситет плюс ветер на плече высоты
+  // момент в базе: вдоль стены без связей столб — консоль под ветром, поперёк
+  // ряда половина момента от эксцентриситета опирания
   assert.ok(two.M > 1e6, `${(two.M / 1e6).toFixed(2)} кН·м`);
   // два анкера с разносом 120 мм принимают весь момент парой сил
   const span2 = anchorSpan(postBase('plate2m12'));
@@ -239,7 +244,7 @@ test('забетонированный столб: вес блока проти�
   // при схеме с защемлением требуется заделка не менее десяти размеров сечения
   assert.equal(shallow.needEmbed, 10 * 100);
   const pinned = defaultModel();
-  pinned.posts.muX = 1; pinned.posts.muY = 1;
+  pinned.bracing.along = 'cross';
   pinned.postBase = { id: 'embed600', footing: 700, depth: 600 };
   const noFix = analyse(pinned).bases.outer;
   assert.equal(noFix.needsFixity, false);

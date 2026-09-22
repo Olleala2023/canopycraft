@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, spread } from '../src/core/model.js';
-import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads } from '../src/core/analysis.js';
+import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from '../src/core/analysis.js';
 import { ladder, section } from '../src/core/sections.js';
 import { searchByCost } from '../src/core/search.js';
 import { decodeModel, encodeModel } from '../src/core/share.js';
@@ -28,8 +28,11 @@ const U_OF = {
   battens: (r) => r.battens.U,
   purlin: (r) => r.purlin.U,
   wallPurlin: (r) => r.wallPurlin.U,
-  posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+  // при кресте к столбу должна привариваться диагональ — как и в подборе
+  posts: (r) => Math.max(...r.posts.map((x) => x.U),
+    r.cross?.checks.find((c) => c.name === 'Катет шва')?.U ?? 0),
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
+  bracing: (r) => r.cross?.U ?? 0,
 };
 
 test('узкие расчёты элемента совпадают с полным расчётом', () => {
@@ -85,6 +88,8 @@ test('подбор по стоимости не оставляет более д
       wallPurlin: ladderFor(m.wallPurlin.sectionId),
       posts: ladderFor(m.posts.sectionId, { square: true }),
       wallPosts: ladderFor(m.wallPosts.sectionId, { square: true }),
+      ...(m.bracing.along === 'cross'
+        ? { bracing: ladder('steel').filter((s) => s.h === s.b && s.h <= 80) } : {}),
     };
     for (const [key, list] of Object.entries(lists)) {
       const chosen = section(m[key].sectionId);
@@ -114,17 +119,44 @@ test('столбы у стены не тяжелее наружных при п�
   }
 });
 
-test('старая ссылка с одним μ раскладывается по двум плоскостям', () => {
-  // ссылка, выпущенная до разделения μ: {"posts":{"mu":1}}
-  const code = Buffer.from(JSON.stringify({ posts: { mu: 1 } }), 'utf8')
+test('старые ссылки с μ переводятся на схему связей и говорят об этом', async () => {
+  const { decodeNotes } = await import('../src/core/share.js');
+  const pack = (o) => Buffer.from(JSON.stringify(o), 'utf8')
     .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const m = decodeModel(code);
-  assert.equal(m.posts.muX, 1);
-  assert.equal(m.posts.muY, 1);
+  // самая старая: одно μ на обе плоскости
+  const oldest = pack({ posts: { mu: 1 } });
+  const m = decodeModel(oldest);
+  assert.equal(m.bracing.along, 'cross', 'μ = 1 значило «верх удержан связями»');
   assert.equal(m.posts.mu, undefined);
-  // а новые ссылки по-прежнему короткие и обратимые
+  assert.equal(m.posts.muY, undefined);
+  assert.equal(decodeNotes(oldest).length, 1);
+  // μ по плоскостям: вдоль ряда 2 — связей нет, и переводить нечего
+  const free = pack({ posts: { muX: 1, muY: 2 } });
+  assert.equal(decodeModel(free).bracing.along, 'none');
+  assert.equal(decodeNotes(free).length, 1, 'но про μ поперёк ряда сказать надо');
+  // новые ссылки по-прежнему короткие и обратимые
   const t = defaultModel();
-  t.posts.muX = 0.7;
-  assert.equal(decodeModel(encodeModel(t)).posts.muX, 0.7);
-  assert.equal(decodeModel(encodeModel(t)).posts.muY, defaultModel().posts.muY);
+  t.bracing.along = 'cross';
+  assert.equal(decodeModel(encodeModel(t)).bracing.along, 'cross');
+  assert.deepEqual(decodeNotes(encodeModel(t)), []);
+});
+
+test('подбор по цене сравнивает наружный ряд без связей и с крестом', async () => {
+  const r = await searchByCost(sample(), { target: 0.9, limit: 20, keep: 2 });
+  const schemes = new Set(r.options.map((o) => o.model.bracing.along));
+  assert.ok(schemes.has('none') && schemes.has('cross'), `в списке только ${[...schemes].join(', ')}`);
+  for (const o of r.options) {
+    const res = analyse(o.model);
+    if (o.model.bracing.along === 'cross') {
+      assert.ok(res.cross, 'у варианта с крестом крест посчитан');
+      assert.match(o.parts.bracing, /^крест /);
+      // с крестом столбы легче: гибкость вдоль ряда считается при μ = 1
+      assert.equal(res.posts[0].muY, 1);
+      assert.ok(billOfMaterials(res).items.some((i) => i.name === 'Связи наружного ряда'), 'связи в смете');
+    } else {
+      assert.equal(res.cross, null);
+      assert.equal(o.parts.bracing, 'без связей');
+    }
+    assert.ok(Math.abs(billOfMaterials(res).costs.total - o.cost) < 1e-6, 'цена варианта — цена его сметы');
+  }
 });

@@ -165,41 +165,116 @@ test('стеновой столб выгоднее наружного: он ра
   assert.ok(r.posts[1].lef > r.wallPosts[1].lef, 'расчётная длина наружного столба больше');
 });
 
-test('μ задаётся в двух плоскостях независимо', () => {
-  const m = defaultModel();
-  m.posts.muX = 1.0;   // поперёк ряда верх удержан кровлей
-  m.posts.muY = 2.0;   // вдоль стены связей нет
-  const p = analyse(m).posts[1];
-  assert.equal(Math.round(p.lefX), Math.round(p.H));
-  assert.equal(Math.round(p.lefY), Math.round(2 * p.H));
-  const x = p.checks.find((c) => c.name === 'Устойчивость поперёк ряда');
-  const y = p.checks.find((c) => c.name === 'Устойчивость вдоль ряда');
+test('μ следует из схемы связей, а не выбирается', () => {
+  // без связей: поперёк ряда верх держат стропила, вдоль стены — ничего
+  const free = analyse(defaultModel()).posts[1];
+  assert.equal(free.muX, 1);
+  assert.equal(free.muY, 2);
+  assert.equal(Math.round(free.lefX), Math.round(free.H));
+  assert.equal(Math.round(free.lefY), Math.round(2 * free.H));
+  const x = free.checks.find((c) => c.name === 'Устойчивость поперёк ряда');
+  const y = free.checks.find((c) => c.name === 'Устойчивость вдоль ряда');
   assert.ok(y.U > x.U, 'плоскость без связей должна быть загружена сильнее');
-
-  // гибкость ограничивается по худшей плоскости
-  const flex = p.checks.find((c) => c.name === 'Гибкость');
+  // гибкость ограничивается по худшей плоскости, и без связей она и правит
+  const flex = free.checks.find((c) => c.name === 'Гибкость');
   assert.ok(Math.abs(flex.value - y.lambda) < 1e-6, 'в проверку гибкости идёт худшая λ');
+  assert.equal(free.worst.name, 'Гибкость');
 
-  // раскрепление одной плоскости не может ухудшить столб ни по одной проверке
-  const both = defaultModel();
-  both.posts.muX = 2.0; both.posts.muY = 2.0;
-  const q = analyse(both).posts[1];
-  assert.ok(q.U >= p.U, 'раскрепление поперёк ряда не может ухудшить столб');
-  for (const c of p.checks) {
-    const was = q.checks.find((o) => o.name === c.name);
-    assert.ok(c.U <= was.U + 1e-9, `${c.name}: стало ${c.U.toFixed(2)} против ${was.U.toFixed(2)}`);
+  // крест в ряду даёт вдоль стены 1,0 — и столб заметно легчает
+  const m = defaultModel();
+  m.bracing.along = 'cross';
+  const braced = analyse(m).posts[1];
+  assert.equal(braced.muY, 1);
+  assert.ok(braced.U < free.U * 0.8, `${braced.U.toFixed(2)} против ${free.U.toFixed(2)}`);
+
+  // стеновой ряд держит стена
+  const w = analyse(defaultModel()).wallPosts[1];
+  assert.equal(w.muX, 1);
+  assert.equal(w.muY, 1);
+});
+
+test('без связей ветер вдоль стены идёт в консоли наружного ряда', () => {
+  const r = analyse(defaultModel());
+  const p = r.posts[1];
+  assert.ok(p.Hy > 0, 'наружный ряд получает долю ветра вдоль стены');
+  assert.ok(Math.abs(p.My - p.Hy * p.H) < 1e-6, 'консоль: момент у базы H·h');
+  assert.ok(p.diagramY && Math.abs(p.diagramY.M[0]) > Math.abs(p.diagramY.M.at(-1)), 'эпюра вдоль ряда растёт к базе');
+  const total = r.posts.reduce((a, q) => a + q.Hy, 0);
+  assert.ok(Math.abs(total - r.thrust.alongOuter) < 1e-6, 'вся доля наружного ряда распределена по столбам');
+  // сжатие с изгибом считается в двух плоскостях
+  const bc = p.checks.find((c) => c.name === 'Сжатие с изгибом');
+  assert.ok(bc.formula.includes('M_y'), bc.formula);
+
+  // с крестом верх удержан: момента вдоль ряда у столба нет, сила ушла в связь
+  const m = defaultModel();
+  m.bracing.along = 'cross';
+  const q = analyse(m).posts[1];
+  assert.equal(q.My, 0);
+  assert.equal(q.diagramY, null);
+});
+
+test('верх наружного ряда держат стропила: сила доходит до стены и проверяется', () => {
+  const r = analyse(defaultModel());
+  const holdX = r.posts.reduce((a, p) => a + p.holdX, 0);
+  assert.ok(holdX > 0);
+  // условная поперечная сила по формуле (18) СП 16: 7,15·10⁻⁶·(2330 − E/R_y)·N/φ
+  const p = r.posts[1];
+  const stabX = p.checks.find((c) => c.name === 'Устойчивость поперёк ряда');
+  const expect = 7.15e-6 * (2330 - p.mat.E / p.mat.Ry) * (p.N - p.Vcross) / stabX.phi;
+  assert.ok(Math.abs(p.QficX - expect) < 1e-6, `${p.QficX} против ${expect}`);
+  // стеновой ряд принимает и ветер на кровлю, и то, что держит наружный ряд
+  assert.ok(Math.abs(r.bracing.toWall - (r.thrust.total + holdX)) < 1e-6);
+  const perPost = r.wallPosts[1].Hpost;
+  assert.ok(Math.abs(perPost - r.bracing.toWall / r.wallPosts.length) < 1e-6);
+  // узлы крепления стропил и обвязка у стены это усилие видят
+  const nR = r.model.rafters.xs.length;
+  assert.ok(Math.abs(r.ties.outer.hold - holdX / nR) < 1e-6);
+  assert.ok(Math.abs(r.ties.wall.hold - r.bracing.toWall / nR) < 1e-6);
+  assert.ok(r.wallPurlin.checks.some((c) => c.name === 'Изгиб из плоскости от распора'));
+});
+
+test('крест: усилие в диагонали, добавка в столбы пролёта и строка в смете', () => {
+  const m = defaultModel();
+  m.bracing.along = 'cross';
+  const r = analyse(m);
+  const c = r.cross;
+  assert.ok(c, 'крест посчитан');
+  assert.equal(c.count, 2);
+  // держит весь ряд: долю ветра вдоль стены и условные силы всех столбов
+  const qfic = r.posts.reduce((a, p) => a + p.QficY, 0);
+  assert.ok(Math.abs(c.F - (r.thrust.alongOuter + qfic)) < 1e-6);
+  // растяжение диагонали F·l/s, вертикаль на столбы F·h/s
+  assert.ok(Math.abs(c.T - (c.F * c.length) / c.span) < 1e-6);
+  assert.ok(Math.abs(c.V - (c.F * c.hd) / c.span) < 1e-6);
+  // столбы пролёта со связью получают вертикаль и в сжатие, и в отрыв;
+  // в отрыв — только ветровая часть: условная сила — от сжатия под снегом
+  assert.ok(Math.abs(r.posts[0].Vcross - c.V) < 1e-6);
+  assert.ok(Math.abs(r.posts[1].Vcross - c.V) < 1e-6);
+  assert.equal(r.posts[2].Vcross, 0);
+  assert.ok(Math.abs(r.posts[0].VcrossUp - (c.Vup)) < 1e-6);
+  assert.ok(Math.abs(c.Vup - (r.thrust.alongOuter * c.hd) / c.span) < 1e-6);
+  assert.ok(c.Vup < c.V);
+  for (const name of ['Растяжение связи', 'Гибкость связи', 'Шов по металлу шва', 'Катет шва']) {
+    assert.ok(c.checks.some((k) => k.name === name), name);
   }
-  // но здесь правит гибкость вдоль стены, и пока там связей нет, столб не легчает
-  assert.equal(p.worst.name, 'Гибкость');
-  const bcBefore = q.checks.find((c) => c.name === 'Сжатие с изгибом').U;
-  const bcAfter = p.checks.find((c) => c.name === 'Сжатие с изгибом').U;
-  assert.ok(bcAfter < bcBefore, 'сжатие с изгибом считается поперёк ряда и должно улучшиться');
+  assert.ok(r.summary.some((s) => s.key === 'bracing'), 'строка «Связи ряда» в сводке');
+  const bom = billOfMaterials(r);
+  const item = bom.items.find((i) => i.name === 'Связи наружного ряда');
+  assert.ok(item && item.count === 2 && item.cost > 0);
 
-  // связи в обеих плоскостях снимают ограничение по гибкости
-  const braced = defaultModel();
-  braced.posts.muX = 1.0; braced.posts.muY = 1.0;
-  const z = analyse(braced).posts[1];
-  assert.ok(z.U < p.U * 0.8, `${z.U.toFixed(2)} против ${p.U.toFixed(2)}`);
+  // в обоих крайних пролётах — четыре диагонали, и каждая держит половину
+  const two = defaultModel();
+  two.bracing = { ...two.bracing, along: 'cross', bays: 2 };
+  const r2 = analyse(two);
+  assert.equal(r2.cross.count, 4);
+  assert.ok(Math.abs(r2.cross.F - c.F / 2) < 1e-6);
+
+  // тонкую диагональ к столбу не приварить: катет по табл. 38 больше 1,2·t
+  const thin = defaultModel();
+  thin.bracing = { ...thin.bracing, along: 'cross', sectionId: 's40x40x2' };
+  const t = analyse(thin).cross;
+  assert.equal(t.worst.name, 'Катет шва');
+  assert.ok(t.U > 1);
 });
 
 test('спецификация считает хлысты стандартной длины', () => {
@@ -296,9 +371,10 @@ test('у столбов есть эпюры по высоте, а не одно 
     assert.ok(p.diagram.x[p.diagram.x.length - 1] > 1000, 'ось — высота столба');
     assert.ok(Math.abs(p.M) > 0, 'расчётный момент взят из эпюры');
   }
-  // наружный столб — консоль: момент максимален у базы и падает к верху
+  // наружный столб поперёк ряда: верх удержан стропилами, низ — шарнир,
+  // момент от эксцентриситета опирания наибольший вверху и падает к базе
   const outer = r.posts[1].diagram;
-  assert.ok(Math.abs(outer.M[0]) > Math.abs(outer.M[outer.M.length - 1]), 'момент консоли растёт к базе');
+  assert.ok(Math.abs(outer.M.at(-1)) > Math.abs(outer.M[0]), 'момент наибольший у оголовка');
 
   // стеновой столб: сумма реакций базы и шпилек равна приложенному распору
   const w = r.wallPosts[2];

@@ -120,6 +120,7 @@ g.draggable{cursor:ew-resize}
 .kv{display:flex; justify-content:space-between; gap:10px; font-size:12px; border-bottom:1px dotted var(--rule); padding:2px 0}
 .kv span:last-child{font-family:"IBM Plex Mono",monospace; text-align:right}
 .kv span{overflow-wrap:anywhere; min-width:0}
+.kv span:first-child{flex-shrink:0; max-width:45%; overflow-wrap:normal}
 
 /* ── сводка ── */
 /* ── предупреждения над сводкой: то, чего расчёт не видит ── */
