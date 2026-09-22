@@ -28,7 +28,7 @@ export const U_OF = {
   // по правилам катета не приварить ничего, и такой столб не годится
   posts: (r) => Math.max(...r.posts.map((x) => x.U), crossWeldFit(r)),
   // связей нет — подбирать нечего, годится любое сечение
-  bracing: (r) => r.cross?.U ?? 0,
+  bracing: (r) => r.brace?.U ?? 0,
 };
 
 /**
@@ -154,7 +154,7 @@ export function pickAll(model, target = 0.9) {
   let m = model;
   const log = [];
   for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts', 'bracing']) {
-    if (key === 'bracing' && m.bracing?.along !== 'cross') continue;
+    if (key === 'bracing' && !['cross', 'roof'].includes(m.bracing?.along)) continue;
     const r = pickSection(m, key, target);
     if (r) {
       m = PATH[key](m, r.id);

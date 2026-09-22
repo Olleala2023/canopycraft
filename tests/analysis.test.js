@@ -277,6 +277,44 @@ test('крест: усилие в диагонали, добавка в стол
   assert.ok(t.U > 1);
 });
 
+test('диагонали в плоскости кровли: ферма в крайней ячейке', () => {
+  const m = defaultModel();
+  m.bracing = { ...m.bracing, along: 'roof', roofBays: 2 };
+  const r = analyse(m);
+  const b = r.roofBrace;
+  assert.ok(b && r.brace === b && r.cross === null);
+  // μ = 1 вдоль стены, а вертикали от связи столбы не получают
+  assert.equal(r.posts[1].muY, 1);
+  assert.ok(r.posts.every((p) => p.Vcross === 0 && p.VcrossUp === 0));
+  // ячейка — два шага стропил, длина — скат между опорами
+  const xs = r.rafters.map((x) => x.x);
+  assert.equal(b.w, xs[2] - xs[0]);
+  assert.equal(b.Lr, r.rafters[0].xSup);
+  // держит ветер вдоль стены и условные силы столбов
+  const qfic = r.posts.reduce((a, p) => a + p.QficY, 0);
+  assert.ok(Math.abs(b.F - (r.thrust.alongOuter + qfic)) < 1e-6);
+  // узкая ячейка: диагональ тянет F·l/w, стропилу-стойке — F·L_ск/w
+  assert.ok(Math.abs(b.T - (b.F * Math.hypot(b.w, b.Lr)) / b.w) < 1e-6);
+  assert.ok(Math.abs(b.Nchord - (b.F * b.Lr) / b.w) < 1e-6);
+  assert.ok(b.T > 3 * b.F, 'в узкой ячейке диагональ тянет в разы больше силы');
+  // крайние стропила ячейки проверены с добавкой от фермы
+  assert.equal(b.checks.filter((c) => /стойка связевой фермы/.test(c.name)).length, 2);
+  // сталь — шов, дерево — болты: прогон стальной, обвязка у стены — сосна
+  assert.equal(b.ends[0].welded, true);
+  assert.equal(b.ends[1].welded, false);
+  assert.ok(b.ends[1].n >= 1 && b.ends[1].n <= 4);
+  assert.ok(r.summary.some((s) => s.key === 'bracing' && s.label === 'Связи по кровле'));
+  // шпильки у стены получают и условные силы наружного ряда
+  const none = analyse(defaultModel());
+  assert.ok(r.wallPosts[1].bolts.Vbolt >= none.wallPosts[1].bolts.Vbolt);
+
+  // ячейка в один шаг — силы в разы больше, и болтов в обвязке не хватает
+  const narrow = analyse({ ...m, bracing: { ...m.bracing, roofBays: 1 } }).roofBrace;
+  assert.ok(narrow.T > b.T * 1.8);
+  assert.ok(narrow.U > 1, `U = ${narrow.U.toFixed(2)}`);
+  assert.match(narrow.worst.name, /Болты в древесине/);
+});
+
 test('спецификация считает хлысты стандартной длины', () => {
   const r = analyse(defaultModel());
   const b = billOfMaterials(r);

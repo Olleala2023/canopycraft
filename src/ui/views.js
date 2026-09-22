@@ -101,6 +101,23 @@ export function drawPlan(res, sel) {
     }
   }
 
+  // диагонали в плоскости кровли: на плане их видно как есть — от прогона
+  // к обвязке в крайней ячейке между стропилами
+  if (res.roofBrace) {
+    const b = res.roofBrace;
+    const col = uColor(b.U);
+    const x0 = X(b.x0), x1 = X(b.x1), yO = Y(g.L), yW = Y(0) + 5;
+    s.push(`<g class="pickable" data-pick="bracing">
+      <polygon points="${x0},${yW} ${x1},${yW} ${x1},${yO} ${x0},${yO}" fill="${col}" fill-opacity=".06"/>
+      <line x1="${x0}" y1="${yO}" x2="${x1}" y2="${yW}" stroke="${col}" stroke-width="2"/>
+      <line x1="${x1}" y1="${yO}" x2="${x0}" y2="${yW}" stroke="${col}" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="${x1 + 5}" y="${yO - 8}" font-size="9" font-family="${mono}" fill="${col}">связи ${b.sec.label} · ${f2(b.U)}</text>
+      <title>Диагонали в плоскости кровли ${b.sec.label} · держат ${f2(b.F / 1000)} кН вдоль стены, тянут ${f2(b.T / 1000)} кН · U ${f2(b.U)} (${b.worst?.name})</title></g>`);
+    if (sel.type === 'bracing') {
+      s.push(`<rect x="${x0 - 4}" y="${yW - 4}" width="${x1 - x0 + 8}" height="${yO - yW + 8}" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+    }
+  }
+
   // столбы
   res.posts.forEach((p, i) => {
     const px = X(p.x), py = Y(g.L), sz = 11;
@@ -347,6 +364,7 @@ export function pickElement(res, sel) {
       title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
   }
   if (sel.type === 'bracing') {
+    if (res.roofBrace) return { ...res.roofBrace, kind: 'roofBrace', title: 'СВЯЗИ В ПЛОСКОСТИ КРОВЛИ' };
     const c = res.cross;
     return c && { ...c, kind: 'bracing', title: 'СВЯЗИ НАРУЖНОГО РЯДА · КРЕСТ' };
   }
@@ -705,6 +723,41 @@ function nodeCross(c, post, H, box, clip) {
   return s.join('');
 }
 
+/**
+ * Диагонали в плоскости кровли: вид сверху на крайнюю ячейку. Прогон внизу,
+ * обвязка вверху, крайние стропила по бокам, две диагонали — с расчётными
+ * размерами, силой вдоль стены, растяжением и продольной силой в стропилах.
+ */
+function nodeRoofBrace(b, box, clip) {
+  const p = inner(box);
+  const sc = Math.min((p.w - 70) / b.w, (p.h - 40) / b.Lr);
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const x0 = cx - mm(b.w / 2), x1 = cx + mm(b.w / 2);
+  const yW = p.y + 18, yO = yW + mm(b.Lr);
+  const col = uColor(b.U);
+  const s = [`<g clip-path="url(#${clip})">`];
+  s.push(`<line x1="${x0 - 16}" y1="${yW}" x2="${x1 + 16}" y2="${yW}" stroke="var(--ink)" stroke-width="3"/>`);
+  s.push(`<text x="${x0 - 16}" y="${yW - 5}" font-size="9" font-family="${mono}" fill="var(--ink-3)">обвязка у стены</text>`);
+  s.push(`<line x1="${x0 - 16}" y1="${yO}" x2="${x1 + 16}" y2="${yO}" stroke="var(--ink)" stroke-width="3"/>`);
+  s.push(`<text x="${x0 - 16}" y="${yO + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">прогон</text>`);
+  for (const x of [x0, x1]) s.push(`<line x1="${x}" y1="${yW}" x2="${x}" y2="${yO}" stroke="var(--ink-2)" stroke-width="2"/>`);
+  s.push(`<line x1="${x0}" y1="${yO}" x2="${x1}" y2="${yW}" stroke="${col}" stroke-width="2.4"/>`);
+  s.push(`<line x1="${x1}" y1="${yO}" x2="${x0}" y2="${yW}" stroke="${col}" stroke-width="2.4" stroke-dasharray="6 4"/>`);
+  for (const [x, y] of [[x0, yW], [x1, yW], [x0, yO], [x1, yO]]) s.push(`<circle cx="${x}" cy="${y}" r="2.6" fill="var(--u-warn)"/>`);
+  s.push(dimH(x0, x1, yO + 24, `${Math.round(b.w)}`));
+  s.push(dimV(yW, yO, x1 + 26, `${Math.round(b.Lr)}`));
+  s.push(`<text x="${cx}" y="${(yW + yO) / 2}" font-size="9" text-anchor="middle" font-family="${mono}" fill="${col}">тянет ${f2(b.T / 1000)} кН</text>`);
+  s.push(`<text x="${x0 - 4}" y="${(yW + yO) / 2 + 14}" font-size="8.5" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">±${f2(b.Nchord / 1000)}</text>`);
+  s.push(`<g pointer-events="none">
+    <line x1="${x1 + 40}" y1="${yO - 12}" x2="${x1 + 8}" y2="${yO - 12}" stroke="var(--u-bad)" stroke-width="1.6"/>
+    <path d="M${x1 + 14},${yO - 16} L${x1 + 5},${yO - 12} L${x1 + 14},${yO - 8} z" fill="var(--u-bad)"/>
+    <text x="${x1 + 42}" y="${yO - 16}" font-size="9" font-family="${mono}" fill="var(--u-bad)">F ${f2(b.F / 1000)}</text>
+  </g>`);
+  s.push('</g>');
+  return s.join('');
+}
+
 export function drawNodes(res, sel) {
   const m = res.model;
   const alpha = m.geom.alpha;
@@ -725,7 +778,7 @@ export function drawNodes(res, sel) {
     .filter(Boolean);
 
   const W = 1080, pad = { l: 16, t: 44 };
-  const rowsN = 2 + (splices.length || res.cross ? 1 : 0);
+  const rowsN = 2 + (splices.length || res.brace ? 1 : 0);
   const bw = (W - pad.l * 2 - 2 * 18) / 3, bh = 291;
   const H = pad.t + rowsN * bh + (rowsN - 1) * 18 + 16;
   const clips = [];
@@ -796,6 +849,20 @@ export function drawNodes(res, sel) {
       + detailFrame(box, '5.1 СВЯЗЬ · КРЕСТ В РЯДУ',
         `${c.count} × ${c.sec.label}, шов по контуру k = ${c.kf} мм`, c.U)
       + nodeCross(c, res.posts[0].sec, res.posts[0].H, box, id)
+      + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`);
+  }
+
+  if (res.roofBrace) {
+    const b = res.roofBrace;
+    const y = pad.t + 2 * (bh + 18);
+    const box = { x: pad.l + splices.length * (bw + 18), y, w: bw, h: bh };
+    const id = 'clip-bracing';
+    const p = inner(box);
+    clips.push(`<clipPath id="${id}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}"/></clipPath>`);
+    const ends = b.ends.map((e) => (e.welded ? `шов k=${e.kf}` : `${e.n} × М12`)).join(' / ');
+    s.push(`<g class="pickable" data-pick="bracing">`
+      + detailFrame(box, '5.1 СВЯЗИ ПО КРОВЛЕ · ВИД СВЕРХУ', `${b.count} × ${b.sec.label}, концы: ${ends}`, b.U)
+      + nodeRoofBrace(b, box, id)
       + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`);
   }
 
