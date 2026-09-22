@@ -868,7 +868,7 @@ function renderSearch(r, before) {
       <td class="n">${f2(o.maxU)}</td>
       <td class="n">${Math.round(o.mass)} кг</td>
       <td>${o.parts.rafters}</td><td>${o.parts.battens}</td>
-      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td>
+      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td><td>${o.parts.bracing}</td>
       <td>${o.parts.wallPurlin}</td><td>${o.parts.wallPosts}</td>
       <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
   }).join('');
@@ -876,20 +876,22 @@ function renderSearch(r, before) {
   host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с${SEARCH_HELP}</div>
     <div class="tbl"><table>
       <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
-        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
+        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Связи</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
       <tr><td class="n"><b>${money(before)} ${cur.costs.currency}</b></td><td class="n">текущий</td>
         <td class="n">${f2(state.result.maxU)}</td><td class="n">${Math.round(cur.weights.total)} кг</td>
         <td>${o2(state.model.rafters.sectionId)} × ${state.model.rafters.xs.length}</td>
         <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
         <td>${o2(state.model.purlin.sectionId)}</td>
         <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
+        <td>${state.model.bracing?.along === 'cross' ? `крест ${o2(state.model.bracing.sectionId)}` : 'без связей'}</td>
         <td>${o2(state.model.wallPurlin.sectionId)}</td>
         <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
       ${rows}
     </table></div>
     <div class="row2" style="gap:14px;margin-top:10px">
       <div class="hint" style="border:0;padding:0">
-        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки.
+        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки,
+        а наружный ряд — в двух схемах: без связей и с крестом в крайнем пролёте.
         Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
       </div>
       <div class="hint" style="border:0;padding:0">

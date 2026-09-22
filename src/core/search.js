@@ -11,12 +11,18 @@
  *      перебираются число столбов и сечения прогонов и стоек;
  *   3. собранный вариант проверяется целиком.
  *
+ * Наружный ряд перебирается в двух схемах: без связей и с крестом в крайнем
+ * пролёте. Без связей столб — консоль, и его сечение определяет гибкость при
+ * μ = 2; с крестом столбы легче, но появляются диагонали. Что дешевле, зависит
+ * от высоты, числа столбов и цен — поэтому считаются обе, и в списке видно,
+ * какая выбрана.
+ *
  * Внутри одного материала стоимость пропорциональна площади сечения (дерево
  * считается по объёму, металл по массе), поэтому сортамент, упорядоченный по A,
  * упорядочен и по цене: первое прошедшее сечение при переборе снизу и есть
  * самое дешёвое.
  */
-import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from './analysis.js';
+import { analyse, analyseRoof, analyseLineBeam, analysePostRow, analyseCross, supportLoads, billOfMaterials } from './analysis.js';
 import { ladder, section } from './sections.js';
 import { spread } from './model.js';
 import { pickTies } from './optimize.js';
@@ -96,6 +102,8 @@ export async function searchByCost(model, opts = {}) {
   const wallPurlinList = ladderFor(model.wallPurlin.sectionId);
   const postList = ladderFor(model.posts.sectionId, { square: true });
   const wallPostList = ladderFor(model.wallPosts.sectionId, { square: true });
+  // диагональ креста — квадратная труба небольшого сечения
+  const braceList = ladder('steel').filter((s) => s.h === s.b && s.h <= 80);
 
   // разумный диапазон шага стропил: от 1200 до 300 мм
   const counts = [];
@@ -141,7 +149,9 @@ export async function searchByCost(model, opts = {}) {
      Считается только сам ряд — балка и стойки под ней; кровля к этому моменту
      уже посчитана и её результат переиспользуется. */
   const options = [];
-  const pickRow = async (m, side, beamList, postList, items) => {
+  const pickRow = async (m0, side, beamList, postList, items, along = null) => {
+    // схема связей меняет μ наружных столбов, поэтому ряд считается в своей
+    const m = along ? { ...m0, bracing: { ...m0.bracing, along, bays: 1 } } : m0;
     const sl = supportLoads(m);
     const cfg = sl[side];
     let best = null;
@@ -161,26 +171,41 @@ export async function searchByCost(model, opts = {}) {
       t[cfg.postsKey].xs = xs;
       t[cfg.postsKey].sectionId = postSec.id;
       t[cfg.beamKey].sectionId = beamSec.id;
+      let brace = null;
+      if (along === 'cross') {
+        const row = analysePostRow(t, t[cfg.postsKey], beam, sl.ctx, cfg.extra);
+        const sec = await cheapest(braceList, async (b) =>
+          analyseCross({ ...t, bracing: { ...t.bracing, sectionId: b.id } }, row)?.U ?? Infinity, target, budget);
+        if (!sec) continue;
+        brace = sec.id;
+        t.bracing.sectionId = brace;
+      }
       const bom = billOfMaterials(analyse(t));
       const cost = items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
-      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n };
+      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n, along, brace };
     }
     return best;
   };
 
   for (let i = 0; i < finalists.length; i++) {
     const base = finalists[i].model;
-    const outer = await pickRow(base, 'outer', purlinList, postList,
-      ['Прогон наружный', 'Столбы наружные']);
+    const outers = [];
+    for (const along of ['none', 'cross']) {
+      const o = await pickRow(base, 'outer', purlinList, postList,
+        ['Прогон наружный', 'Столбы наружные', 'Связи наружного ряда'], along);
+      if (o) outers.push(o);
+    }
     const wall = await pickRow(base, 'wall', wallPurlinList, wallPostList,
       ['Обвязка у стены', 'Столбы у стены']);
     report('опоры', i + 1, finalists.length);
-    if (!outer || !wall) continue;
+    if (!outers.length || !wall) continue;
 
+    for (const outer of outers) {
     const m = clone(base);
     m.posts.xs = spread(B, outer.n);
     m.posts.sectionId = outer.post;
     m.purlin.sectionId = outer.beam;
+    m.bracing = { ...m.bracing, along: outer.along, bays: 1, ...(outer.brace ? { sectionId: outer.brace } : {}) };
     m.wallPosts.xs = spread(B, wall.n);
     m.wallPosts.sectionId = wall.post;
     m.wallPurlin.sectionId = wall.beam;
@@ -200,6 +225,7 @@ export async function searchByCost(model, opts = {}) {
     Object.assign(m, withTies);
     const bom = billOfMaterials(res);
     options.push({ model: m, cost: bom.costs.total, res, bom });
+    }
   }
 
   options.sort((a, b) => a.cost - b.cost);
@@ -214,6 +240,9 @@ export async function searchByCost(model, opts = {}) {
       purlin: section(o.model.purlin.sectionId).label,
       wallPurlin: section(o.model.wallPurlin.sectionId).label,
       posts: `${section(o.model.posts.sectionId).label} × ${o.model.posts.xs.length}`,
+      bracing: o.model.bracing.along === 'cross'
+        ? `крест ${section(o.model.bracing.sectionId).label}`
+        : 'без связей',
       wallPosts: `${section(o.model.wallPosts.sectionId).label} × ${o.model.wallPosts.xs.length}`,
     },
   }));

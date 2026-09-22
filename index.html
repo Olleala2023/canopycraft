@@ -3776,6 +3776,12 @@ function pickAll(model, target = 0.9) {
  *      перебираются число столбов и сечения прогонов и стоек;
  *   3. собранный вариант проверяется целиком.
  *
+ * Наружный ряд перебирается в двух схемах: без связей и с крестом в крайнем
+ * пролёте. Без связей столб — консоль, и его сечение определяет гибкость при
+ * μ = 2; с крестом столбы легче, но появляются диагонали. Что дешевле, зависит
+ * от высоты, числа столбов и цен — поэтому считаются обе, и в списке видно,
+ * какая выбрана.
+ *
  * Внутри одного материала стоимость пропорциональна площади сечения (дерево
  * считается по объёму, металл по массе), поэтому сортамент, упорядоченный по A,
  * упорядочен и по цене: первое прошедшее сечение при переборе снизу и есть
@@ -3860,6 +3866,8 @@ async function searchByCost(model, opts = {}) {
   const wallPurlinList = ladderFor(model.wallPurlin.sectionId);
   const postList = ladderFor(model.posts.sectionId, { square: true });
   const wallPostList = ladderFor(model.wallPosts.sectionId, { square: true });
+  // диагональ креста — квадратная труба небольшого сечения
+  const braceList = ladder('steel').filter((s) => s.h === s.b && s.h <= 80);
 
   // разумный диапазон шага стропил: от 1200 до 300 мм
   const counts = [];
@@ -3905,7 +3913,9 @@ async function searchByCost(model, opts = {}) {
      Считается только сам ряд — балка и стойки под ней; кровля к этому моменту
      уже посчитана и её результат переиспользуется. */
   const options = [];
-  const pickRow = async (m, side, beamList, postList, items) => {
+  const pickRow = async (m0, side, beamList, postList, items, along = null) => {
+    // схема связей меняет μ наружных столбов, поэтому ряд считается в своей
+    const m = along ? { ...m0, bracing: { ...m0.bracing, along, bays: 1 } } : m0;
     const sl = supportLoads(m);
     const cfg = sl[side];
     let best = null;
@@ -3925,26 +3935,41 @@ async function searchByCost(model, opts = {}) {
       t[cfg.postsKey].xs = xs;
       t[cfg.postsKey].sectionId = postSec.id;
       t[cfg.beamKey].sectionId = beamSec.id;
+      let brace = null;
+      if (along === 'cross') {
+        const row = analysePostRow(t, t[cfg.postsKey], beam, sl.ctx, cfg.extra);
+        const sec = await cheapest(braceList, async (b) =>
+          analyseCross({ ...t, bracing: { ...t.bracing, sectionId: b.id } }, row)?.U ?? Infinity, target, budget);
+        if (!sec) continue;
+        brace = sec.id;
+        t.bracing.sectionId = brace;
+      }
       const bom = billOfMaterials(analyse(t));
       const cost = items.reduce((a, name) => a + (bom.items.find((it) => it.name === name)?.cost ?? 0), 0);
-      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n };
+      if (!best || cost < best.cost) best = { cost, beam: beamSec.id, post: postSec.id, n, along, brace };
     }
     return best;
   };
 
   for (let i = 0; i < finalists.length; i++) {
     const base = finalists[i].model;
-    const outer = await pickRow(base, 'outer', purlinList, postList,
-      ['Прогон наружный', 'Столбы наружные']);
+    const outers = [];
+    for (const along of ['none', 'cross']) {
+      const o = await pickRow(base, 'outer', purlinList, postList,
+        ['Прогон наружный', 'Столбы наружные', 'Связи наружного ряда'], along);
+      if (o) outers.push(o);
+    }
     const wall = await pickRow(base, 'wall', wallPurlinList, wallPostList,
       ['Обвязка у стены', 'Столбы у стены']);
     report('опоры', i + 1, finalists.length);
-    if (!outer || !wall) continue;
+    if (!outers.length || !wall) continue;
 
+    for (const outer of outers) {
     const m = clone(base);
     m.posts.xs = spread(B, outer.n);
     m.posts.sectionId = outer.post;
     m.purlin.sectionId = outer.beam;
+    m.bracing = { ...m.bracing, along: outer.along, bays: 1, ...(outer.brace ? { sectionId: outer.brace } : {}) };
     m.wallPosts.xs = spread(B, wall.n);
     m.wallPosts.sectionId = wall.post;
     m.wallPurlin.sectionId = wall.beam;
@@ -3964,6 +3989,7 @@ async function searchByCost(model, opts = {}) {
     Object.assign(m, withTies);
     const bom = billOfMaterials(res);
     options.push({ model: m, cost: bom.costs.total, res, bom });
+    }
   }
 
   options.sort((a, b) => a.cost - b.cost);
@@ -3978,6 +4004,9 @@ async function searchByCost(model, opts = {}) {
       purlin: section(o.model.purlin.sectionId).label,
       wallPurlin: section(o.model.wallPurlin.sectionId).label,
       posts: `${section(o.model.posts.sectionId).label} × ${o.model.posts.xs.length}`,
+      bracing: o.model.bracing.along === 'cross'
+        ? `крест ${section(o.model.bracing.sectionId).label}`
+        : 'без связей',
       wallPosts: `${section(o.model.wallPosts.sectionId).label} × ${o.model.wallPosts.xs.length}`,
     },
   }));
@@ -5659,7 +5688,7 @@ function renderSearch(r, before) {
       <td class="n">${f2(o.maxU)}</td>
       <td class="n">${Math.round(o.mass)} кг</td>
       <td>${o.parts.rafters}</td><td>${o.parts.battens}</td>
-      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td>
+      <td>${o.parts.purlin}</td><td>${o.parts.posts}</td><td>${o.parts.bracing}</td>
       <td>${o.parts.wallPurlin}</td><td>${o.parts.wallPosts}</td>
       <td><button class="btn" data-apply="${i}">применить</button></td></tr>`;
   }).join('');
@@ -5667,20 +5696,22 @@ function renderSearch(r, before) {
   host.innerHTML = `<div class="pane-title">Подбор по цене · ${r.options.length} лучших из ${r.evaluated} расчётов за ${(r.ms / 1000).toFixed(1)} с${SEARCH_HELP}</div>
     <div class="tbl"><table>
       <tr><th>Стоимость</th><th>Разница</th><th>Макс U</th><th>Масса</th>
-        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
+        <th>Стропила</th><th>Обрешётка</th><th>Прогон</th><th>Столбы</th><th>Связи</th><th>Обвязка</th><th>Столбы у стены</th><th></th></tr>
       <tr><td class="n"><b>${money(before)} ${cur.costs.currency}</b></td><td class="n">текущий</td>
         <td class="n">${f2(state.result.maxU)}</td><td class="n">${Math.round(cur.weights.total)} кг</td>
         <td>${o2(state.model.rafters.sectionId)} × ${state.model.rafters.xs.length}</td>
         <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
         <td>${o2(state.model.purlin.sectionId)}</td>
         <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
+        <td>${state.model.bracing?.along === 'cross' ? `крест ${o2(state.model.bracing.sectionId)}` : 'без связей'}</td>
         <td>${o2(state.model.wallPurlin.sectionId)}</td>
         <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
       ${rows}
     </table></div>
     <div class="row2" style="gap:14px;margin-top:10px">
       <div class="hint" style="border:0;padding:0">
-        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки.
+        Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки,
+        а наружный ряд — в двух схемах: без связей и с крестом в крайнем пролёте.
         Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
       </div>
       <div class="hint" style="border:0;padding:0">

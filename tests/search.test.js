@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, spread } from '../src/core/model.js';
-import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads } from '../src/core/analysis.js';
+import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from '../src/core/analysis.js';
 import { ladder, section } from '../src/core/sections.js';
 import { searchByCost } from '../src/core/search.js';
 import { decodeModel, encodeModel } from '../src/core/share.js';
@@ -30,6 +30,7 @@ const U_OF = {
   wallPurlin: (r) => r.wallPurlin.U,
   posts: (r) => Math.max(...r.posts.map((x) => x.U)),
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
+  bracing: (r) => r.cross?.U ?? 0,
 };
 
 test('узкие расчёты элемента совпадают с полным расчётом', () => {
@@ -85,6 +86,8 @@ test('подбор по стоимости не оставляет более д
       wallPurlin: ladderFor(m.wallPurlin.sectionId),
       posts: ladderFor(m.posts.sectionId, { square: true }),
       wallPosts: ladderFor(m.wallPosts.sectionId, { square: true }),
+      ...(m.bracing.along === 'cross'
+        ? { bracing: ladder('steel').filter((s) => s.h === s.b && s.h <= 80) } : {}),
     };
     for (const [key, list] of Object.entries(lists)) {
       const chosen = section(m[key].sectionId);
@@ -134,4 +137,24 @@ test('старые ссылки с μ переводятся на схему с�
   t.bracing.along = 'cross';
   assert.equal(decodeModel(encodeModel(t)).bracing.along, 'cross');
   assert.deepEqual(decodeNotes(encodeModel(t)), []);
+});
+
+test('подбор по цене сравнивает наружный ряд без связей и с крестом', async () => {
+  const r = await searchByCost(sample(), { target: 0.9, limit: 20, keep: 2 });
+  const schemes = new Set(r.options.map((o) => o.model.bracing.along));
+  assert.ok(schemes.has('none') && schemes.has('cross'), `в списке только ${[...schemes].join(', ')}`);
+  for (const o of r.options) {
+    const res = analyse(o.model);
+    if (o.model.bracing.along === 'cross') {
+      assert.ok(res.cross, 'у варианта с крестом крест посчитан');
+      assert.match(o.parts.bracing, /^крест /);
+      // с крестом столбы легче: гибкость вдоль ряда считается при μ = 1
+      assert.equal(res.posts[0].muY, 1);
+      assert.ok(billOfMaterials(res).items.some((i) => i.name === 'Связи наружного ряда'), 'связи в смете');
+    } else {
+      assert.equal(res.cross, null);
+      assert.equal(o.parts.bracing, 'без связей');
+    }
+    assert.ok(Math.abs(billOfMaterials(res).costs.total - o.cost) < 1e-6, 'цена варианта — цена его сметы');
+  }
 });
