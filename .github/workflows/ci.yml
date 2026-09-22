@@ -44,3 +44,7 @@ jobs:
             exit 1
           fi
           echo "Собранные файлы совпадают с исходниками."
+      - name: Смоук-тест интерфейса
+        # Chrome на раннерах ubuntu-latest уже установлен; тест открывает
+        # собранный index.html и проходит интерфейс целиком — см. tools/smoke.mjs
+        run: npm run smoke
