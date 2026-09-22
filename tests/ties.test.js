@@ -339,5 +339,57 @@ test('подбор блока учитывает и вес, и мороз', () =
   assert.ok(picked.postBase.depth >= 1320, `глубина ${picked.postBase.depth} мм — не мельче промерзания`);
   assert.ok(b.frost.ok, 'после подбора подошва ниже промерзания');
   assert.ok(b.enough, 'и вес по-прежнему держит отрыв');
-  assert.ok(b.U <= 1, `U базы ${b.U.toFixed(2)}`);
+  // всё, что зависит от размеров и исполнения базы, проходит
+  assert.ok(b.Usized <= 1, `U базы без пучения ${b.Usized.toFixed(2)}`);
+  // а касательные силы пучения подбором блока не лечатся — нужна мера
+  assert.ok(b.heave.applies && b.U > 1, 'пучение остаётся непроверенным подбором');
+  const replaced = pickTies({ ...m, postBase: { ...m.postBase, antiHeave: 'replace' } }).model;
+  assert.ok(analyse(replaced).bases.outer.U <= 1, 'с заменой грунта в пазухах база проходит');
+});
+
+test('касательные силы пучения — формула (6.35) и таблица 6.12 СП 22', async () => {
+  const { heaveTau } = await import('../src/core/fasteners.js');
+  // таблица 6.12: до 1,5 м / 2,5 м / 3 м и более, между ними интерполяция
+  assert.equal(heaveTau('wet', 1000), 110);
+  assert.equal(heaveTau('wet', 1500), 110);
+  assert.equal(heaveTau('wet', 2000), 100);
+  assert.equal(heaveTau('wet', 2500), 90);
+  assert.equal(heaveTau('wet', 2750), 80);
+  assert.equal(heaveTau('wet', 4000), 70);
+  assert.equal(heaveTau('plastic', 1000), 90);
+  assert.equal(heaveTau('firm', 3000), 40);
+
+  const m = defaultModel();
+  m.site.frostDepth = 1200;                       // суглинок: d_fn 1200, d_f 1320
+  m.postBase = { ...m.postBase, footing: 500, depth: 1400, surface: 'formwork' };
+  const h = analyse(m).bases.outer.heave;
+  assert.ok(h.applies);
+  assert.equal(h.tau, 110);                       // d_th = d_fn = 1,2 м < 1,5
+  // боковая поверхность в пределах расчётной глубины промерзания: 4 × 0,5 × 1,32
+  assert.ok(Math.abs(h.A - 4 * 0.5 * 1.32) < 1e-9);
+  assert.ok(Math.abs(h.pull - 110 * h.A * 1000) < 1e-6);
+  // F — одна постоянная нагрузка при γ_f = 0,9 и вес блока с тем же 0,9
+  assert.ok(Math.abs(h.blockWeight - 0.9 * 0.5 * 0.5 * 1.4 * 2400 * 9.80665) < 1e-6);
+  assert.ok(Math.abs(h.F - (h.Nperm + h.blockWeight)) < 1e-9);
+  assert.ok(h.Nperm > 0 && h.Nperm < analyse(m).posts[1].N, 'постоянная меньше расчётной со снегом');
+  assert.equal(h.check.U, h.pull / h.F);         // трение пока не учитывается
+  // обычный блок в пучинистом грунте выдавливает — с большим запасом «не туда»
+  assert.ok(h.check.U > 10, `U = ${h.check.U.toFixed(1)}`);
+
+  // поверхность и геотехническая категория — множители к τ_fh
+  const rough = analyse({ ...m, postBase: { ...m.postBase, surface: 'rough20' } }).bases.outer.heave;
+  assert.ok(Math.abs(rough.tau - 110 * 1.5) < 1e-9);
+  const cat1 = analyse({ ...m, site: { ...m.site, geoCat1: true } }).bases.outer.heave;
+  assert.ok(Math.abs(cat1.tau - 110 * 0.9) < 1e-9);
+
+  // непучинистый грунт, мороз не задан, замена грунта — проверки нет
+  for (const [label, mm] of [
+    ['песок', { ...m, site: { ...m.site, soil: 'sand' } }],
+    ['мороз не задан', { ...m, site: { ...m.site, frostDepth: 0 } }],
+    ['замена грунта', { ...m, postBase: { ...m.postBase, antiHeave: 'replace' } }],
+  ]) {
+    const b = analyse(mm).bases.outer;
+    assert.equal(b.heave.applies, false, label);
+    assert.ok(!b.checks.some((c) => c.name === 'Касательные силы пучения'), label);
+  }
 });

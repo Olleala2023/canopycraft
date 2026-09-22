@@ -294,6 +294,17 @@ export function foundationFrost(df, depth, note) {
 }
 
 /** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
+/**
+ * Устойчивость фундамента против касательных сил морозного пучения —
+ * формула (6.35) СП 22: τ_fh·A_fh − F ≤ (γ_c/γ_n)·F_rf. Записана как
+ * сравнение сил: то, что тянет вверх, против того, что держит, — тогда U
+ * читается как во всех остальных проверках.
+ */
+export function frostHeave(pull, F, Frf, gcgn, note) {
+  return chk('Касательные силы пучения', pull, F + gcgn * Frf, 'Н',
+    'τ_fh·A_fh ≤ F + (γ_c/γ_n)·F_rf — СП 22, ф. (6.35)', note);
+}
+
 export function anchorMass(uplift, mass, note) {
   return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',
     'N_отр ≤ 0,9·m·g', note);
