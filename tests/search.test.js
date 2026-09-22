@@ -114,17 +114,24 @@ test('столбы у стены не тяжелее наружных при п�
   }
 });
 
-test('старая ссылка с одним μ раскладывается по двум плоскостям', () => {
-  // ссылка, выпущенная до разделения μ: {"posts":{"mu":1}}
-  const code = Buffer.from(JSON.stringify({ posts: { mu: 1 } }), 'utf8')
+test('старые ссылки с μ переводятся на схему связей и говорят об этом', async () => {
+  const { decodeNotes } = await import('../src/core/share.js');
+  const pack = (o) => Buffer.from(JSON.stringify(o), 'utf8')
     .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const m = decodeModel(code);
-  assert.equal(m.posts.muX, 1);
-  assert.equal(m.posts.muY, 1);
+  // самая старая: одно μ на обе плоскости
+  const oldest = pack({ posts: { mu: 1 } });
+  const m = decodeModel(oldest);
+  assert.equal(m.bracing.along, 'cross', 'μ = 1 значило «верх удержан связями»');
   assert.equal(m.posts.mu, undefined);
-  // а новые ссылки по-прежнему короткие и обратимые
+  assert.equal(m.posts.muY, undefined);
+  assert.equal(decodeNotes(oldest).length, 1);
+  // μ по плоскостям: вдоль ряда 2 — связей нет, и переводить нечего
+  const free = pack({ posts: { muX: 1, muY: 2 } });
+  assert.equal(decodeModel(free).bracing.along, 'none');
+  assert.equal(decodeNotes(free).length, 1, 'но про μ поперёк ряда сказать надо');
+  // новые ссылки по-прежнему короткие и обратимые
   const t = defaultModel();
-  t.posts.muX = 0.7;
-  assert.equal(decodeModel(encodeModel(t)).posts.muX, 0.7);
-  assert.equal(decodeModel(encodeModel(t)).posts.muY, defaultModel().posts.muY);
+  t.bracing.along = 'cross';
+  assert.equal(decodeModel(encodeModel(t)).bracing.along, 'cross');
+  assert.deepEqual(decodeNotes(encodeModel(t)), []);
 });

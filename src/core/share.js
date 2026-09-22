@@ -50,21 +50,35 @@ function fromBase64Url(code) {
 }
 
 /**
- * Старые ссылки: до разделения μ по плоскостям в модели было одно поле mu.
- * mergeModel неизвестные ключи молча выбрасывает, и такая ссылка тихо
- * считалась бы с текущими умолчаниями — поэтому переносим значение в оба поля.
+ * Старые ссылки.
+ *
+ * До разделения по плоскостям в модели было одно поле mu, потом muX и muY,
+ * которые выбирались из списка. Теперь μ следует из схемы связей
+ * (model.bracing), а полей μ нет вовсе. mergeModel неизвестные ключи молча
+ * выбрасывает, и такая ссылка тихо считалась бы с умолчаниями — поэтому
+ * переводим: μ ≤ 1 вдоль ряда у наружного столба значило «верх удержан
+ * связями», то есть крест в ряду. Поперёк ряда выбирать больше нечего —
+ * верх там держат стропила. Что перевели, говорим словами.
  */
 function migrate(patch) {
-  if (!isPlain(patch)) return patch;
+  const notes = [];
+  if (!isPlain(patch)) return { patch, notes };
   const out = { ...patch };
   for (const row of ['posts', 'wallPosts']) {
     const r = out[row];
-    if (isPlain(r) && 'mu' in r) {
-      const { mu, ...rest } = r;
-      out[row] = { muX: mu, muY: mu, ...rest };
+    if (!isPlain(r) || !('mu' in r || 'muX' in r || 'muY' in r)) continue;
+    const { mu, muX, muY, ...rest } = r;
+    out[row] = rest;
+    const along = muY ?? mu;
+    if (row === 'posts' && along !== undefined && along <= 1) {
+      out.bracing = { along: 'cross', ...(isPlain(out.bracing) ? out.bracing : {}) };
+      notes.push(`В ссылке у наружных столбов стояло μ = ${String(along).replace('.', ',')} вдоль ряда — верх удержан связями. `
+        + 'Теперь μ задаётся схемой: поставлен крест в крайнем пролёте, и он проверяется.');
+    } else if (row === 'posts' && (muX ?? mu) !== undefined && (muX ?? mu) !== 2) {
+      notes.push('μ поперёк ряда из ссылки больше не выбирается: верх там держат стропила, и это проверяется.');
     }
   }
-  return out;
+  return { patch: out, notes };
 }
 
 /** Модель → строка для адресной строки. */
@@ -75,10 +89,19 @@ export function encodeModel(model) {
 /** Строка из адресной строки → модель. null, если строка испорчена. */
 export function decodeModel(code) {
   try {
-    const patch = migrate(JSON.parse(fromBase64Url(code)));
+    const { patch } = migrate(JSON.parse(fromBase64Url(code)));
     if (!isPlain(patch)) return null;
     return mergeModel(patch);
   } catch {
     return null;
+  }
+}
+
+/** Что пришлось перевести при чтении старой ссылки — для сообщения человеку. */
+export function decodeNotes(code) {
+  try {
+    return migrate(JSON.parse(fromBase64Url(code))).notes;
+  } catch {
+    return [];
   }
 }
