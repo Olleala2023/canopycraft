@@ -18,7 +18,7 @@ import {
   boltPlateBearing, boltHoleBearing, boltShear,
   tieShear, tieFit, steelHoleBearing,
   weldMetal, weldFusion, weldLeg, boltTension, timberWasherBearing,
-  concreteBearing, plateBending, anchorCone, embedDepth, anchorMass, foundationFrost,
+  concreteBearing, plateBending, anchorCone, embedDepth, anchorMass, foundationFrost, frostHeave,
   spliceDowel,
   splicePlateBending,
 } from './checks.js';
@@ -31,6 +31,7 @@ import {
   SPLICE_DOWELS,
   SPLICE_GAP,
   frostDepth,
+  heaveTau, HEAVE_STATES, HEAVE_SURFACES, HEAVE_GAMMA_C, HEAVE_GAMMA_N, skinFriction, FRICTION_LAYER,
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -90,6 +91,9 @@ function analyseRafter(model, x, trib, ctx) {
     };
   });
   const uplift = solve(() => GAMMA_F.relieving * deadPerpN - windUpPerp);
+  // одна постоянная нагрузка с коэффициентом 0,9 — то, что держит фундамент
+  // от выпучивания (F в формуле (6.35) СП 22)
+  const permanent = solve(() => GAMMA_F.relieving * deadPerpN);
 
   // определяющий вариант — тот, где больше момент в пролёте
   const peak = (r) => r.M.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
@@ -148,6 +152,8 @@ function analyseRafter(model, x, trib, ctx) {
       purlin: Math.max(...byVariant.map((g) => g['ULS-1'].reactions[1].R)),
       wallUplift: uplift.reactions[0].R,
       purlinUplift: uplift.reactions[1].R,
+      wallDead: permanent.reactions[0].R,
+      purlinDead: permanent.reactions[1].R,
       wallSls: Math.max(...byVariant.map((g) => g.SLS.reactions[0].R)),
       purlinSls: Math.max(...byVariant.map((g) => g.SLS.reactions[1].R)),
       // скатная составляющая в том же сочетании, что и отрыв: снега в нём нет,
@@ -229,6 +235,9 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
   const up = solveBeam({ length: B, supports, EI, GAs, q: () => 0, point: loads.uplift, hinges, nEl: 160 });
+  const dead = loads.dead
+    ? solveBeam({ length: B, supports, EI, GAs, q: () => GAMMA_F.relieving * sec.weight, point: loads.dead, hinges, nEl: 160 })
+    : null;
 
   const spans = deflectionSpans(sls, B, supports).spans;
   const checks = [];
@@ -240,7 +249,10 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
     checks.push(steelShear(uls.maxV, sec.props, mat));
   }
   checks.push(deflectionCheck(spans, 200));
-  return { label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
+  return {
+    label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions,
+    dead: dead?.reactions ?? null, ...worstOf(checks),
+  };
 }
 
 /* ───────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ───────────────── */
@@ -518,7 +530,9 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
     // условная поперечная сила от выпучивания самого столба
     const QficX = wall ? 0 : qFic(N, phiX, mat);
     const QficY = !wall && mu.heldY ? qFic(N, phiY, mat) : 0;
-    return { r, N, Hwind, QficX, QficY, Nup: -(purlin.uplift[i]?.R ?? 0) };
+    // одна постоянная нагрузка при γ_f = 0,9 — против выпучивания морозом
+    const Nperm = Math.max(0, purlin.dead?.[i]?.R ?? 0) + GAMMA_F.relieving * sec.weight * H;
+    return { r, N, Hwind, QficX, QficY, Nperm, Nup: -(purlin.uplift[i]?.R ?? 0) };
   });
 
   // крест: вся сила вдоль ряда приходит по прогону в пролёт со связью
@@ -633,7 +647,7 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
     }
 
     return {
-      x: p.r.x, N, M, My, Nup, Hpost, Hy, Htie, Hbase, Mbase, sec, mat, lef, lefX, lefY, H, bolts,
+      x: p.r.x, N, M, My, Nup, Nperm: p.Nperm, Hpost, Hy, Htie, Hbase, Mbase, sec, mat, lef, lefX, lefY, H, bolts,
       diagram, diagramY, braced: wall, muX: mu.muX, muY: mu.muY,
       // что столб отдаёт тем, кто держит его верх
       Hwind: p.Hwind, QficX: p.QficX, QficY: p.QficY,
@@ -752,10 +766,21 @@ function analysePostBase(model, cfg, posts, ctx) {
     side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass,
     frost: { ...frost, applies: frostApplies, needDepth: needFrostDepth, ok: depth >= needFrostDepth },
   };
-  const frostCheck = () => (frostApplies
-    ? [foundationFrost(frost.df, depth,
-      `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
-    : []);
+  // касательные силы пучения (п. 6.8.6 СП 22): грунт смерзается с боковой
+  // поверхностью блока в зоне промерзания и тянет его вверх. Держат одна
+  // постоянная нагрузка при γ_f = 0,9 с весом блока и трение о талый грунт
+  // ниже промерзания. Замена грунта в пазухах на непучинистый (п. 6.8.12)
+  // снимает саму причину — тогда проверка не применяется
+  const measure = model.postBase.antiHeave ?? 'none';
+  const heave = heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure });
+  block.heave = heave;
+  const frostCheck = () => [
+    ...(frostApplies
+      ? [foundationFrost(frost.df, depth,
+        `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
+      : []),
+    ...(heave.applies ? [heave.check] : []),
+  ];
 
   if (base.kind === 'embed') {
     if (needsFixity) {
@@ -789,9 +814,69 @@ function analysePostBase(model, cfg, posts, ctx) {
     detail = { sigma, sigmaPlate, span, Na, c, ...block };
   }
 
+  // пучение размерами блока и исполнением базы не лечится: подбор базы и
+  // подбор по цене смотрят на всё остальное, а сама проверка остаётся в U
+  const sized = worstOf(checks.filter((c) => c !== heave.check));
   return {
     base, post: sec, N, uplift, H, M, needsFixity, concrete: model.opts.concreteClass ?? 'B20',
-    x: post.x, ...detail, ...worstOf(checks),
+    x: post.x, ...detail, ...worstOf(checks), Usized: sized.U,
+  };
+}
+
+/**
+ * Проверка (6.35) для блока под столбом ряда. Считается по самому лёгкому
+ * столбу: у него меньше всего постоянной нагрузки, а тянет грунт одинаково.
+ *
+ * A_fh — боковая поверхность блока в пределах расчётной глубины промерзания,
+ * верх блока — на уровне земли. τ_fh — по табл. 6.12 при нормативной глубине
+ * промерзания (d_th — глубина сезонного промерзания-оттаивания): она меньше
+ * расчётной, а τ с глубиной падает — в запас. Коэффициенты: поверхность блока
+ * (прим. 4) и геотехническая категория 1 (прим. 5, ×0,9).
+ *
+ * F_rf — трение о талый грунт ниже промерзания, формула (6.38): ΣR_f·A_f.
+ * R_f — по нормам на сваи: табл. 7.3 СП 24, слои не толще 2 м, в запас —
+ * см. skinFriction. Надбавки из примечаний 3 и 4 к таблице (плотные пески,
+ * малый коэффициент пористости) не берутся.
+ */
+function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure }) {
+  if (!frostApplies) return { applies: false, reason: frost.set ? 'nonHeaving' : 'noFrost' };
+  if (measure === 'replace') return { applies: false, reason: 'replaced', measure };
+  const post = posts.reduce((a, p) => (p.Nperm < a.Nperm ? p : a));
+  const stateId = model.site.soilState ?? 'wet';
+  const surface = HEAVE_SURFACES[model.postBase.surface ?? 'rough20'] ?? HEAVE_SURFACES.rough20;
+  const cat1 = !!model.site.geoCat1;
+  const tauTable = heaveTau(stateId, frost.dfn);
+  const tau = tauTable * surface.k * (cat1 ? 0.9 : 1);           // кПа
+  const perimeter = 4 * side;                                     // мм
+  const hFrozen = Math.min(frost.df, depth);
+  const hThawed = Math.max(0, depth - frost.df);
+  const A = (perimeter * hFrozen) / 1e6;                          // м²
+  const Abelow = (perimeter * hThawed) / 1e6;
+  const pull = tau * A * 1000;                                    // Н
+  const blockWeight = GAMMA_F.relieving * mass * G0;
+  const F = post.Nperm + blockWeight;
+  // трение о талый грунт ниже промерзания: слои не толще 2 м, f по средней глубине слоя
+  const IL = (HEAVE_STATES[stateId] ?? HEAVE_STATES.wet).IL;
+  const layers = [];
+  for (let z = frost.df; z < depth - 1e-6; z += FRICTION_LAYER) {
+    const h = Math.min(FRICTION_LAYER, depth - z);
+    const zMid = (z + h / 2) / 1000;
+    const f = skinFriction(zMid, IL);
+    layers.push({ from: z, h, zMid, f, A: (perimeter * h) / 1e6 });
+  }
+  const Frf = layers.reduce((a, l) => a + l.f * l.A * 1000, 0);    // Н
+  const gcgn = HEAVE_GAMMA_C / HEAVE_GAMMA_N;
+  const f2 = (v) => (v / 1000).toFixed(1).replace('.', ',');
+  const check = frostHeave(pull, F, Frf, gcgn,
+    `τ_fh = ${Math.round(tauTable)}${surface.k !== 1 ? ` × ${String(surface.k).replace('.', ',')}` : ''}${cat1 ? ' × 0,9' : ''} = ${Math.round(tau)} кПа на ${A.toFixed(2).replace('.', ',')} м² — тянет ${f2(pull)} кН; `
+    + `держат постоянная нагрузка ${f2(post.Nperm)} и блок ${f2(blockWeight)} кН`
+    + (layers.length
+      ? `, трение о талый грунт ниже промерзания ${f2(Frf)} кН на ${Abelow.toFixed(2).replace('.', ',')} м² (f = ${layers.map((l) => l.f).join(', ')} кПа, I_L ${String(IL).replace('.', ',')}) / 1,1`
+      : ', ниже промерзания блок не заходит — трения нет'));
+  return {
+    applies: true, measure, check, stateId, surface, cat1, tauTable, tau, perimeter, hFrozen, hThawed,
+    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gcgn, x: post.x,
+    ratio: pull / Math.max(1, F + gcgn * Frf),
   };
 }
 
@@ -1056,13 +1141,13 @@ export function supportLoads(model, roof = analyseRoof(model)) {
     outer: {
       beamKey: 'purlin', postsKey: 'posts', label: 'Прогон по столбам',
       supports: [...model.posts.xs].sort((a, b) => a - b),
-      loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') },
+      loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift'), dead: pick('purlinDead') },
       extra: { braced: false, thrust: 0, alongWall: alongOuter },
     },
     wall: {
       beamKey: 'wallPurlin', postsKey: 'wallPosts', label: 'Обвязка у стены',
       supports: [...model.wallPosts.xs].sort((a, b) => a - b),
-      loads: { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') },
+      loads: { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift'), dead: pick('wallDead') },
       extra: { braced: true, thrust, alongWall },
     },
   };

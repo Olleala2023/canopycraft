@@ -230,7 +230,10 @@ export async function searchByCost(model, opts = {}) {
     // и катет шва дискретны
     const NODES = ['ties', 'beamTies', 'bases', 'spliceJoints'];
     const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
-    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
+    // касательные силы пучения сечениями не лечатся — их решает мера против
+    // пучения, а не подбор; остальные проверки базы остаются в фильтре
+    const nodeU = (s) => (s.key === 'bases' ? Math.max(res.bases.outer.Usized, res.bases.wall.Usized) : s.U);
+    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map(nodeU));
     if (!(elements <= target && nodes <= 1)) continue;
     Object.assign(m, withTies);
     const bom = billOfMaterials(res);

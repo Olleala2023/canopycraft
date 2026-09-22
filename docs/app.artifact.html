@@ -1396,6 +1396,17 @@ function foundationFrost(df, depth, note) {
 }
 
 /** Масса фундамента против отрыва: удерживает только вес, с коэффициентом 0,9. */
+/**
+ * Устойчивость фундамента против касательных сил морозного пучения —
+ * формула (6.35) СП 22: τ_fh·A_fh − F ≤ (γ_c/γ_n)·F_rf. Записана как
+ * сравнение сил: то, что тянет вверх, против того, что держит, — тогда U
+ * читается как во всех остальных проверках.
+ */
+function frostHeave(pull, F, Frf, gcgn, note) {
+  return chk('Касательные силы пучения', pull, F + gcgn * Frf, 'Н',
+    'τ_fh·A_fh ≤ F + (γ_c/γ_n)·F_rf — СП 22, ф. (6.35)', note);
+}
+
 function anchorMass(uplift, mass, note) {
   return chk('Вес фундамента против отрыва', Math.abs(uplift), 0.9 * mass * 9.80665, 'Н',
     'N_отр ≤ 0,9·m·g', note);
@@ -1784,6 +1795,96 @@ const anchorSpan = (base) => Math.max(40, base.plate - 2 * ANCHOR_EDGE);
  */
 const minEmbed = (postH) => 10 * postH;
 
+/**
+ * Касательные силы морозного пучения — СП 22.13330.2016, п. 6.8.6–6.8.7.
+ *
+ * Пучинистый грунт смерзается с боковой поверхностью фундамента и тянет его
+ * вверх, даже когда подошва ниже промерзания. Удельная сила τ_fh — по
+ * таблице 6.12: строка по состоянию грунта, столбец по глубине сезонного
+ * промерзания-оттаивания d_th (до 1,5 / 2,5 / 3 м и более, между ними
+ * интерполяция — примечание 1). Обратная засыпка котлована из того же
+ * грунта берётся по первой строке (примечание 3).
+ */
+const HEAVE_STATES = {
+  // IL — показатель текучести для трения о талый грунт ниже промерзания
+  // (табл. 7.3 СП 24): верхняя граница строки, трение при ней меньше — в запас
+  wet: {
+    label: 'I_L > 0,5 или S_r > 0,95 — влажный; также обратная засыпка',
+    tau: [110, 90, 70], IL: 1.0,
+  },
+  plastic: {
+    label: '0,25 < I_L ≤ 0,5 или 0,8 < S_r ≤ 0,95',
+    tau: [90, 70, 55], IL: 0.5,
+  },
+  firm: {
+    label: 'I_L ≤ 0,25 или 0,6 < S_r ≤ 0,8 — плотный, маловлажный',
+    tau: [70, 55, 40], IL: 0.3,
+  },
+};
+const HEAVE_DEPTHS = [1500, 2500, 3000];
+
+/** τ_fh по табл. 6.12, кПа, при глубине промерзания-оттаивания d_th, мм. */
+function heaveTau(stateId, dthMm) {
+  const t = (HEAVE_STATES[stateId] ?? HEAVE_STATES.wet).tau;
+  const d = HEAVE_DEPTHS;
+  if (dthMm <= d[0]) return t[0];
+  if (dthMm >= d[2]) return t[2];
+  const i = dthMm <= d[1] ? 0 : 1;
+  return t[i] + ((t[i + 1] - t[i]) * (dthMm - d[i])) / (d[i + 1] - d[i]);
+}
+
+/**
+ * Поверхность бетонного блока — коэффициент к τ_fh (примечание 4 к табл. 6.12).
+ * Для диапазонов взяты верхние значения — в запас: блок, залитый прямо в яму,
+ * повторяет все неровности стенок.
+ */
+const HEAVE_SURFACES = {
+  formwork: { label: 'в опалубке — гладкий, k = 1,0', k: 1.0 },
+  rough5: { label: 'залит в яму, неровности до 5 мм — k = 1,2', k: 1.2 },
+  rough20: { label: 'залит в яму, неровности до 20 мм — k = 1,5', k: 1.5 },
+};
+
+/**
+ * Расчётное сопротивление грунта на боковой поверхности f_i, кПа —
+ * СП 24.13330, табл. 7.3 (изм. 1). Им СП 22 (ф. (6.38)) велит считать
+ * трение фундамента о талый грунт ниже промерзания.
+ * Строки — средняя глубина слоя, м; столбцы — показатель текучести I_L.
+ */
+const FRICTION_DEPTHS = [1, 2, 3, 4, 5, 6, 8, 10];
+const FRICTION_IL = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+const FRICTION = [
+  [35, 23, 15, 12, 8, 4, 4, 3, 2],
+  [42, 30, 21, 17, 12, 7, 5, 4, 4],
+  [48, 35, 25, 20, 14, 8, 7, 6, 5],
+  [53, 38, 27, 22, 16, 9, 8, 7, 5],
+  [56, 40, 29, 24, 17, 10, 8, 7, 6],
+  [58, 42, 31, 25, 18, 10, 8, 7, 6],
+  [62, 44, 33, 26, 19, 10, 8, 7, 6],
+  [65, 46, 34, 27, 19, 10, 8, 7, 6],
+];
+
+/**
+ * f_i по табл. 7.3 СП 24 без интерполяции, в запас: строка — ближайшая
+ * меньшая табличная глубина (сопротивление с глубиной растёт), столбец —
+ * ближайший больший I_L (с ростом I_L сопротивление падает). Мельче 1 м
+ * таблица не идёт — берётся строка 1 м.
+ */
+function skinFriction(depthM, IL) {
+  let r = 0;
+  for (let i = 0; i < FRICTION_DEPTHS.length; i++) if (FRICTION_DEPTHS[i] <= depthM + 1e-9) r = i;
+  let c = FRICTION_IL.length - 1;
+  for (let j = FRICTION_IL.length - 1; j >= 0; j--) if (FRICTION_IL[j] >= IL - 1e-9) c = j;
+  return FRICTION[r][c];
+}
+
+/** Толщина слоя при расчёте трения — не более 2 м (прим. 2 к табл. 7.3 СП 24). */
+const FRICTION_LAYER = 2000;
+
+/** γ_c и γ_n формулы (6.35). */
+const HEAVE_GAMMA_C = 1.0;
+const HEAVE_GAMMA_N = 1.1;
+
+
 /* ── src/core/model.js ── */
 /** Модель навеса и значения по умолчанию. Все длины — мм, углы — градусы. */
 
@@ -1829,6 +1930,14 @@ function defaultModel() {
        */
       frostDepth: 0,
       soil: 'clay',
+      /**
+       * Состояние пучинистого грунта — строка табл. 6.12 СП 22 для касательных
+       * сил пучения. По умолчанию первая строка, самая тяжёлая: по ней же
+       * берётся обратная засыпка котлована.
+       */
+      soilState: 'wet',
+      /** Геотехническая категория 1 — τ_fh × 0,9 (прим. 5 к табл. 6.12). */
+      geoCat1: false,
     },
     roofing: 'prof8',
     rafters: {
@@ -1864,7 +1973,17 @@ function defaultModel() {
      * единственное, что держит лёгкий навес от вырыва вверх, поэтому
      * размеры задаёт пользователь, а расчёт их проверяет.
      */
-    postBase: { id: 'plate4m12', footing: 500, depth: 1200 },
+    postBase: {
+      id: 'plate4m12', footing: 500, depth: 1200,
+      /** Поверхность блока — коэффициент к τ_fh: залит в яму, неровности до 20 мм. */
+      surface: 'rough20',
+      /**
+       * Мера против выпучивания: 'none' — нет; 'replace' — пазухи засыпаны
+       * непучинистым грунтом (п. 6.8.12 СП 22), грунт у боковой поверхности
+       * блока не пучится, и проверка касательных сил не применяется.
+       */
+      antiHeave: 'none',
+    },
     wallPurlinTie: { id: 'plate12x2' },
     /** Столбы у стены — притянуты сквозными шпильками к газоблоку. */
     wallPosts: {
@@ -2245,6 +2364,9 @@ function analyseRafter(model, x, trib, ctx) {
     };
   });
   const uplift = solve(() => GAMMA_F.relieving * deadPerpN - windUpPerp);
+  // одна постоянная нагрузка с коэффициентом 0,9 — то, что держит фундамент
+  // от выпучивания (F в формуле (6.35) СП 22)
+  const permanent = solve(() => GAMMA_F.relieving * deadPerpN);
 
   // определяющий вариант — тот, где больше момент в пролёте
   const peak = (r) => r.M.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
@@ -2303,6 +2425,8 @@ function analyseRafter(model, x, trib, ctx) {
       purlin: Math.max(...byVariant.map((g) => g['ULS-1'].reactions[1].R)),
       wallUplift: uplift.reactions[0].R,
       purlinUplift: uplift.reactions[1].R,
+      wallDead: permanent.reactions[0].R,
+      purlinDead: permanent.reactions[1].R,
       wallSls: Math.max(...byVariant.map((g) => g.SLS.reactions[0].R)),
       purlinSls: Math.max(...byVariant.map((g) => g.SLS.reactions[1].R)),
       // скатная составляющая в том же сочетании, что и отрыв: снега в нём нет,
@@ -2384,6 +2508,9 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
   const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
   const up = solveBeam({ length: B, supports, EI, GAs, q: () => 0, point: loads.uplift, hinges, nEl: 160 });
+  const dead = loads.dead
+    ? solveBeam({ length: B, supports, EI, GAs, q: () => GAMMA_F.relieving * sec.weight, point: loads.dead, hinges, nEl: 160 })
+    : null;
 
   const spans = deflectionSpans(sls, B, supports).spans;
   const checks = [];
@@ -2395,7 +2522,10 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
     checks.push(steelShear(uls.maxV, sec.props, mat));
   }
   checks.push(deflectionCheck(spans, 200));
-  return { label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions, ...worstOf(checks) };
+  return {
+    label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions,
+    dead: dead?.reactions ?? null, ...worstOf(checks),
+  };
 }
 
 /* ───────────────── УЗЕЛ КРЕПЛЕНИЯ СТРОПИЛА ───────────────── */
@@ -2673,7 +2803,9 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
     // условная поперечная сила от выпучивания самого столба
     const QficX = wall ? 0 : qFic(N, phiX, mat);
     const QficY = !wall && mu.heldY ? qFic(N, phiY, mat) : 0;
-    return { r, N, Hwind, QficX, QficY, Nup: -(purlin.uplift[i]?.R ?? 0) };
+    // одна постоянная нагрузка при γ_f = 0,9 — против выпучивания морозом
+    const Nperm = Math.max(0, purlin.dead?.[i]?.R ?? 0) + GAMMA_F.relieving * sec.weight * H;
+    return { r, N, Hwind, QficX, QficY, Nperm, Nup: -(purlin.uplift[i]?.R ?? 0) };
   });
 
   // крест: вся сила вдоль ряда приходит по прогону в пролёт со связью
@@ -2788,7 +2920,7 @@ function analysePostRow(model, cfg, purlin, ctx, extra) {
     }
 
     return {
-      x: p.r.x, N, M, My, Nup, Hpost, Hy, Htie, Hbase, Mbase, sec, mat, lef, lefX, lefY, H, bolts,
+      x: p.r.x, N, M, My, Nup, Nperm: p.Nperm, Hpost, Hy, Htie, Hbase, Mbase, sec, mat, lef, lefX, lefY, H, bolts,
       diagram, diagramY, braced: wall, muX: mu.muX, muY: mu.muY,
       // что столб отдаёт тем, кто держит его верх
       Hwind: p.Hwind, QficX: p.QficX, QficY: p.QficY,
@@ -2907,10 +3039,21 @@ function analysePostBase(model, cfg, posts, ctx) {
     side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass,
     frost: { ...frost, applies: frostApplies, needDepth: needFrostDepth, ok: depth >= needFrostDepth },
   };
-  const frostCheck = () => (frostApplies
-    ? [foundationFrost(frost.df, depth,
-      `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
-    : []);
+  // касательные силы пучения (п. 6.8.6 СП 22): грунт смерзается с боковой
+  // поверхностью блока в зоне промерзания и тянет его вверх. Держат одна
+  // постоянная нагрузка при γ_f = 0,9 с весом блока и трение о талый грунт
+  // ниже промерзания. Замена грунта в пазухах на непучинистый (п. 6.8.12)
+  // снимает саму причину — тогда проверка не применяется
+  const measure = model.postBase.antiHeave ?? 'none';
+  const heave = heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure });
+  block.heave = heave;
+  const frostCheck = () => [
+    ...(frostApplies
+      ? [foundationFrost(frost.df, depth,
+        `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
+      : []),
+    ...(heave.applies ? [heave.check] : []),
+  ];
 
   if (base.kind === 'embed') {
     if (needsFixity) {
@@ -2944,9 +3087,69 @@ function analysePostBase(model, cfg, posts, ctx) {
     detail = { sigma, sigmaPlate, span, Na, c, ...block };
   }
 
+  // пучение размерами блока и исполнением базы не лечится: подбор базы и
+  // подбор по цене смотрят на всё остальное, а сама проверка остаётся в U
+  const sized = worstOf(checks.filter((c) => c !== heave.check));
   return {
     base, post: sec, N, uplift, H, M, needsFixity, concrete: model.opts.concreteClass ?? 'B20',
-    x: post.x, ...detail, ...worstOf(checks),
+    x: post.x, ...detail, ...worstOf(checks), Usized: sized.U,
+  };
+}
+
+/**
+ * Проверка (6.35) для блока под столбом ряда. Считается по самому лёгкому
+ * столбу: у него меньше всего постоянной нагрузки, а тянет грунт одинаково.
+ *
+ * A_fh — боковая поверхность блока в пределах расчётной глубины промерзания,
+ * верх блока — на уровне земли. τ_fh — по табл. 6.12 при нормативной глубине
+ * промерзания (d_th — глубина сезонного промерзания-оттаивания): она меньше
+ * расчётной, а τ с глубиной падает — в запас. Коэффициенты: поверхность блока
+ * (прим. 4) и геотехническая категория 1 (прим. 5, ×0,9).
+ *
+ * F_rf — трение о талый грунт ниже промерзания, формула (6.38): ΣR_f·A_f.
+ * R_f — по нормам на сваи: табл. 7.3 СП 24, слои не толще 2 м, в запас —
+ * см. skinFriction. Надбавки из примечаний 3 и 4 к таблице (плотные пески,
+ * малый коэффициент пористости) не берутся.
+ */
+function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure }) {
+  if (!frostApplies) return { applies: false, reason: frost.set ? 'nonHeaving' : 'noFrost' };
+  if (measure === 'replace') return { applies: false, reason: 'replaced', measure };
+  const post = posts.reduce((a, p) => (p.Nperm < a.Nperm ? p : a));
+  const stateId = model.site.soilState ?? 'wet';
+  const surface = HEAVE_SURFACES[model.postBase.surface ?? 'rough20'] ?? HEAVE_SURFACES.rough20;
+  const cat1 = !!model.site.geoCat1;
+  const tauTable = heaveTau(stateId, frost.dfn);
+  const tau = tauTable * surface.k * (cat1 ? 0.9 : 1);           // кПа
+  const perimeter = 4 * side;                                     // мм
+  const hFrozen = Math.min(frost.df, depth);
+  const hThawed = Math.max(0, depth - frost.df);
+  const A = (perimeter * hFrozen) / 1e6;                          // м²
+  const Abelow = (perimeter * hThawed) / 1e6;
+  const pull = tau * A * 1000;                                    // Н
+  const blockWeight = GAMMA_F.relieving * mass * G0;
+  const F = post.Nperm + blockWeight;
+  // трение о талый грунт ниже промерзания: слои не толще 2 м, f по средней глубине слоя
+  const IL = (HEAVE_STATES[stateId] ?? HEAVE_STATES.wet).IL;
+  const layers = [];
+  for (let z = frost.df; z < depth - 1e-6; z += FRICTION_LAYER) {
+    const h = Math.min(FRICTION_LAYER, depth - z);
+    const zMid = (z + h / 2) / 1000;
+    const f = skinFriction(zMid, IL);
+    layers.push({ from: z, h, zMid, f, A: (perimeter * h) / 1e6 });
+  }
+  const Frf = layers.reduce((a, l) => a + l.f * l.A * 1000, 0);    // Н
+  const gcgn = HEAVE_GAMMA_C / HEAVE_GAMMA_N;
+  const f2 = (v) => (v / 1000).toFixed(1).replace('.', ',');
+  const check = frostHeave(pull, F, Frf, gcgn,
+    `τ_fh = ${Math.round(tauTable)}${surface.k !== 1 ? ` × ${String(surface.k).replace('.', ',')}` : ''}${cat1 ? ' × 0,9' : ''} = ${Math.round(tau)} кПа на ${A.toFixed(2).replace('.', ',')} м² — тянет ${f2(pull)} кН; `
+    + `держат постоянная нагрузка ${f2(post.Nperm)} и блок ${f2(blockWeight)} кН`
+    + (layers.length
+      ? `, трение о талый грунт ниже промерзания ${f2(Frf)} кН на ${Abelow.toFixed(2).replace('.', ',')} м² (f = ${layers.map((l) => l.f).join(', ')} кПа, I_L ${String(IL).replace('.', ',')}) / 1,1`
+      : ', ниже промерзания блок не заходит — трения нет'));
+  return {
+    applies: true, measure, check, stateId, surface, cat1, tauTable, tau, perimeter, hFrozen, hThawed,
+    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gcgn, x: post.x,
+    ratio: pull / Math.max(1, F + gcgn * Frf),
   };
 }
 
@@ -3211,13 +3414,13 @@ function supportLoads(model, roof = analyseRoof(model)) {
     outer: {
       beamKey: 'purlin', postsKey: 'posts', label: 'Прогон по столбам',
       supports: [...model.posts.xs].sort((a, b) => a - b),
-      loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift') },
+      loads: { uls: pick('purlin'), sls: pick('purlinSls'), uplift: pick('purlinUplift'), dead: pick('purlinDead') },
       extra: { braced: false, thrust: 0, alongWall: alongOuter },
     },
     wall: {
       beamKey: 'wallPurlin', postsKey: 'wallPosts', label: 'Обвязка у стены',
       supports: [...model.wallPosts.xs].sort((a, b) => a - b),
-      loads: { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift') },
+      loads: { uls: pick('wall'), sls: pick('wallSls'), uplift: pick('wallUplift'), dead: pick('wallDead') },
       extra: { braced: true, thrust, alongWall },
     },
   };
@@ -3731,7 +3934,8 @@ function pickTies(model, target = 1) {
   }
   log.push({ key: 'postBase.block', label: `блок ${m.postBase.footing}×${m.postBase.footing}×${m.postBase.depth} мм`, U: null });
 
-  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.U, r.bases.wall.U));
+  // пучение исполнением базы не лечится — выбираем по всему остальному
+  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.Usized, r.bases.wall.Usized));
   // у забетонированного столба блок не может быть мельче заделки: если подбор
   // подрезал глубину ниже неё, в расчёт всё равно пойдёт заделка — приводим
   // ползунок к тому, что реально считается
@@ -3993,7 +4197,10 @@ async function searchByCost(model, opts = {}) {
     // и катет шва дискретны
     const NODES = ['ties', 'beamTies', 'bases', 'spliceJoints'];
     const elements = Math.max(...res.summary.filter((s) => !NODES.includes(s.key)).map((s) => s.U));
-    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map((s) => s.U));
+    // касательные силы пучения сечениями не лечатся — их решает мера против
+    // пучения, а не подбор; остальные проверки базы остаются в фильтре
+    const nodeU = (s) => (s.key === 'bases' ? Math.max(res.bases.outer.Usized, res.bases.wall.Usized) : s.U);
+    const nodes = Math.max(...res.summary.filter((s) => NODES.includes(s.key)).map(nodeU));
     if (!(elements <= target && nodes <= 1)) continue;
     Object.assign(m, withTies);
     const bom = billOfMaterials(res);
@@ -4973,6 +5180,23 @@ const CONTROLS = [
         : `Глубина ${m.postBase.depth} мм — блок держит отрыв${byFrost ? ' и ниже промерзания' : ''}`;
     }]],
     note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Если задана глубина промерзания, подошва для пучинистого грунта должна быть не выше неё.' },
+  { k: 'postBase.surface', label: 'Поверхность блока', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
+    options: () => Object.entries(HEAVE_SURFACES).map(([id, v]) => ({ id, label: v.label })),
+    note: 'Коэффициент к силе пучения (прим. 4 к табл. 6.12 СП 22): бетон, залитый прямо в яму, повторяет все неровности стенок, и мёрзлому грунту есть за что держаться.' },
+  { k: 'postBase.antiHeave', label: 'Против пучения', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
+    options: () => [
+      { id: 'none', label: 'ничего — блок в родном грунте' },
+      { id: 'replace', label: 'пазухи засыпаны непучинистым грунтом' }],
+    live: (r) => {
+      const h = r?.bases?.outer?.heave;
+      if (!h) return '';
+      if (h.reason === 'noFrost') return 'глубина промерзания не задана — пучение не проверяется';
+      if (h.reason === 'nonHeaving') return 'грунт непучинистый — касательных сил нет';
+      if (h.reason === 'replaced') return 'проверка касательных сил не применяется: у блока непучинистый грунт';
+      return `грунт тянет блок вверх с силой ${f2(h.pull / 1000)} кН, держат ${f2(h.F / 1000)} кН`
+        + (h.check.U > 1 ? ` — не проходит в ${Math.round(h.check.U)} раз` : ' — проходит');
+    },
+    note: 'Засыпка пазух песком средней крупности или ПГС с отводом воды — мера из п. 6.8.12 СП 22: у боковой поверхности блока грунт не пучится. Ширину засыпки и дренаж калькулятор не считает — их конструируют.' },
   { k: 'bracing.along', label: 'Что держит верх ряда вдоль стены', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', options: () => [
       { id: 'none', label: 'ничего — столбы консоли, μ = 2' },
       { id: 'cross', label: 'крест в крайнем пролёте — μ = 1' }],
@@ -5031,6 +5255,10 @@ const CONTROLS = [
     note: 'С карты нормативных глубин промерзания — она даётся для суглинков и глин, на ваш грунт калькулятор пересчитает сам. 0 — не задано: тогда фундамент по морозу не проверяется.' },
   { k: 'site.soil', label: 'Грунт на площадке', help: 'frost.html', helpTitle: 'мороз, пучение и глубина фундамента', type: 'select',
     options: () => Object.entries(SOILS).map(([id, v]) => ({ id, label: `${v.label}${v.heaving ? ' — пучинистый' : ''}` })) },
+  { k: 'site.soilState', label: 'Состояние пучинистого грунта', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
+    options: () => Object.entries(HEAVE_STATES).map(([id, v]) => ({ id, label: `${v.label} — τ ${v.tau[0]} кПа` })),
+    note: 'Строка табл. 6.12 СП 22: чем влажнее и мягче грунт, тем сильнее он тянет блок за бока. I_L — показатель текучести глинистого грунта, S_r — степень влажности песка; без изысканий берите первую строку, по ней же считается обратная засыпка.' },
+  { k: 'site.geoCat1', label: 'Геотехническая категория 1 (τ × 0,9)', type: 'check' },
   { k: 'site.drift', label: 'Снеговой мешок у стены дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'check' },
   { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
   { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },
@@ -5354,6 +5582,12 @@ function renderInspector(res) {
     // блок бетона — общая часть обеих баз: вес против отрыва и как его добрать
     kv.push(['Блок бетона', `${el.side}×${el.side}×${el.depth} мм = ${Math.round(el.mass)} кг`]);
     kv.push(['Нужно против отрыва', `${Math.round(el.needMass)} кг`]);
+    if (el.heave?.applies) {
+      kv.push(['Пучение: тянет', `${kN(el.heave.pull)} кН — τ_fh ${Math.round(el.heave.tau)} кПа на ${el.heave.A.toFixed(2).replace('.', ',')} м²`]);
+      kv.push(['Пучение: держат', `${kN(el.heave.F)} кН — постоянная ${kN(el.heave.Nperm)} и блок ${kN(el.heave.blockWeight)}`]);
+    } else if (el.heave?.reason === 'replaced') {
+      kv.push(['Пучение', 'пазухи засыпаны непучинистым грунтом — не проверяется']);
+    }
     if (el.frost?.set) {
       kv.push(['Промерзание', el.frost.soil.heaving
         ? `d_fn ${Math.round(el.frost.dfn)} мм, расчётная ${Math.round(el.frost.df)} мм · ${el.frost.soil.label}`
@@ -5476,11 +5710,22 @@ function frostWarnings(res) {
       а не вес против отрыва — ${more}.</div>`];
   }
   if (!f.soil.heaving) return [];
-  return [`<div class="warn"><b>Касательные силы пучения не проверены.</b>
-    Подошва ниже промерзания — условие необходимое, но не достаточное: пучинистый грунт
-    (${f.soil.label}) смерзается с боковой поверхностью столба и тянет его вверх, даже если
-    подошва глубже промерзания. Этот расчёт пока не сделан — что с этим делают на практике:
-    ${more}.</div>`];
+  const h = res.bases.outer.heave;
+  if (h.reason === 'replaced') {
+    return [`<div class="warn"><b>Касательные силы пучения не проверяются — принята засыпка пазух непучинистым грунтом.</b>
+      Так расчёт верен, только если на площадке так и сделано: вокруг блока на всю глубину промерзания —
+      песок средней крупности, крупный или ПГС, и воде есть куда уйти. Засыпка вынутым суглинком по
+      СП 22 считается пучинистой — ${more}.</div>`];
+  }
+  if (!h.applies) return [];
+  const kN = (v) => f2(v / 1000);
+  return [`<div class="warn bad"><b>Блок выдавит морозом: грунт тянет вверх ${kN(h.pull)} кН, держат ${kN(h.F)} кН.</b>
+    Пучинистый грунт (${f.soil.label}) смерзается с боковой поверхностью блока на глубину промерзания и тянет его
+    за бока, даже когда подошва ниже промерзания (п. 6.8.6 СП 22). Размером блока это не лечится:
+    шире блок — больше поверхность, за которую тянут. Что помогает: засыпать пазухи непучинистым грунтом
+    (поле «Против пучения»), гладкая опалубка вместо заливки в яму, или конструктивные меры —
+    уширение ниже промерзания, скользящий слой, утеплённый мелкозаглублённый фундамент; их калькулятор
+    не считает. Трение о талый грунт ниже промерзания учтено по табл. 7.3 СП 24 — ${kN(h.Frf)} кН. ${more}.</div>`];
 }
 
 /** Склонение числительного: 1 стык, 2 стыка, 5 стыков. */
@@ -6077,6 +6322,13 @@ function buildReport(res) {
       <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
       <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
       <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
+      <tr><td>Касательные силы пучения</td><td>${(() => {
+        const h = res.bases.outer.heave;
+        if (h.applies) return `τ_fh·A_fh = ${f2(h.pull / 1000)} кН против F = ${f2(h.F / 1000)} кН (постоянная нагрузка и блок при γ_f = 0,9) плюс трение о талый грунт ${f2(h.Frf / 1000)} кН / 1,1 — ${h.check.U > 1 ? 'не проходит' : 'проходит'} (СП 22, ф. (6.35), (6.38), табл. 6.12; СП 24, табл. 7.3)`;
+        if (h.reason === 'replaced') return 'не проверяются: принята засыпка пазух непучинистым грунтом (п. 6.8.12 СП 22)';
+        if (h.reason === 'nonHeaving') return 'грунт непучинистый';
+        return 'глубина промерзания не задана — не проверено';
+      })()}</td></tr>
     </table>
     <h2>5. Массы конструкции</h2>
     <p>Собственный вес всех элементов входит в расчёт нагрузок: стропила и прогоны — погонным
@@ -6113,8 +6365,8 @@ function buildReport(res) {
     <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
     ${spliceReportNote(b)}
     <h2>8. Ограничения</h2>
-    <p>Расчёт не охватывает: расчёт основания по грунту, касательные силы морозного пучения,
-    диагонали в плоскости кровли, огнестойкость, температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
+    <p>Расчёт не охватывает: расчёт основания по грунту (несущая способность и осадка), анкерные
+    уширения и другие конструктивные меры против пучения, кроме засыпки пазух непучинистым грунтом, диагонали в плоскости кровли, огнестойкость, температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
     с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
     <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016: формула (Б.5),
     перечисление «в» для m₂, перечисление «г» с формулой (Б.6) для длины зоны, перечисление «д»

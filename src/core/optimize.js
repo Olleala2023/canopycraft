@@ -137,7 +137,8 @@ export function pickTies(model, target = 1) {
   }
   log.push({ key: 'postBase.block', label: `блок ${m.postBase.footing}×${m.postBase.footing}×${m.postBase.depth} мм`, U: null });
 
-  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.U, r.bases.wall.U));
+  // пучение исполнением базы не лечится — выбираем по всему остальному
+  tryAll('postBase', POST_BASES, (r) => Math.max(r.bases.outer.Usized, r.bases.wall.Usized));
   // у забетонированного столба блок не может быть мельче заделки: если подбор
   // подрезал глубину ниже неё, в расчёт всё равно пойдёт заделка — приводим
   // ползунок к тому, что реально считается
