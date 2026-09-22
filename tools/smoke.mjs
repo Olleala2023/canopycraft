@@ -282,6 +282,20 @@ async function main() {
       await visitAll();
     });
 
+    await step('диагонали в плоскости кровли', async () => {
+      await ev("(() => { const el = document.getElementById('c_bracing_along'); el.value = 'roof'; el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+      if (!(await ev("/кровле/.test(document.querySelector('#summary [data-sel=\"bracing\"]')?.textContent ?? '')"))) fail('нет карточки «Связи по кровле»');
+      await ev("document.getElementById('tab-nodes').click()");
+      if (!(await ev("[...document.querySelectorAll('#canvas svg text')].some((t) => /СВЯЗИ ПО КРОВЛЕ/.test(t.textContent))"))) fail('нет чертежа ячейки');
+      for (const bays of ['1', '3', '2']) {
+        await ev(`(() => { const el = document.getElementById('c_bracing_roofBays'); el.value = '${bays}'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      }
+      await visitAll();
+      await ev(stubs);
+      await ev("document.getElementById('btn-report').click()");
+      if (!(await ev("/плоскости кровли/.test(document.getElementById('report').textContent)"))) fail('в отчёте нет связей по кровле');
+    });
+
     await step('мороз: пучение и замена грунта', async () => {
       const set = (id, v) => ev(`(() => { const el = document.getElementById('${id}'); el.value = '${v}'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
       await set('c_site_frostDepth', '1200');

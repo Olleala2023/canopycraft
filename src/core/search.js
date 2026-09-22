@@ -11,18 +11,19 @@
  *      перебираются число столбов и сечения прогонов и стоек;
  *   3. собранный вариант проверяется целиком.
  *
- * Наружный ряд перебирается в двух схемах: без связей и с крестом в крайнем
- * пролёте. Без связей столб — консоль, и его сечение определяет гибкость при
- * μ = 2; с крестом столбы легче, но появляются диагонали. Что дешевле, зависит
- * от высоты, числа столбов и цен — поэтому считаются обе, и в списке видно,
- * какая выбрана.
+ * Наружный ряд перебирается в трёх схемах: без связей, с крестом в крайнем
+ * пролёте и с диагоналями в плоскости кровли. Без связей столб — консоль, и
+ * его сечение определяет гибкость при μ = 2; со связями столбы легче, но
+ * появляются диагонали. Что дешевле, зависит от высоты, числа столбов и цен —
+ * поэтому считаются все, и в списке видно, какая выбрана.
  *
  * Внутри одного материала стоимость пропорциональна площади сечения (дерево
  * считается по объёму, металл по массе), поэтому сортамент, упорядоченный по A,
  * упорядочен и по цене: первое прошедшее сечение при переборе снизу и есть
  * самое дешёвое.
  */
-import { analyse, analyseRoof, analyseLineBeam, analysePostRow, analyseCross, supportLoads, billOfMaterials } from './analysis.js';
+import { analyse, analyseRoof, analyseLineBeam, analysePostRow, analyseCross, analyseRoofBrace, supportLoads, billOfMaterials } from './analysis.js';
+import { propsFor } from './materials.js';
 import { ladder, section } from './sections.js';
 import { spread } from './model.js';
 import { pickTies } from './optimize.js';
@@ -163,7 +164,23 @@ export async function searchByCost(model, opts = {}) {
       const beam = analyseLineBeam(m, beamSec.id, xs, cfg.loads, cfg.label);
       const postCfg = m[cfg.postsKey];
       let postSec = null, brace = null;
-      if (along === 'cross') {
+      if (along === 'roof') {
+        // диагонали по кровле к столбам не привариваются: столб — как обычно,
+        // диагональ — самая дешёвая проходящая при ширине ячейки из модели
+        postSec = await cheapest(postList, async (s) => {
+          const row = analysePostRow(m, { ...postCfg, sectionId: s.id }, beam, sl.ctx, cfg.extra);
+          return Math.max(...row.map((p) => p.U));
+        }, target, budget);
+        if (postSec) {
+          const row = analysePostRow(m, { ...postCfg, sectionId: postSec.id }, beam, sl.ctx, cfg.extra);
+          const wpSec = section(m.wallPurlin.sectionId);
+          const beams = { purlin: beam, wallPurlin: { sec: wpSec, mat: propsFor(wpSec, m.opts) } };
+          const rafters = analyseRoof(m).rafters;
+          const b = await cheapest(braceList, async (bs) =>
+            analyseRoofBrace({ ...m, bracing: { ...m.bracing, sectionId: bs.id } }, row, rafters, beams)?.U ?? Infinity, target, budget);
+          if (b) brace = b.id; else postSec = null;
+        }
+      } else if (along === 'cross') {
         // столб с крестом проходит, только если к нему приваривается проходящая
         // диагональ: катет не меньше табличного и не больше 1,2 толщины стенки,
         // и к стенке 2 мм не приварить ничего. Отсев по доминированию здесь
@@ -200,7 +217,7 @@ export async function searchByCost(model, opts = {}) {
   for (let i = 0; i < finalists.length; i++) {
     const base = finalists[i].model;
     const outers = [];
-    for (const along of ['none', 'cross']) {
+    for (const along of ['none', 'cross', 'roof']) {
       const o = await pickRow(base, 'outer', purlinList, postList,
         ['Прогон наружный', 'Столбы наружные', 'Связи наружного ряда'], along);
       if (o) outers.push(o);
@@ -255,7 +272,9 @@ export async function searchByCost(model, opts = {}) {
       posts: `${section(o.model.posts.sectionId).label} × ${o.model.posts.xs.length}`,
       bracing: o.model.bracing.along === 'cross'
         ? `крест ${section(o.model.bracing.sectionId).label}`
-        : 'без связей',
+        : o.model.bracing.along === 'roof'
+          ? `по кровле ${section(o.model.bracing.sectionId).label}`
+          : 'без связей',
       wallPosts: `${section(o.model.wallPosts.sectionId).label} × ${o.model.wallPosts.xs.length}`,
     },
   }));

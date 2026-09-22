@@ -163,29 +163,40 @@ const CONTROLS = [
     note: 'Засыпка пазух песком средней крупности или ПГС с отводом воды — мера из п. 6.8.12 СП 22: у боковой поверхности блока грунт не пучится. Ширину засыпки и дренаж калькулятор не считает — их конструируют.' },
   { k: 'bracing.along', label: 'Что держит верх ряда вдоль стены', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', options: () => [
       { id: 'none', label: 'ничего — столбы консоли, μ = 2' },
-      { id: 'cross', label: 'крест в крайнем пролёте — μ = 1' }],
+      { id: 'cross', label: 'крест в крайнем пролёте — μ = 1' },
+      { id: 'roof', label: 'диагонали в плоскости кровли — μ = 1' }],
     live: (r) => {
       if (!r) return '';
-      if (!r.cross) {
-        return r.model.bracing?.along === 'cross'
-          ? 'Крест не поставить: в ряду нужен хотя бы один пролёт'
-          : `μ вдоль ряда 2,0 — верх свободен, ветер вдоль стены ${kN(r.thrust.alongOuter)} кН идёт в консоли столбов. Поперёк ряда верх держат стропила: μ = 1`;
+      const along = r.model.bracing?.along;
+      if (!r.brace) {
+        if (along === 'cross') return 'Крест не поставить: в ряду нужен хотя бы один пролёт';
+        if (along === 'roof') return 'Диагонали по кровле не поставить: нужно хотя бы два стропила';
+        return `μ вдоль ряда 2,0 — верх свободен, ветер вдоль стены ${kN(r.thrust.alongOuter)} кН идёт в консоли столбов. Поперёк ряда верх держат стропила: μ = 1`;
       }
-      const c = r.cross;
-      return `μ = 1 в обеих плоскостях. Крест держит ${kN(c.F)} кН: ветер ${kN(c.wind / c.bays.length)} + условная сила столбов ${kN(c.qfic / c.bays.length)} · U ${f2(c.U)}`;
+      const c = r.brace;
+      const per = r.cross ? r.cross.bays.length : 1;
+      return `μ = 1 в обеих плоскостях. ${r.cross ? 'Крест' : 'Диагонали по кровле'} держат ${kN(c.F)} кН: ветер ${kN(c.wind / per)} + условная сила столбов ${kN(c.qfic / per)} · U ${f2(c.U)}`;
     },
-    note: 'μ не выбирается, а следует из того, что держит верх. Поперёк ряда это стропила — распорки до стены; их крепление и обвязка у стены на это усилие проверяются. Вдоль стены стропила на шарнирах держать не могут: без креста столб — консоль, и сечение определяет гибкость. Подкос от столба к прогону связью не является.' },
+    note: 'μ не выбирается, а следует из того, что держит верх. Поперёк ряда это стропила — распорки до стены; их крепление и обвязка у стены на это усилие проверяются. Вдоль стены стропила на шарнирах держать не могут: без связи столб — консоль, и сечение определяет гибкость. Крест ставится между столбами и добавляет им вертикаль; диагонали по кровле идут от прогона к обвязке и отдают силу в шпильки у дома. Подкос от столба к прогону связью не является.' },
   { k: 'bracing.bays', label: 'Крест в пролётах', type: 'select', numeric: true, options: () => [
       { id: '1', label: 'в одном крайнем' },
       { id: '2', label: 'в обоих крайних — усилие делится пополам' }],
     live: (r) => (r?.cross
       ? `пролёт ${Math.round(r.cross.span)} мм, диагонали ${r.cross.count} × ${Math.round(r.cross.length)} мм; столбам пролёта +${kN(r.cross.V)} кН в сжатие и ${kN(r.cross.Vup)} в отрыв`
-      : 'связей нет — не используется') },
-  { k: 'bracing.sectionId', label: 'Сечение диагонали креста', type: 'select', options: braceOpts, pick: 'bracing',
-    live: (r) => (r?.cross
-      ? `растяжение ${kN(r.cross.T)} кН · гибкость ${Math.round(r.cross.lambda)} из 400 · шов k = ${r.cross.kf} мм · U ${f2(r.cross.U)}${r.cross.U > 1 ? ` — не проходит: ${r.cross.worst.name.toLowerCase()}` : ''}`
+      : 'только для креста') },
+  { k: 'bracing.roofBays', label: 'Ячейка диагоналей по кровле', type: 'select', numeric: true, options: () => [
+      { id: '1', label: 'один шаг стропил' },
+      { id: '2', label: 'два шага стропил' },
+      { id: '3', label: 'три шага стропил' }],
+    live: (r) => (r?.roofBrace
+      ? `ячейка ${Math.round(r.roofBrace.w)} × ${Math.round(r.roofBrace.Lr)} мм: диагональ тянет ${kN(r.roofBrace.T)} кН при силе ${kN(r.roofBrace.F)}, крайним стропилам ±${kN(r.roofBrace.Nchord)} кН`
+      : 'только для диагоналей по кровле'),
+    note: 'Ячейка узкая и длинная, диагональ почти параллельна стропилам: усилие в ней во столько раз больше силы, во сколько она длиннее ширины ячейки. Шире ячейка — легче диагонали, крепление и крайние стропила.' },
+  { k: 'bracing.sectionId', label: 'Сечение диагоналей', type: 'select', options: braceOpts, pick: 'bracing',
+    live: (r) => (r?.brace
+      ? `растяжение ${kN(r.brace.T)} кН · гибкость ${Math.round(r.brace.lambda)} из 400 · U ${f2(r.brace.U)}${r.brace.U > 1 ? ` — не проходит: ${r.brace.worst.name.toLowerCase()}` : ''}`
       : 'связей нет — не используется'),
-    note: 'Диагонали работают на растяжение по очереди и привариваются к столбам швом по контуру торца. Катет не меньше табличного по толщине столба и не больше 1,2 толщины диагонали: стенку 2 мм к столбу 3 мм не приварить.' },
+    note: 'Диагонали работают на растяжение по очереди. К стали привариваются швом по контуру торца: катет не меньше табличного по толщине более толстого элемента и не больше 1,2 толщины более тонкого — стенку 2 мм к столбу 3 мм не приварить. К дереву — болтами М12, не больше четырёх на конец.' },
 
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
@@ -515,6 +526,16 @@ function renderInspector(res) {
     kv.push(['В столбы пролёта', `${kN(el.V)} кН в сжатие, ${kN(el.Vup)} в отрыв`]);
     kv.push(['Гибкость', `${Math.round(el.lambda)} из 400`]);
     kv.push(['Шов', `${Math.round(el.weldLength)} мм по контуру торца, катет ${el.kf} мм`]);
+  } else if (el.kind === 'roofBrace') {
+    kv.push(['Где', `крайняя ячейка ${Math.round(el.w)} × ${Math.round(el.Lr)} мм — ${plural(el.bays, 'шаг', 'шага', 'шагов')} стропил`]);
+    kv.push(['Диагонали', `${el.count} × ${el.sec.label}, длина ${Math.round(el.length)} мм`]);
+    kv.push(['Держат вдоль стены', `${kN(el.F)} кН = ветер ${kN(el.wind)} + условная сила столбов ${kN(el.qfic)}`]);
+    kv.push(['Растяжение диагонали', `${kN(el.T)} кН — в ${f2(el.T / el.F)} раза больше силы`]);
+    kv.push(['Крайним стропилам', `±${kN(el.Nchord)} кН продольной силы`]);
+    kv.push(['Гибкость', `${Math.round(el.lambda)} из 400`]);
+    for (const e of el.ends) {
+      kv.push([`Крепление ${e.where}`, e.welded ? `шов по контуру торца, катет ${e.kf} мм` : `${e.n} × М12, болт как нагель ${kN(e.T1)} кН`]);
+    }
   } else if (el.kind === 'splice') {
     kv.push(['Решение', el.solution]);
     kv.push(['Сечение стыка', `${Math.round(el.x)} мм от левого края`]);
@@ -921,7 +942,8 @@ function renderSearch(r, before) {
         <td>${o2(state.model.battens.sectionId)} / ${state.model.battens.spacing}</td>
         <td>${o2(state.model.purlin.sectionId)}</td>
         <td>${o2(state.model.posts.sectionId)} × ${state.model.posts.xs.length}</td>
-        <td>${state.model.bracing?.along === 'cross' ? `крест ${o2(state.model.bracing.sectionId)}` : 'без связей'}</td>
+        <td>${state.model.bracing?.along === 'cross' ? `крест ${o2(state.model.bracing.sectionId)}`
+          : state.model.bracing?.along === 'roof' ? `по кровле ${o2(state.model.bracing.sectionId)}` : 'без связей'}</td>
         <td>${o2(state.model.wallPurlin.sectionId)}</td>
         <td>${o2(state.model.wallPosts.sectionId)} × ${state.model.wallPosts.xs.length}</td><td></td></tr>
       ${rows}
@@ -929,7 +951,8 @@ function renderSearch(r, before) {
     <div class="row2" style="gap:14px;margin-top:10px">
       <div class="hint" style="border:0;padding:0">
         Перебираются сечения и число стропил, столбов обоих рядов, прогонов и обрешётки,
-        а наружный ряд — в двух схемах: без связей и с крестом в крайнем пролёте.
+        а наружный ряд — в трёх схемах: без связей, с крестом в крайнем пролёте и с диагоналями
+        в плоскости кровли.
         Геометрия не трогается. Сортамент берётся того же материала, что выбран сейчас.
       </div>
       <div class="hint" style="border:0;padding:0">
@@ -1248,7 +1271,9 @@ function buildReport(res) {
       <tr><td>Раскрепление наружного ряда</td><td>поперёк ряда верх держат стропила: сила ${kN(res.bracing.holdX)} кН уходит по ним к стене и проверяется в креплении стропил и в обвязке;
         вдоль стены ${res.cross
           ? `крест из диагоналей ${res.cross.sec.label} в ${res.cross.bays.length === 2 ? 'обоих крайних пролётах' : 'крайнем пролёте'}, держит ${kN(res.cross.F)} кН (ветер плюс условная поперечная сила столбов по формуле (18) СП 16)`
-          : 'связей нет — столбы консоли, μ = 2, ветер вдоль стены идёт в них'}</td></tr>
+          : res.roofBrace
+            ? `диагонали ${res.roofBrace.sec.label} в плоскости кровли в крайней ячейке ${Math.round(res.roofBrace.w)} × ${Math.round(res.roofBrace.Lr)} мм, держат ${kN(res.roofBrace.F)} кН и отдают их по обвязке в шпильки у дома; крайние стропила ячейки проверены как стойки фермы`
+            : 'связей нет — столбы консоли, μ = 2, ветер вдоль стены идёт в них'}</td></tr>
       <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
       <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
       <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
@@ -1280,6 +1305,7 @@ function buildReport(res) {
     ${checkRows(`Наружный столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
     ${checkRows(`Стеновой столб ${worstWallPost.sec.label} и его крепление (самый нагруженный)`, worstWallPost.checks)}
     ${res.cross ? checkRows(`Связи наружного ряда: крест ${res.cross.sec.label}`, res.cross.checks) : ''}
+    ${res.roofBrace ? checkRows(`Связи в плоскости кровли: диагонали ${res.roofBrace.sec.label}`, res.roofBrace.checks) : ''}
     <h2>4. Узлы и фундамент (оценочно)</h2>
     <table>
       <tr><td>Горизонтальный распор на стеновой ряд</td><td>${kN(res.bracing.toWall)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)} + верх наружного ряда ${kN(res.bracing.holdX)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>

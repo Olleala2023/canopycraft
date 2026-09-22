@@ -463,8 +463,9 @@ export function analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts) {
  */
 export function postMu(model, row) {
   if (row === 'wall') return { muX: 1, muY: 1, heldX: 'стена', heldY: 'стена' };
-  const cross = model.bracing?.along === 'cross';
-  return { muX: 1, muY: cross ? 1 : 2, heldX: 'стропила', heldY: cross ? 'крест' : null };
+  const along = model.bracing?.along;
+  const held = along === 'cross' ? 'крест' : along === 'roof' ? 'диагонали по кровле' : null;
+  return { muX: 1, muY: held ? 1 : 2, heldX: 'стропила', heldY: held };
 }
 
 /** Отступ точек крепления диагоналей креста от базы и от оголовка, мм. */
@@ -657,6 +658,101 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
       ...worstOf(checks),
     };
   });
+}
+
+/** Болт крепления диагонали к деревянному элементу и наибольшее их число в узле. */
+const BRACE_BOLT = { d: 12, grade: '5.8', max: 4 };
+
+/**
+ * Крепление конца диагонали к балке: к стальной — шов по контуру торца, к
+ * деревянной — болты М12 как нагели (табл. 20 СП 64): число подбирается с
+ * тем же запасом 0,85, что у крепежа стропил, но не больше четырёх — больше
+ * в торец диагонали не поставить.
+ */
+function braceEnd(T, brace, beam, where) {
+  if (beam.sec.material === 'steel') {
+    const tMin = Math.min(brace.t ?? 2, beam.sec.t ?? 3);
+    const kfMin = weldMinLeg(Math.max(brace.t ?? 2, beam.sec.t ?? 3));
+    const kfMax = 1.2 * tMin;
+    const kf = kfMin;
+    const line = weldLine(brace.b, brace.h);
+    const note = `${where}: шов ${Math.round(line.length)} мм по контуру торца ${brace.label}, катет ${kf} мм`;
+    const checks = [
+      weldMetal(T / (WELD.betaF * kf * line.length), WELD.Rwf, note),
+      weldFusion(T / (WELD.betaZ * kf * line.length), beam.mat.Run, note),
+      weldLeg(kf, kfMin, kfMax, `${where}: стенки ${brace.t} и ${beam.sec.t} мм`),
+    ];
+    return { where, welded: true, kf, weldLength: line.length, checks };
+  }
+  const cap = shearCapacity({ kind: 'bolt', d: BRACE_BOLT.d, len: 0 }, { woodWidth: beam.sec.b, mv: beam.mat.mv ?? 1 });
+  const n = Math.min(BRACE_BOLT.max, Math.max(1, Math.ceil(T / (TIE_TARGET * cap.T))));
+  const dowel = tieShear(T, n, cap.T, `${where}: ${n} × М${BRACE_BOLT.d} в ${beam.sec.label}, T = ${(cap.T / 1000).toFixed(2).replace('.', ',')} кН · ${cap.governs}`);
+  dowel.name = `Болты в древесине — ${where}`;
+  const shear = boltShear(T / n, BRACE_BOLT.d, BRACE_BOLT.grade);
+  shear.name = `Срез болта — ${where}`;
+  return { where, welded: false, n, T1: cap.T, checks: [dowel, shear] };
+}
+
+/**
+ * Диагонали в плоскости кровли: горизонтальная ферма в крайней ячейке.
+ *
+ * Пояса фермы — наружный прогон и обвязка у стены, стойки — крайние стропила
+ * ячейки, раскосы — две диагонали, работающие на растяжение по очереди.
+ * Сила вдоль стены — ветер, пришедший на наружный ряд, и условные поперечные
+ * силы его столбов — приходит по прогону в ячейку и уходит по обвязке в
+ * шпильки у дома. Столбы вертикали от связи не получают, в отличие от креста.
+ *
+ * Ячейка узкая и длинная: ширина w — один-три шага стропил, длина — скат
+ * между опорами L_ск. Диагональ почти параллельна стропилам, поэтому:
+ *   растяжение диагонали  T = F·l/w,  l = √(w² + L_ск²)
+ *   продольная в стропиле N = F·L_ск/w — в сжатие одному, в растяжение другому
+ * Оба крайних стропила проверяются на сжатие с изгибом с этой добавкой — ветер
+ * дует в обе стороны.
+ */
+export function analyseRoofBrace(model, posts, rafters, beams) {
+  if (model.bracing?.along !== 'roof' || rafters.length < 2) return null;
+  const sec = section(model.bracing.sectionId);
+  const mat = propsFor(sec, model.opts);
+  const xs = rafters.map((r) => r.x);
+  const k = Math.min(Math.max(1, model.bracing.roofBays ?? 2), xs.length - 1);
+  const w = xs[k] - xs[0];
+  const Lr = rafters[0].xSup;                              // скат между опорами, мм
+  const length = Math.hypot(w, Lr);
+  const wind = posts.reduce((a, p) => a + (p.holdY - p.QficY), 0);
+  const qfic = posts.reduce((a, p) => a + p.QficY, 0);
+  const F = wind + qfic;
+  const T = (F * length) / w;
+  const Nchord = (F * Lr) / w;
+  const i = Math.min(sec.props.ix, sec.props.iy);
+  const lambda = length / i;
+  const f2 = (v) => (v / 1000).toFixed(2).replace('.', ',');
+
+  const ends = [
+    braceEnd(T, sec, beams.purlin, 'у прогона'),
+    braceEnd(T, sec, beams.wallPurlin, 'у обвязки'),
+  ];
+  // крайние стропила ячейки — стойки фермы: к их сжатию добавляется N
+  const chords = [rafters[0], rafters[k]].map((r, j) => {
+    const N = r.N + Nchord;
+    const c = r.sec.material === 'timber'
+      ? timberCombined(N, r.Mmax, r.sec, r.mat, r.xSup / (r.sec.h / Math.sqrt(12)))
+      : steelBeamColumn(N, r.Mmax, r.sec.props, r.mat, r.xSup, 'x');
+    c.name = `Стропило ${j === 0 ? 1 : k + 1} — стойка связевой фермы`;
+    c.note = `${c.note ?? ''}; N = ${f2(r.N)} + ${f2(Nchord)} кН от фермы`;
+    return c;
+  });
+  const checks = [
+    braceTension(T, sec.props.A, mat,
+      `${sec.label}: ветер ${f2(wind)} + условная сила столбов ${f2(qfic)} кН, ячейка ${Math.round(w)} × ${Math.round(Lr)} мм`),
+    braceSlenderness(lambda, `l = ${Math.round(length)} мм, i = ${i.toFixed(1).replace('.', ',')} мм`),
+    ...ends.flatMap((e) => e.checks),
+    ...chords,
+  ];
+  return {
+    kind: 'roof', sec, mat, bays: k, count: 2, F, wind, qfic, T, Nchord, w, Lr, length, lambda,
+    x0: xs[0], x1: xs[k], ends, rafterIdx: [0, k],
+    ...worstOf(checks),
+  };
 }
 
 /**
@@ -1221,12 +1317,18 @@ export function analyse(model) {
   // по стропилам уходит к стене — в узлы крепления, обвязку и стеновой ряд
   const holdX = posts.reduce((a, p) => a + p.holdX, 0);
   const toWall = sl.thrust.total + holdX;
-  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx, { ...sl.wall.extra, thrust: toWall });
+  // диагонали по кровле отдают силу вдоль стены по обвязке в шпильки: ветер
+  // там уже учтён целиком, добавляются условные силы наружных столбов
+  const roofQfic = model.bracing?.along === 'roof' ? posts.reduce((a, p) => a + p.QficY, 0) : 0;
+  const wallPosts = analysePostRow(model, model.wallPosts, wallPurlin, ctx,
+    { ...sl.wall.extra, thrust: toWall, alongWall: sl.wall.extra.alongWall + roofQfic });
   const nR = Math.max(1, model.rafters.xs.length);
   const ties = analyseTies(model, rafters, ctx, { outer: holdX / nR, wall: toWall / nR });
   const lateral = wallPurlinLateral(model, wallPurlin, sl.wall.supports, toWall);
   Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]), { lateral, lateralH: toWall });
   const cross = analyseCross(model, posts);
+  const roofBrace = analyseRoofBrace(model, posts, rafters, { purlin, wallPurlin });
+  const brace = cross ?? roofBrace;
   const beamTies = analyseBeamTies(model, purlin, wallPurlin, posts, wallPosts);
   const bases = analysePostBases(model, posts, wallPosts, ctx);
   const ca = Math.cos(deg(model.geom.alpha));
@@ -1263,7 +1365,7 @@ export function analyse(model) {
     { key: 'bases', label: 'База столба', U: Math.max(bases.outer.U, bases.wall.U),
       worst: (bases.outer.U > bases.wall.U ? bases.outer : bases.wall).worst },
   ];
-  if (cross) all.push({ key: 'bracing', label: 'Связи ряда', U: cross.U, worst: cross.worst });
+  if (brace) all.push({ key: 'bracing', label: cross ? 'Связи ряда' : 'Связи по кровле', U: brace.U, worst: brace.worst });
   if (spliceJoints.length) {
     const worstSplice = spliceJoints.reduce((a, b) => (a.U > b.U ? a : b));
     all.push({ key: 'spliceJoints', label: 'Стык по длине', U: worstSplice.U, worst: worstSplice.worst });
@@ -1272,7 +1374,7 @@ export function analyse(model) {
   return {
     model, ctx, dead, snow, wind,
     rafters, battens, purlin, wallPurlin, posts, wallPosts, ties, beamTies, bases, foundation,
-    cross,
+    cross, roofBrace, brace,
     bracing: { ...postMu(model, 'outer'), holdX, toWall, alongOuter: sl.thrust.alongOuter },
     thrust: sl.thrust,
     splices: spliceReport(model),
@@ -1338,6 +1440,7 @@ export function billOfMaterials(result) {
   add('Столбы наружные', section(m.posts.sectionId), lv.postLength, m.posts.xs.length);
   add('Столбы у стены', section(m.wallPosts.sectionId), lv.wallPostLength, m.wallPosts.xs.length);
   if (result.cross) add('Связи наружного ряда', result.cross.sec, result.cross.length, result.cross.count);
+  if (result.roofBrace) add('Связи в плоскости кровли', result.roofBrace.sec, result.roofBrace.length, result.roofBrace.count);
 
   // кровля
   const roofArea = (m.geom.B * ((m.geom.L + m.geom.a) / ca)) / 1e6; // м² по скату
@@ -1408,6 +1511,17 @@ export function billOfMaterials(result) {
     }
   }
 
+  // болты крепления диагоналей по кровле к деревянным балкам
+  for (const e of result.roofBrace?.ends ?? []) {
+    if (e.welded) continue;
+    const bolts = e.n * result.roofBrace.count;
+    const oneMass = (Math.PI / 4) * BRACE_BOLT.d ** 2 * 150 * 7.85e-6 * 1.6;
+    fasteners.push({
+      name: `Болт М${BRACE_BOLT.d} класса ${BRACE_BOLT.grade}, диагональ ${e.where}`, count: bolts,
+      note: `${e.n} шт на конец диагонали, с гайкой и шайбами`, mass: bolts * oneMass, cost: bolts * oneMass * pr.steelKg,
+    });
+  }
+
   // накладки стыков: то, чего в смете не было совсем, хотя купить придётся
   for (const j of result.spliceJoints ?? []) {
     if (j.impossible) continue;
@@ -1472,7 +1586,7 @@ export function billOfMaterials(result) {
     { name: 'Стропила', mass: byName('Стропила'), note: 'сосна' },
     { name: 'Прогоны и обвязка', mass: byName('Прогон наружный') + byName('Обвязка у стены'), note: 'сталь + сосна' },
     { name: 'Столбы', mass: byName('Столбы наружные') + byName('Столбы у стены'), note: 'сталь' },
-    ...(result.cross ? [{ name: 'Связи', mass: byName('Связи наружного ряда'), note: 'сталь' }] : []),
+    ...(result.brace ? [{ name: 'Связи', mass: byName('Связи наружного ряда') + byName('Связи в плоскости кровли'), note: 'сталь' }] : []),
     { name: 'Метизы', mass: fastenerTotal, note: 'шпильки, пластины и крепёж узлов' },
   ];
 

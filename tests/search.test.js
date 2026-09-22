@@ -32,7 +32,7 @@ const U_OF = {
   posts: (r) => Math.max(...r.posts.map((x) => x.U),
     r.cross?.checks.find((c) => c.name === 'Катет шва')?.U ?? 0),
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
-  bracing: (r) => r.cross?.U ?? 0,
+  bracing: (r) => r.brace?.U ?? 0,
 };
 
 test('узкие расчёты элемента совпадают с полным расчётом', () => {
@@ -88,7 +88,7 @@ test('подбор по стоимости не оставляет более д
       wallPurlin: ladderFor(m.wallPurlin.sectionId),
       posts: ladderFor(m.posts.sectionId, { square: true }),
       wallPosts: ladderFor(m.wallPosts.sectionId, { square: true }),
-      ...(m.bracing.along === 'cross'
+      ...(m.bracing.along !== 'none'
         ? { bracing: ladder('steel').filter((s) => s.h === s.b && s.h <= 80) } : {}),
     };
     for (const [key, list] of Object.entries(lists)) {
@@ -141,10 +141,10 @@ test('старые ссылки с μ переводятся на схему с�
   assert.deepEqual(decodeNotes(encodeModel(t)), []);
 });
 
-test('подбор по цене сравнивает наружный ряд без связей и с крестом', async () => {
-  const r = await searchByCost(sample(), { target: 0.9, limit: 20, keep: 2 });
+test('подбор по цене сравнивает наружный ряд без связей, с крестом и с диагоналями по кровле', async () => {
+  const r = await searchByCost(sample(), { target: 0.9, limit: 30, keep: 2 });
   const schemes = new Set(r.options.map((o) => o.model.bracing.along));
-  assert.ok(schemes.has('none') && schemes.has('cross'), `в списке только ${[...schemes].join(', ')}`);
+  for (const s of ['none', 'cross', 'roof']) assert.ok(schemes.has(s), `нет схемы ${s}: в списке ${[...schemes].join(', ')}`);
   for (const o of r.options) {
     const res = analyse(o.model);
     if (o.model.bracing.along === 'cross') {
@@ -153,8 +153,14 @@ test('подбор по цене сравнивает наружный ряд б
       // с крестом столбы легче: гибкость вдоль ряда считается при μ = 1
       assert.equal(res.posts[0].muY, 1);
       assert.ok(billOfMaterials(res).items.some((i) => i.name === 'Связи наружного ряда'), 'связи в смете');
+    } else if (o.model.bracing.along === 'roof') {
+      assert.ok(res.roofBrace, 'у варианта с диагоналями по кровле они посчитаны');
+      assert.match(o.parts.bracing, /^по кровле /);
+      assert.equal(res.posts[0].muY, 1);
+      assert.ok(billOfMaterials(res).items.some((i) => i.name === 'Связи в плоскости кровли'), 'связи в смете');
     } else {
       assert.equal(res.cross, null);
+      assert.equal(res.roofBrace, null);
       assert.equal(o.parts.bracing, 'без связей');
     }
     assert.ok(Math.abs(billOfMaterials(res).costs.total - o.cost) < 1e-6, 'цена варианта — цена его сметы');
