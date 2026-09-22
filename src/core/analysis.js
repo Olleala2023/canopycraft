@@ -525,17 +525,24 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
   const bays = wall ? [] : crossBays(model, pre.map((p) => p.r.x));
   const holdYTotal = mu.heldY && !wall ? pre.reduce((a, p) => a + alongShare + p.QficY, 0) : 0;
   const Fcross = bays.length ? holdYTotal / bays.length : 0;
-  const inBay = new Map();
+  // в отрыв идёт только ветровая часть: условная сила — от сжатия столбов
+  // под снегом, а отрыв считается при ветре без снега
+  const FcrossWind = bays.length && mu.heldY && !wall ? (alongShare * n) / bays.length : 0;
+  const down = new Map(), up = new Map();
   for (const b of bays) {
     const g = crossGeometry(H, b.span);
-    for (const k of [b.i, b.j]) inBay.set(k, (inBay.get(k) ?? 0) + Fcross * g.vertical);
+    for (const k of [b.i, b.j]) {
+      down.set(k, (down.get(k) ?? 0) + Fcross * g.vertical);
+      up.set(k, (up.get(k) ?? 0) + FcrossWind * g.vertical);
+    }
   }
 
   return pre.map((p, i) => {
-    const Vcross = inBay.get(i) ?? 0;
+    const Vcross = down.get(i) ?? 0;
+    const VcrossUp = up.get(i) ?? 0;
     // ветер в обе стороны: у каждого столба пролёта связь и прижимает, и отрывает
     const N = p.N + Vcross;
-    const Nup = p.Nup + Vcross;
+    const Nup = p.Nup + VcrossUp;
     const Mecc = N * model.opts.postEccentricity;
 
     let diagram, diagramY = null, bolts = null;
@@ -632,7 +639,7 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
       Hwind: p.Hwind, QficX: p.QficX, QficY: p.QficY,
       holdX: p.Hwind + p.QficX,
       holdY: mu.heldY && !wall ? alongShare + p.QficY : 0,
-      Vcross,
+      Vcross, VcrossUp,
       ...worstOf(checks),
     };
   });
@@ -662,6 +669,7 @@ export function analyseCross(model, posts) {
   const g = crossGeometry(H, bay.span);
   const T = F * g.tension;
   const V = F * g.vertical;
+  const Vup = (wind / bays.length) * g.vertical;
   const i = Math.min(sec.props.ix, sec.props.iy);
   const lambda = g.length / i;
 
@@ -684,7 +692,7 @@ export function analyseCross(model, posts) {
     weldLeg(kf, kfMin, kfMax, `стенки ${sec.t} и ${post.t} мм`),
   ];
   return {
-    sec, mat, bays, count: 2 * bays.length, F, T, V, wind, qfic,
+    sec, mat, bays, count: 2 * bays.length, F, T, V, Vup, wind, qfic,
     span: bay.span, hd: g.hd, length: g.length, lambda,
     kf, weldLength: line.length, tauF, tauZ,
     ...worstOf(checks),

@@ -81,6 +81,26 @@ export function drawPlan(res, sel) {
     }
   }
 
+  // крест вдоль ряда: он стоит в вертикальной плоскости под прогоном, на плане
+  // это пролёт между столбами, помеченный диагоналями
+  if (res.cross) {
+    const c = res.cross;
+    const col = uColor(c.U);
+    for (const b of c.bays) {
+      const x0 = X(b.x0), x1 = X(b.x1), y = Y(g.L);
+      s.push(`<g class="pickable" data-pick="bracing">
+        <rect x="${x0}" y="${y - 12}" width="${x1 - x0}" height="24" fill="transparent"/>
+        <line x1="${x0 + 8}" y1="${y - 8}" x2="${x1 - 8}" y2="${y + 8}" stroke="${col}" stroke-width="1.8"/>
+        <line x1="${x0 + 8}" y1="${y + 8}" x2="${x1 - 8}" y2="${y - 8}" stroke="${col}" stroke-width="1.8"/>
+        <text x="${(x0 + x1) / 2}" y="${y + 22}" font-size="9" text-anchor="middle" font-family="${mono}" fill="${col}">крест ${c.sec.label} · ${f2(c.U)}</text>
+        <title>Связь-крест ${c.sec.label} · держит ${f2(c.F / 1000)} кН вдоль ряда · U ${f2(c.U)} (${c.worst?.name})</title></g>`);
+    }
+    if (sel.type === 'bracing') {
+      const b = c.bays[0];
+      s.push(`<rect x="${X(b.x0) + 4}" y="${Y(g.L) - 14}" width="${X(b.x1) - X(b.x0) - 8}" height="28" fill="none" stroke="var(--ink)" stroke-dasharray="3 3"/>`);
+    }
+  }
+
   // столбы
   res.posts.forEach((p, i) => {
     const px = X(p.x), py = Y(g.L), sz = 11;
@@ -268,12 +288,18 @@ export function drawDiagrams(res, sel) {
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
   const vertical = el.kind === 'post' || el.kind === 'wallPost';
+  // у наружного столба без связей вдоль стены есть и вторая плоскость изгиба
+  const dy = el.kind === 'post' ? el.diagramY : null;
   const W = 720, H = 84, pad = { l: 46, r: 26, t: 48 }; // сверху оставлено место под панель масштаба
-  const vw = W + pad.l + pad.r, vh = 3 * (H + 34) + pad.t;
+  const vw = W + pad.l + pad.r, vh = (dy ? 4 : 3) * (H + 34) + pad.t;
   const xs = Array.from(r.x);
   const s = [`<svg viewBox="0 0 ${vw} ${vh}" role="img" aria-label="Эпюры">`];
-  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? ' · по высоте от базы' : ' · на растянутом волокне'}`,
+  s.push(chart(`ЭПЮРА M · ${el.title}${vertical ? `${el.kind === 'post' ? ' · поперёк ряда' : ''} · по высоте от базы` : ' · на растянутом волокне'}`,
     xs, Array.from(r.M), W, H, pad.l, pad.t, 'var(--accent-2)', 'кН·м', 1e-6, true));
+  if (dy) {
+    s.push(chart('ЭПЮРА M · ВДОЛЬ РЯДА · консоль под ветром вдоль стены',
+      Array.from(dy.x), Array.from(dy.M), W, H, pad.l, pad.t + 3 * (H + 34), 'var(--u-bad)', 'кН·м', 1e-6, true));
+  }
   s.push(chart(vertical ? 'ПОПЕРЕЧНАЯ СИЛА' : 'ЭПЮРА Q', xs, Array.from(r.V), W, H, pad.l, pad.t + H + 34, 'var(--u-ok)', 'кН', 1e-3));
   s.push(chart(vertical ? 'ГОРИЗОНТАЛЬНОЕ СМЕЩЕНИЕ' : 'ПРОГИБ (нормативные нагрузки)',
     xs, Array.from(sls.w), W, H, pad.l, pad.t + 2 * (H + 34), 'var(--u-warn)', 'мм', 1));
@@ -319,6 +345,10 @@ export function pickElement(res, sel) {
     const t = res.beamTies[sel.side ?? 'outer'];
     return t && { ...t, kind: 'beamTie', sec: { label: t.tie.short },
       title: sel.side === 'wall' ? 'УЗЕЛ: ОБВЯЗКА — СТОЛБ' : 'УЗЕЛ: ПРОГОН — СТОЛБ' };
+  }
+  if (sel.type === 'bracing') {
+    const c = res.cross;
+    return c && { ...c, kind: 'bracing', title: 'СВЯЗИ НАРУЖНОГО РЯДА · КРЕСТ' };
   }
   if (sel.type === 'splice') {
     const list = res.spliceJoints ?? [];
@@ -625,6 +655,56 @@ function nodeSplice(d, box, clip) {
   return s.join('');
 }
 
+/**
+ * Связь-крест: вид на пролёт ряда сбоку. Два столба, прогон поверху и две
+ * диагонали между точками крепления — с расчётными размерами, усилием и
+ * катетом шва. Стрелка вверху — сила вдоль ряда, которую прогон собирает
+ * в этот пролёт.
+ */
+function nodeCross(c, post, H, box, clip) {
+  const p = inner(box);
+  const span = c.span, postB = post.b;
+  const sc = Math.min(p.w / (span + postB + 260), (p.h - 20) / (H + 120));
+  const mm = (v) => v * sc;
+  const cx = p.x + p.w / 2;
+  const base = p.y + p.h - 18;
+  const top = base - mm(H);
+  const xL = cx - mm(span / 2), xR = cx + mm(span / 2);
+  const col = uColor(c.U);
+  const s = [`<g clip-path="url(#${clip})">`];
+  s.push(`<line x1="${xL - mm(postB) - 14}" y1="${base}" x2="${xR + mm(postB) + 14}" y2="${base}" stroke="var(--ink)" stroke-width="1.6"/>`);
+  for (const x of [xL, xR]) {
+    s.push(`<rect x="${x - mm(postB / 2)}" y="${top}" width="${Math.max(3, mm(postB))}" height="${mm(H)}"
+      fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.2"/>`);
+  }
+  // прогон поверху
+  s.push(`<rect x="${xL - mm(postB) - 10}" y="${top - Math.max(5, mm(140))}" width="${xR - xL + 2 * mm(postB) + 20}" height="${Math.max(5, mm(140))}"
+    fill="var(--sunk)" stroke="var(--ink)" stroke-width="1.1"/>`);
+  const zHi = top + mm(150), zLo = base - mm(150);
+  const a = xL + mm(postB / 2), b = xR - mm(postB / 2);
+  s.push(`<line x1="${a}" y1="${zHi}" x2="${b}" y2="${zLo}" stroke="${col}" stroke-width="2.4"/>`);
+  s.push(`<line x1="${a}" y1="${zLo}" x2="${b}" y2="${zHi}" stroke="${col}" stroke-width="2.4" stroke-dasharray="6 4"/>`);
+  for (const [x, y] of [[a, zHi], [b, zLo], [a, zLo], [b, zHi]]) {
+    s.push(`<circle cx="${x}" cy="${y}" r="2.4" fill="var(--u-warn)"/>`);
+  }
+  s.push(`<text x="${cx}" y="${(zHi + zLo) / 2 - 8}" font-size="9" text-anchor="middle" font-family="${mono}" fill="${col}">${esc(c.sec.label)} · l = ${Math.round(c.length)}</text>`);
+  s.push(`<text x="${cx}" y="${(zHi + zLo) / 2 + 16}" font-size="9" text-anchor="middle" font-family="${mono}" fill="var(--ink-3)">тянет ${f2(c.T / 1000)} кН, вторая выключена</text>`);
+  s.push(`<text x="${b + 6}" y="${zLo + 3}" font-size="9" font-family="${mono}" fill="var(--ink-2)">k = ${c.kf}</text>`);
+  s.push(dimH(xL, xR, base + 12, `${Math.round(span)}`));
+  s.push(dimV(zHi, zLo, xR + mm(postB / 2) + 16, `${Math.round(c.hd)}`));
+  // сила вдоль ряда и вертикали на столбы
+  const ay = top - Math.max(5, mm(140)) - 8;
+  s.push(`<g pointer-events="none">
+    <line x1="${xL - 30}" y1="${ay}" x2="${xL + 10}" y2="${ay}" stroke="var(--u-bad)" stroke-width="1.6"/>
+    <path d="M${xL + 4},${ay - 4} L${xL + 13},${ay} L${xL + 4},${ay + 4} z" fill="var(--u-bad)"/>
+    <text x="${xL + 18}" y="${ay + 3}" font-size="9.5" font-family="${mono}" fill="var(--u-bad)">F = ${f2(c.F / 1000)} кН вдоль ряда</text>
+    <text x="${xL - mm(postB / 2) - 4}" y="${base - 6}" font-size="9" text-anchor="end" font-family="${mono}" fill="var(--ink-3)">±${f2(c.V / 1000)}</text>
+    <text x="${xR + mm(postB / 2) + 4}" y="${base - 6}" font-size="9" font-family="${mono}" fill="var(--ink-3)">±${f2(c.V / 1000)}</text>
+  </g>`);
+  s.push('</g>');
+  return s.join('');
+}
+
 export function drawNodes(res, sel) {
   const m = res.model;
   const alpha = m.geom.alpha;
@@ -645,7 +725,7 @@ export function drawNodes(res, sel) {
     .filter(Boolean);
 
   const W = 1080, pad = { l: 16, t: 44 };
-  const rowsN = 2 + (splices.length ? 1 : 0);
+  const rowsN = 2 + (splices.length || res.cross ? 1 : 0);
   const bw = (W - pad.l * 2 - 2 * 18) / 3, bh = 291;
   const H = pad.t + rowsN * bh + (rowsN - 1) * 18 + 16;
   const clips = [];
@@ -703,6 +783,20 @@ export function drawNodes(res, sel) {
         + nodeSplice(d, box, id)
         + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`);
     });
+  }
+
+  if (res.cross) {
+    const c = res.cross;
+    const y = pad.t + 2 * (bh + 18);
+    const box = { x: pad.l + splices.length * (bw + 18), y, w: bw, h: bh };
+    const id = 'clip-bracing';
+    const p = inner(box);
+    clips.push(`<clipPath id="${id}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}"/></clipPath>`);
+    s.push(`<g class="pickable" data-pick="bracing">`
+      + detailFrame(box, '5.1 СВЯЗЬ · КРЕСТ В РЯДУ',
+        `${c.count} × ${c.sec.label}, шов по контуру k = ${c.kf} мм`, c.U)
+      + nodeCross(c, res.posts[0].sec, res.posts[0].H, box, id)
+      + `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="transparent"/></g>`);
   }
 
   s.splice(1, 0, `<defs>${clips.join('')}</defs>`);

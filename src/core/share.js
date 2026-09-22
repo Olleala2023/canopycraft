@@ -60,7 +60,7 @@ function fromBase64Url(code) {
  * связями», то есть крест в ряду. Поперёк ряда выбирать больше нечего —
  * верх там держат стропила. Что перевели, говорим словами.
  */
-function migrate(patch) {
+function migrate(patch, where = 'В ссылке') {
   const notes = [];
   if (!isPlain(patch)) return { patch, notes };
   const out = { ...patch };
@@ -72,10 +72,10 @@ function migrate(patch) {
     const along = muY ?? mu;
     if (row === 'posts' && along !== undefined && along <= 1) {
       out.bracing = { along: 'cross', ...(isPlain(out.bracing) ? out.bracing : {}) };
-      notes.push(`В ссылке у наружных столбов стояло μ = ${String(along).replace('.', ',')} вдоль ряда — верх удержан связями. `
+      notes.push(`${where} у наружных столбов стояло μ = ${String(along).replace('.', ',')} вдоль ряда — верх удержан связями. `
         + 'Теперь μ задаётся схемой: поставлен крест в крайнем пролёте, и он проверяется.');
     } else if (row === 'posts' && (muX ?? mu) !== undefined && (muX ?? mu) !== 2) {
-      notes.push('μ поперёк ряда из ссылки больше не выбирается: верх там держат стропила, и это проверяется.');
+      notes.push(`μ поперёк ряда ${where === 'В ссылке' ? 'из ссылки' : 'из сохранённого расчёта'} больше не выбирается: верх там держат стропила, и это проверяется.`);
     }
   }
   return { patch: out, notes };
@@ -104,4 +104,13 @@ export function decodeNotes(code) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Модель из прошлой версии программы (сохранённая в браузере): те же
+ * переводы, что и для ссылки, плюс недостающие поля из умолчаний.
+ */
+export function upgradeModel(model) {
+  const { patch, notes } = migrate(model, 'В сохранённом расчёте');
+  return { model: mergeModel(patch), notes };
 }

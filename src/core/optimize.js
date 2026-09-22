@@ -11,6 +11,7 @@ const PATH = {
   wallPurlin: (m, id) => ({ ...m, wallPurlin: { ...m.wallPurlin, sectionId: id } }),
   wallPosts: (m, id) => ({ ...m, wallPosts: { ...m.wallPosts, sectionId: id } }),
   posts: (m, id) => ({ ...m, posts: { ...m.posts, sectionId: id } }),
+  bracing: (m, id) => ({ ...m, bracing: { ...m.bracing, sectionId: id } }),
 };
 
 /** Коэффициент использования по группе элементов. */
@@ -21,6 +22,8 @@ export const U_OF = {
   wallPurlin: (r) => r.wallPurlin.U,
   wallPosts: (r) => Math.max(...r.wallPosts.map((x) => x.U)),
   posts: (r) => Math.max(...r.posts.map((x) => x.U)),
+  // связей нет — подбирать нечего, годится любое сечение
+  bracing: (r) => r.cross?.U ?? 0,
 };
 
 /**
@@ -30,7 +33,11 @@ export const U_OF = {
 export function pickSection(model, key, target = 0.95) {
   const current = section(model[key].sectionId);
   const candidates = ladder(current.material).filter((s) =>
-    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2 : true
+    key === 'posts' || key === 'wallPosts' ? s.h === s.b || s.h / s.b <= 2
+      // диагональ креста — квадратная труба: прямоугольная не дешевле по массе,
+      // а в узле неудобна
+      : key === 'bracing' ? s.h === s.b
+      : true
   );
   const tried = [];
   for (const cand of candidates) {
@@ -140,7 +147,8 @@ export function pickTies(model, target = 1) {
 export function pickAll(model, target = 0.9) {
   let m = model;
   const log = [];
-  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts']) {
+  for (const key of ['battens', 'rafters', 'purlin', 'wallPurlin', 'posts', 'wallPosts', 'bracing']) {
+    if (key === 'bracing' && m.bracing?.along !== 'cross') continue;
     const r = pickSection(m, key, target);
     if (r) {
       m = PATH[key](m, r.id);

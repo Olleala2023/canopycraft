@@ -246,10 +246,14 @@ test('крест: усилие в диагонали, добавка в стол
   // растяжение диагонали F·l/s, вертикаль на столбы F·h/s
   assert.ok(Math.abs(c.T - (c.F * c.length) / c.span) < 1e-6);
   assert.ok(Math.abs(c.V - (c.F * c.hd) / c.span) < 1e-6);
-  // столбы пролёта со связью получают вертикаль и в сжатие, и в отрыв
+  // столбы пролёта со связью получают вертикаль и в сжатие, и в отрыв;
+  // в отрыв — только ветровая часть: условная сила — от сжатия под снегом
   assert.ok(Math.abs(r.posts[0].Vcross - c.V) < 1e-6);
   assert.ok(Math.abs(r.posts[1].Vcross - c.V) < 1e-6);
   assert.equal(r.posts[2].Vcross, 0);
+  assert.ok(Math.abs(r.posts[0].VcrossUp - (c.Vup)) < 1e-6);
+  assert.ok(Math.abs(c.Vup - (r.thrust.alongOuter * c.hd) / c.span) < 1e-6);
+  assert.ok(c.Vup < c.V);
   for (const name of ['Растяжение связи', 'Гибкость связи', 'Шов по металлу шва', 'Катет шва']) {
     assert.ok(c.checks.some((k) => k.name === name), name);
   }
