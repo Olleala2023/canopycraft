@@ -69,7 +69,7 @@ export function pickRafterSpacing(model, target = 0.95, maxCount = 31) {
  * катет шва величины дискретные, половины болта не бывает.
  */
 /** Пределы бетонного блока при автоподборе — те же, что у ползунков в панели. */
-const BLOCK_MAX = { side: 1200, depth: 2000 };
+const BLOCK_MAX = { side: 1200, depth: 3000 };
 /** Размер с тем же целевым запасом 0,9, что и у сечений, округлённый до шага ползунка. */
 const withMargin = (mm) => Math.ceil(mm / 0.9 / 50) * 50;
 
@@ -104,8 +104,13 @@ export function pickTies(model, target = 1) {
     const b = analyse(m).bases;
     // needDepth — глубина, которой хватит при нынешней стороне: она же растит
     // блок, когда его не хватает, и подрезает, когда он с лишним
-    // как и сечения, блок подбирается до U ≤ 0,9, а не впритык к единице
-    const needDepth = withMargin(Math.max(b.outer.needDepth, b.wall.needDepth));
+    // как и сечения, блок подбирается до U ≤ 0,9, а не впритык к единице;
+    // промерзание — требование геометрическое, запаса к нему не добавляем:
+    // k_h = 1,1 уже внутри расчётной глубины
+    const needDepth = Math.max(
+      withMargin(Math.max(b.outer.needDepth, b.wall.needDepth)),
+      b.outer.frost.needDepth,
+    );
     if (needDepth <= BLOCK_MAX.depth) {
       if (m.postBase.depth === needDepth) break;
       m.postBase.depth = needDepth;

@@ -1,0 +1,46 @@
+# Проверки на каждый PR и на main.
+#
+# Зависимостей у проекта нет, поэтому ставить нечего: нужен только Node.
+# Две проверки — тесты и то, что собранные файлы соответствуют исходникам.
+# Вторая важна потому, что index.html публикуется как есть: поправили src/,
+# забыли npm run build — и в main уезжает приложение старой версии, хотя
+# тесты по исходникам зелёные.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Тесты и сборка
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Тесты
+        run: npm test
+
+      - name: Сборка совпадает с исходниками
+        run: |
+          npm run build
+          built="index.html docs/app.artifact.html help/help.css"
+          if ! git diff --quiet -- $built; then
+            echo "::error::Собранные файлы не совпадают с исходниками. Запустите npm run build и закоммитьте результат."
+            git --no-pager diff --stat -- $built
+            exit 1
+          fi
+          echo "Собранные файлы совпадают с исходниками."

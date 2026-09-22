@@ -17,7 +17,7 @@ import {
   boltPlateBearing, boltHoleBearing, boltShear,
   tieShear, tieFit, steelHoleBearing,
   weldMetal, weldFusion, weldLeg, boltTension, timberWasherBearing,
-  concreteBearing, plateBending, anchorCone, embedDepth, anchorMass,
+  concreteBearing, plateBending, anchorCone, embedDepth, anchorMass, foundationFrost,
   spliceDowel,
   splicePlateBending,
 } from './checks.js';
@@ -29,6 +29,7 @@ import {
   SPLICE_PLATES,
   SPLICE_DOWELS,
   SPLICE_GAP,
+  frostDepth,
 } from './fasteners.js';
 
 const deg = (d) => (d * Math.PI) / 180;
@@ -542,7 +543,18 @@ function analysePostBase(model, cfg, posts, ctx) {
   const step50 = (mm) => Math.ceil(mm / 50) * 50;
   const needDepth = step50((needVolume / ((side / 1000) ** 2)) * 1000);
   const needSide = step50(Math.sqrt(needVolume / (depth / 1000)) * 1000);
-  const block = { side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass };
+  // мороз: для пучинистого грунта подошва не выше расчётной глубины промерзания
+  const frost = frostDepth(model.site.frostDepth ?? 0, model.site.soil ?? 'clay');
+  const frostApplies = frost.set && frost.soil.heaving;
+  const needFrostDepth = frostApplies ? step50(frost.df) : 0;
+  const block = {
+    side, depth, mass, needMass, needDepth, needSide, enough: mass >= needMass,
+    frost: { ...frost, applies: frostApplies, needDepth: needFrostDepth, ok: depth >= needFrostDepth },
+  };
+  const frostCheck = () => (frostApplies
+    ? [foundationFrost(frost.df, depth,
+      `${frost.soil.label}: d_fn ${Math.round(frost.dfn)} мм, подошва блока на ${depth} мм`)]
+    : []);
 
   if (base.kind === 'embed') {
     if (needsFixity) {
@@ -551,6 +563,7 @@ function analysePostBase(model, cfg, posts, ctx) {
     }
     checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
     checks.push(concreteBearing(N / (side * side), conc.Rb, `подошва ${side}×${side} мм`));
+    checks.push(...frostCheck());
     detail = { ...block, needEmbed: minEmbed(sec.h) };
   } else {
     const A = base.plate * base.plate;
@@ -571,6 +584,7 @@ function analysePostBase(model, cfg, posts, ctx) {
     // анкеры держат столб за бетон, но сам блок ещё должен не уехать вверх:
     // раньше это число только выводилось в инспекторе и в U не входило
     checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг`));
+    checks.push(...frostCheck());
     detail = { sigma, sigmaPlate, span, Na, c, ...block };
   }
 
