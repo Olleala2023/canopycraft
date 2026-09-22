@@ -380,9 +380,16 @@ test('касательные силы пучения — формула (6.35) �
   assert.ok(Math.abs(h.F - (h.Nperm + h.blockWeight)) < 1e-9);
   assert.ok(h.Nperm > 0 && h.Nperm < analyse(m).posts[1].N, 'постоянная меньше расчётной со снегом');
   // трение о талый грунт ниже промерзания: блок заходит на 80 мм ниже d_f,
-  // средняя глубина слоя 1,36 м → строка 1 м табл. 7.3 СП 24, I_L = 1,0 → 2 кПа
+  // средняя глубина слоя 1,36 м → строка 1 м табл. 7.3 СП 24, I_L = 1,0 → 2 кПа;
+  // как у набивной сваи на выдёргивание (п. 7.2.13): × γc 0,6 (мельче 4 м)
+  // × γ_R,f 0,6 (табл. 7.6, строка 3а, глины — худшее для «суглинков и глин»)
   assert.deepEqual(h.layers.map((l) => l.f), [2]);
-  assert.ok(Math.abs(h.Frf - 2 * 4 * 0.5 * 0.08 * 1000) < 1e-6);
+  assert.equal(h.gammaC, 0.6);
+  assert.equal(h.gammaRf, 0.6);
+  assert.ok(Math.abs(h.Frf - 0.6 * 0.6 * 2 * 4 * 0.5 * 0.08 * 1000) < 1e-6);
+  // у супеси γ_R,f = 0,7
+  const sl = analyse({ ...m, site: { ...m.site, soil: 'sandyLoam' } }).bases.outer.heave;
+  assert.equal(sl.gammaRf, 0.7);
   assert.ok(Math.abs(h.check.U - h.pull / (h.F + h.Frf / 1.1)) < 1e-12);
   // обычный блок в пучинистом грунте выдавливает — с большим запасом «не туда»
   assert.ok(h.check.U > 10, `U = ${h.check.U.toFixed(1)}`);

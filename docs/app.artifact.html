@@ -1880,6 +1880,17 @@ function skinFriction(depthM, IL) {
 /** Толщина слоя при расчёте трения — не более 2 м (прим. 2 к табл. 7.3 СП 24). */
 const FRICTION_LAYER = 2000;
 
+/**
+ * Трение на выдёргивание набивной сваи — СП 24.13330.2021, п. 7.2.13,
+ * ф. (7.16): F_du = γc·u·Σγ_R,f·f_i·h_i. Блок, залитый в выкопанную яму,
+ * ближе всего к буровой свае, бетонированной насухо — строка 3а табл. 7.6:
+ * γ_R,f = 0,7 для песков, супесей и суглинков, 0,6 для глин. Грунт «суглинки
+ * и глины» у нас один — берётся худшее. γc = 0,6 при заглублении меньше 4 м,
+ * 0,8 — от 4 м. Оба только уменьшают трение.
+ */
+const FRICTION_GAMMA_RF = { clay: 0.6, sandyLoam: 0.7, sand: 0.7, gravel: 0.7 };
+const upliftGammaC = (depthMm) => (depthMm < 4000 ? 0.6 : 0.8);
+
 /** γ_c и γ_n формулы (6.35). */
 const HEAVE_GAMMA_C = 1.0;
 const HEAVE_GAMMA_N = 1.1;
@@ -3204,9 +3215,11 @@ function analysePostBase(model, cfg, posts, ctx) {
  * (прим. 4) и геотехническая категория 1 (прим. 5, ×0,9).
  *
  * F_rf — трение о талый грунт ниже промерзания, формула (6.38): ΣR_f·A_f.
- * R_f — по нормам на сваи: табл. 7.3 СП 24, слои не толще 2 м, в запас —
- * см. skinFriction. Надбавки из примечаний 3 и 4 к таблице (плотные пески,
- * малый коэффициент пористости) не берутся.
+ * R_f — по нормам на сваи: как у набивной сваи на выдёргивание (п. 7.2.13
+ * СП 24), R_f = γc·γ_R,f·f_i; f_i — табл. 7.3, слои не толще 2 м, в запас —
+ * см. skinFriction. Надбавки из примечаний 3 и 4 к табл. 7.3 не берутся.
+ * γc,g из п. 7.1.11 — коэффициент надёжности свайного фундамента — не
+ * применяется: в (6.35) уже есть свой γ_n.
  */
 function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure }) {
   if (!frostApplies) return { applies: false, reason: frost.set ? 'nonHeaving' : 'noFrost' };
@@ -3227,25 +3240,27 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
   const F = post.Nperm + blockWeight;
   // трение о талый грунт ниже промерзания: слои не толще 2 м, f по средней глубине слоя
   const IL = (HEAVE_STATES[stateId] ?? HEAVE_STATES.wet).IL;
+  const gammaRf = FRICTION_GAMMA_RF[model.site.soil ?? 'clay'] ?? 0.6;
+  const gammaC = upliftGammaC(depth);
   const layers = [];
   for (let z = frost.df; z < depth - 1e-6; z += FRICTION_LAYER) {
     const h = Math.min(FRICTION_LAYER, depth - z);
     const zMid = (z + h / 2) / 1000;
     const f = skinFriction(zMid, IL);
-    layers.push({ from: z, h, zMid, f, A: (perimeter * h) / 1e6 });
+    layers.push({ from: z, h, zMid, f, R: gammaC * gammaRf * f, A: (perimeter * h) / 1e6 });
   }
-  const Frf = layers.reduce((a, l) => a + l.f * l.A * 1000, 0);    // Н
+  const Frf = layers.reduce((a, l) => a + l.R * l.A * 1000, 0);    // Н
   const gcgn = HEAVE_GAMMA_C / HEAVE_GAMMA_N;
   const f2 = (v) => (v / 1000).toFixed(1).replace('.', ',');
   const check = frostHeave(pull, F, Frf, gcgn,
     `τ_fh = ${Math.round(tauTable)}${surface.k !== 1 ? ` × ${String(surface.k).replace('.', ',')}` : ''}${cat1 ? ' × 0,9' : ''} = ${Math.round(tau)} кПа на ${A.toFixed(2).replace('.', ',')} м² — тянет ${f2(pull)} кН; `
     + `держат постоянная нагрузка ${f2(post.Nperm)} и блок ${f2(blockWeight)} кН`
     + (layers.length
-      ? `, трение о талый грунт ниже промерзания ${f2(Frf)} кН на ${Abelow.toFixed(2).replace('.', ',')} м² (f = ${layers.map((l) => l.f).join(', ')} кПа, I_L ${String(IL).replace('.', ',')}) / 1,1`
+      ? `, трение о талый грунт ниже промерзания ${f2(Frf)} кН на ${Abelow.toFixed(2).replace('.', ',')} м² (f = ${layers.map((l) => l.f).join(', ')} кПа при I_L ${String(IL).replace('.', ',')} × γc ${String(gammaC).replace('.', ',')} × γ_R,f ${String(gammaRf).replace('.', ',')}) / 1,1`
       : ', ниже промерзания блок не заходит — трения нет'));
   return {
     applies: true, measure, check, stateId, surface, cat1, tauTable, tau, perimeter, hFrozen, hThawed,
-    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gcgn, x: post.x,
+    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gammaRf, gammaC, gcgn, x: post.x,
     ratio: pull / Math.max(1, F + gcgn * Frf),
   };
 }
@@ -5947,7 +5962,7 @@ function frostWarnings(res) {
     шире блок — больше поверхность, за которую тянут. Что помогает: засыпать пазухи непучинистым грунтом
     (поле «Против пучения»), гладкая опалубка вместо заливки в яму, или конструктивные меры —
     уширение ниже промерзания, скользящий слой, утеплённый мелкозаглублённый фундамент; их калькулятор
-    не считает. Трение о талый грунт ниже промерзания учтено по табл. 7.3 СП 24 — ${kN(h.Frf)} кН. ${more}.</div>`];
+    не считает. Трение о талый грунт ниже промерзания учтено как у набивной сваи на выдёргивание (СП 24, п. 7.2.13) — ${kN(h.Frf)} кН. ${more}.</div>`];
 }
 
 /** Склонение числительного: 1 стык, 2 стыка, 5 стыков. */
@@ -6551,7 +6566,7 @@ function buildReport(res) {
       <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
       <tr><td>Касательные силы пучения</td><td>${(() => {
         const h = res.bases.outer.heave;
-        if (h.applies) return `τ_fh·A_fh = ${f2(h.pull / 1000)} кН против F = ${f2(h.F / 1000)} кН (постоянная нагрузка и блок при γ_f = 0,9) плюс трение о талый грунт ${f2(h.Frf / 1000)} кН / 1,1 — ${h.check.U > 1 ? 'не проходит' : 'проходит'} (СП 22, ф. (6.35), (6.38), табл. 6.12; СП 24, табл. 7.3)`;
+        if (h.applies) return `τ_fh·A_fh = ${f2(h.pull / 1000)} кН против F = ${f2(h.F / 1000)} кН (постоянная нагрузка и блок при γ_f = 0,9) плюс трение о талый грунт ${f2(h.Frf / 1000)} кН / 1,1 — ${h.check.U > 1 ? 'не проходит' : 'проходит'} (СП 22, ф. (6.35), (6.38), табл. 6.12; СП 24, п. 7.2.13, табл. 7.3 и 7.6)`;
         if (h.reason === 'replaced') return 'не проверяются: принята засыпка пазух непучинистым грунтом (п. 6.8.12 СП 22)';
         if (h.reason === 'nonHeaving') return 'грунт непучинистый';
         return 'глубина промерзания не задана — не проверено';
