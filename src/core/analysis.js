@@ -103,7 +103,9 @@ function analyseRafter(model, x, trib, ctx) {
 
   // огибающая по всем вариантам и сочетаниям
   let Mmax = 0, Vmax = 0, Mcant = 0;
-  const iSup = Math.round((xSup / Ls) * (uplift.x.length - 1));
+  // опора — точка сетки эпюр (см. solveBeam), берётся ближайшая
+  let iSup = 0;
+  uplift.x.forEach((x, i) => { if (Math.abs(x - xSup) < Math.abs(uplift.x[iSup] - xSup)) iSup = i; });
   const envelope = byVariant.flatMap((g) => [g['ULS-1'], g['ULS-2']]).concat([uplift]);
   for (const r of envelope) {
     for (let i = 0; i < r.M.length; i++) {

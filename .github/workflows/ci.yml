@@ -48,3 +48,14 @@ jobs:
         # Chrome на раннерах ubuntu-latest уже установлен; тест открывает
         # собранный index.html и проходит интерфейс целиком — см. tools/smoke.mjs
         run: npm run smoke
+
+      - name: Скриншоты интерфейса
+        # светлая и тёмная темы на компьютере, ширина телефона — для глазной
+        # сверки в PR: вкладка Summary прогона → Artifacts → smoke-shots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-shots
+          path: smoke-shots/
+          retention-days: 14
+          if-no-files-found: ignore
