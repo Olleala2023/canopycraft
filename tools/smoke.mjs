@@ -511,6 +511,32 @@ async function main() {
       if ((await rafters()) !== n0) fail('удаление стропила не отменилось');
     });
 
+    // На широком экране сцена и правая колонка прилипают к верху, пока
+    // прокручивается длинная панель параметров; правая колонка длиннее окна и
+    // прокручивается сама.
+    await step('сцена и правая колонка прилипают', async () => {
+      await send('Emulation.setDeviceMetricsOverride', { width: 1710, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await open('index.html');
+      await appReady();
+      await ev("document.querySelectorAll('#params-right details').forEach((d) => { d.open = true; })");
+      await ev('window.scrollTo(0, 1500)');
+      await wait(200);
+      const box = (sel) => ev(`(() => { const r = document.querySelector('${sel}').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom) }; })()`);
+      const vh = await ev('innerHeight');
+      const stage = await box('.stage'), side = await box('#side');
+      if (stage.top < 0 || stage.top > 20) fail(`сцена уехала при прокрутке: верх ${stage.top}`);
+      if (side.top < 0 || side.top > 20 || side.bottom > vh + 1) fail(`правая колонка не на экране: ${side.top}…${side.bottom} при окне ${vh}`);
+      if (!(await ev("(() => { const s = document.getElementById('side'); return s.scrollHeight > s.clientHeight; })()"))) fail('правая колонка не длиннее окна — проверка ничего не проверяет');
+      // до последнего поля колонки можно докрутить
+      await ev("document.getElementById('side').scrollTop = 1e6");
+      const last = await ev(`(() => { const f = [...document.querySelectorAll('#params-right input, #params-right select')].pop(); const r = f.getBoundingClientRect(); return r.bottom <= innerHeight + 1 && r.top >= 0; })()`);
+      if (!last) fail('последнее поле правой колонки недоступно');
+      // выбрали другой элемент — колонка вернулась к его проверкам
+      await ev("document.querySelector('#summary [data-sel=\"posts\"]').click()");
+      if ((await ev("document.getElementById('side').scrollTop")) !== 0) fail('после выбора элемента инспектор остался вне видимости');
+      await send('Emulation.clearDeviceMetricsOverride');
+    });
+
     // модульная версия: склейка прячет забытый импорт (имя и так общее),
     // а dev.html на нём падает — проверяем, что она поднимается без ошибок
     // Забытый импорт проявляется только там, где имя вызывается, — поэтому

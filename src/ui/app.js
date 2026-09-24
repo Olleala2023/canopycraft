@@ -255,9 +255,16 @@ function syncParams() {
 
 /* ─────────────────── инспектор ─────────────────── */
 
+/** Выбор, для которого инспектор показан сейчас, — чтобы понять, что выбрали другое. */
+let inspected = '';
+
 function renderInspector(res) {
   const el = pickElement(res, state.sel);
   const host = $('inspector');
+  // выбрали другой элемент — правая колонка прокручивается к его проверкам:
+  // она прокручивается сама по себе, и новый инспектор мог оказаться выше края
+  const key = JSON.stringify(state.sel);
+  if (key !== inspected) { inspected = key; $('side').scrollTop = 0; }
   if (!el) { host.innerHTML = ''; return; }
   const rows = [];
   rows.push(`<div class="pane-title">${el.title} · ${el.sec.label}</div>`);
