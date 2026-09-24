@@ -17,7 +17,7 @@
  *   CHROME=/path/to/chrome npm run smoke
  */
 import { createServer } from 'node:http';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join, extname, resolve, normalize } from 'node:path';
@@ -25,6 +25,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+// скриншоты для глазной сверки: CI выкладывает папку артефактом прогона
+const shots = join(root, 'smoke-shots');
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml',
@@ -316,6 +318,69 @@ async function main() {
       await appReady();
       if ((await ev("document.getElementById('c_bracing_along').value")) !== 'cross') fail('μ = 1 не перевёлся в крест');
       if (!(await ev("/ссылке/.test(document.getElementById('hint').textContent)"))) fail('нет подсказки о переводе');
+    });
+
+    // Вид проверяется там, где он чаще всего разъезжается: на ширине телефона
+    // (горизонтальная прокрутка страницы) и в тёмной теме (цвет, вписанный мимо
+    // токенов, или нечитаемый текст). Заодно снимаются скриншоты каждой вкладки.
+    const tabs = ['tab-plan', 'tab-section', 'tab-diagrams', 'tab-nodes'];
+    const shoot = async (name) => {
+      const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+      await writeFile(join(shots, `${name}.png`), Buffer.from(data, 'base64'));
+    };
+    // контраст текста и фона по WCAG: 4,5 — порог для обычного текста
+    const contrast = `(() => {
+      const rgb = (c) => c.match(/[\\d.]+/g).slice(0, 3).map(Number);
+      const lum = (c) => { const [r, g, b] = rgb(c).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const cs = getComputedStyle(document.body);
+      const [a, b] = [lum(cs.color), lum(cs.backgroundColor)].sort((x, y) => y - x);
+      return { ratio: (a + 0.05) / (b + 0.05), bg: lum(cs.backgroundColor) };
+    })()`;
+    const setTheme = (t) => ev(`(() => { const h = document.documentElement; if (${JSON.stringify(t)}) h.setAttribute('data-theme', ${JSON.stringify(t)}); else h.removeAttribute('data-theme'); })()`);
+
+    await step('тёмная и светлая темы, скриншоты вкладок', async () => {
+      await mkdir(shots, { recursive: true });
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      for (const theme of ['light', 'dark']) {
+        await setTheme(theme);
+        const c = await ev(contrast);
+        if (c.ratio < 4.5) fail(`${theme}: контраст текста ${c.ratio.toFixed(1)} < 4,5`);
+        if (theme === 'dark' ? c.bg > 0.1 : c.bg < 0.5) fail(`${theme}: фон страницы не той темы (яркость ${c.bg.toFixed(2)})`);
+        for (const tab of tabs) {
+          await ev(`document.getElementById('${tab}').click()`);
+          await shoot(`desktop-${theme}-${tab.slice(4)}`);
+        }
+      }
+      await setTheme(null);
+    });
+
+    await step('ширина телефона: без горизонтальной прокрутки', async () => {
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+      await open('index.html');
+      await appReady();
+      for (const tab of tabs) {
+        await ev(`document.getElementById('${tab}').click()`);
+        const over = await ev(`(() => {
+          const w = document.documentElement.clientWidth;
+          if (document.documentElement.scrollWidth <= w + 1) return null;
+          // виновник — самый внешний вылезший элемент: сам шире экрана, а родитель
+          // помещается (или сам прокручивается). Его и надо чинить, а не потомков
+          const right = (el) => el.getBoundingClientRect().right;
+          return [...document.querySelectorAll('body *')]
+            .filter((el) => right(el) > w + 1 && (right(el.parentElement) <= w + 1 || getComputedStyle(el.parentElement).overflowX !== 'visible'))
+            .filter((el) => { for (let p = el.parentElement; p; p = p.parentElement) if (getComputedStyle(p).overflowX !== 'visible') return false; return true; })
+            .map((el) => ({ el, r: right(el) }))
+            .sort((a, b) => b.r - a.r).slice(0, 3)
+            .map(({ el, r }) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '') + ' до ' + Math.round(r) + ' px')
+            .join(', ') || 'ширина ' + document.documentElement.scrollWidth + ' px';
+        })()`);
+        if (over) fail(`${tab}: страница шире экрана 390 px — ${over}`);
+        await shoot(`phone-light-${tab.slice(4)}`);
+      }
+      await send('Emulation.clearDeviceMetricsOverride');
     });
 
     await step('справка', async () => {
