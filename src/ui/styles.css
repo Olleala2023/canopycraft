@@ -72,14 +72,21 @@ input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color
 .field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
 .field label .btn{white-space:nowrap; flex:0 0 auto}
 .field .note{display:block; margin-top:3px; font-size:10.5px; line-height:1.4; color:var(--ink-3)}
-a.help{
-  flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px;
-  border:1px solid var(--rule-2); border-radius:50%; color:var(--ink-3); text-decoration:none;
-  font-size:10px; line-height:1; font-family:"IBM Plex Mono",ui-monospace,monospace;
+.help{
+  flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px; padding:0;
+  border:1px solid var(--rule-2); border-radius:50%; background:transparent; color:var(--ink-3); text-decoration:none;
+  font-size:10px; line-height:1; font-family:"IBM Plex Mono",ui-monospace,monospace; cursor:pointer;
 }
-a.help:hover{border-color:var(--accent-2); color:var(--accent-2)}
-.check a.help{margin-left:5px; vertical-align:middle}
-.pane-title a.help{margin-left:7px; vertical-align:-4px}
+.help:hover, .help[aria-expanded="true"]{border-color:var(--accent-2); color:var(--accent-2)}
+.check .help{margin-left:5px; vertical-align:middle}
+.pane-title .help{margin-left:7px; vertical-align:-4px}
+/* карточка пояснения у «?» — верхний слой Popover API, место задаёт tip.js */
+.tip{position:fixed; inset:auto; margin:0; width:min(300px, calc(100vw - 16px)); max-height:min(60vh, 420px); overflow:auto;
+  padding:10px 12px; background:var(--surface); color:var(--ink); border:1px solid var(--rule-2);
+  border-left:3px solid var(--accent-2); font-size:12px; line-height:1.5}
+.tip .tip-title{display:block; margin-bottom:4px; font-weight:600}
+.tip p{margin:0 0 6px; color:var(--ink-2)}
+.tip a{color:var(--accent-2)}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}

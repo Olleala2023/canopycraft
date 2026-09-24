@@ -519,7 +519,9 @@ async function main() {
       await open('index.html');
       await appReady();
       await ev("document.querySelectorAll('#params-right details').forEach((d) => { d.open = true; })");
-      await ev('window.scrollTo(0, 1500)');
+      // прокрутка внутри панелей: ниже их конца сцена законно уезжает вместе с ними
+      await ev("(() => { const p = document.querySelector('.panes').getBoundingClientRect(); scrollTo(0, Math.min(1500, p.bottom + scrollY - innerHeight - 50)); })()");
+      if ((await ev('scrollY')) < 300) fail('панели короче окна — прилипание нечем проверить');
       await wait(200);
       const box = (sel) => ev(`(() => { const r = document.querySelector('${sel}').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom) }; })()`);
       const vh = await ev('innerHeight');
@@ -535,6 +537,47 @@ async function main() {
       await ev("document.querySelector('#summary [data-sel=\"posts\"]').click()");
       if ((await ev("document.getElementById('side').scrollTop")) !== 0) fail('после выбора элемента инспектор остался вне видимости');
       await send('Emulation.clearDeviceMetricsOverride');
+    });
+
+    // Пояснения к полям — в карточке у «?»: по нажатию (телефон) и по
+    // наведению (мышь). Живые строки о состоянии расчёта остаются на виду.
+    await step('пояснения полей по «?»', async () => {
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      await ev("document.querySelectorAll('#params details, #params-right details').forEach((d) => { d.open = true; })");
+      const fields = await ev("document.querySelectorAll('#params .field, #params-right .field').length");
+      const tips = await ev("document.querySelectorAll('#params .field [data-tip], #params-right .field [data-tip]').length");
+      if (tips !== fields) fail(`«?» у ${tips} полей из ${fields}`);
+      const stale = await ev("document.querySelectorAll('.field .note:not(.live)').length");
+      if (stale) fail(`под полями осталось ${stale} постоянных пояснений`);
+      if (!(await ev("[...document.querySelectorAll('.note.live')].some((n) => n.textContent.trim().length > 0)"))) fail('живые строки пропали');
+      const isOpen = () => ev("document.getElementById('tip').matches(':popover-open')");
+      // нажатие: поле с пояснением и статьёй
+      await ev("document.querySelector('[data-tip=\"rafterTie.id\"]').click()");
+      if (!(await isOpen())) fail('нажатие на «?» не открыло карточку');
+      const t = await ev(`(() => { const t = document.getElementById('tip'); const r = t.getBoundingClientRect();
+        return { text: t.textContent, links: t.querySelectorAll('a[href^="help/"]').length, inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight }; })()`);
+      if (!/выдёргивание/.test(t.text)) fail(`в карточке не то пояснение: «${t.text.slice(0, 60)}»`);
+      if (!t.inside) fail('карточка вылезла за окно');
+      // Esc закрывает
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await wait(100);
+      if (await isOpen()) fail('Esc не закрыл карточку');
+      // поле только со статьёй — в карточке ссылка на неё; числовое поле тоже с «?»
+      await ev("document.querySelector('[data-tip=\"prices.steelKg\"]').click()");
+      if (!(await ev("!!document.querySelector('#tip a[href=\"help/cost.html\"]')"))) fail('у цены нет ссылки на статью');
+      await ev("document.querySelector('[data-tip=\"prices.steelKg\"]').click()");
+      if (await isOpen()) fail('повторное нажатие не закрыло карточку');
+      // наведение мышью
+      const at = await ev("(() => { const b = document.querySelector('[data-tip=\"geom.B\"]'); b.scrollIntoView({ block: 'center' }); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()");
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y });
+      await wait(600);
+      if (!(await isOpen())) fail('наведение на «?» не открыло карточку');
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 5 });
+      await wait(500);
+      if (await isOpen()) fail('карточка не закрылась, когда мышь ушла');
     });
 
     // модульная версия dev.html — то, чем пользуются при разработке: она
