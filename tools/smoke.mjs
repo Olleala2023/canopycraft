@@ -63,23 +63,66 @@ function findChrome() {
   return list.find((p) => existsSync(p));
 }
 
+/** Сколько ждать, пока Chrome откроет порт отладки, мс. */
+const LAUNCH_WAIT = 45000;
+
+/**
+ * Chrome с портом отладки. Порт узнаётся двумя путями, какой раньше: по строке
+ * «DevTools listening» в stderr и по файлу DevToolsActivePort, который Chrome
+ * пишет в профиль, когда порт уже слушает. На раннерах GitHub строка в stderr
+ * иногда не приходила за 20 с, и смоук падал до первого шага (прогоны #20 и
+ * #23), а повтор проходил. Если порта нет и за LAUNCH_WAIT, в ошибке — хвост
+ * stderr: по нему видно, на чём браузер встал.
+ */
 async function launch(chrome, profile) {
   const proc = spawn(chrome, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-networking', '--disable-extensions', `--user-data-dir=${profile}`,
+    '--disable-background-networking', '--disable-extensions', '--disable-dev-shm-usage',
+    '--password-store=basic', '--use-mock-keychain', `--user-data-dir=${profile}`,
     '--remote-debugging-port=0', '--window-size=1400,1000', 'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
-  const ws = await new Promise((ok, fail) => {
-    let buf = '';
-    const t = setTimeout(() => fail(new Error('Chrome не ответил за 20 с')), 20000);
-    proc.stderr.on('data', (d) => {
-      buf += d;
-      const m = buf.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (m) { clearTimeout(t); ok(m[1]); }
-    });
-    proc.on('exit', (code) => { clearTimeout(t); fail(new Error(`Chrome завершился с кодом ${code}: ${buf.slice(-400)}`)); });
+  let buf = '';
+  proc.stderr.on('data', (d) => { buf += d; });
+  const port = await new Promise((ok, fail) => {
+    const started = Date.now();
+    // опрос асинхронный, и следующий тик может прийти, когда исход уже известен
+    let settled = false;
+    const done = (fn) => { if (settled) return; settled = true; clearInterval(poll); proc.off('exit', onExit); fn(); };
+    const onExit = (code) => done(() => fail(new Error(`Chrome завершился с кодом ${code}: ${buf.slice(-600)}`)));
+    proc.on('exit', onExit);
+    const poll = setInterval(async () => {
+      const m = buf.match(/DevTools listening on ws:\/\/[^:]+:(\d+)\//);
+      if (m) { done(() => ok(m[1])); return; }
+      const file = await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '');
+      if (/^\d+\n/.test(file)) { done(() => ok(file.split('\n')[0])); return; }
+      if (Date.now() - started > LAUNCH_WAIT) {
+        done(() => {
+          proc.kill('SIGKILL');
+          fail(new Error(`Chrome не открыл порт отладки за ${LAUNCH_WAIT / 1000} с. `
+            + `stderr: ${buf.slice(-600).trim() || '(пусто)'}`));
+        });
+      }
+    }, 100);
   });
-  return { proc, port: new URL(ws).port };
+  return { proc, port };
+}
+
+/**
+ * Запуск браузера с одной повторной попыткой на чистом профиле. Повторяется
+ * только старт Chrome, до первого шага теста: сами проверки не повторяются
+ * никогда, упавший шаг — это ошибка.
+ */
+async function startBrowser(chrome) {
+  for (let attempt = 1; ; attempt++) {
+    const profile = await mkdtemp(join(tmpdir(), 'canopycraft-smoke-'));
+    try {
+      return { ...(await launch(chrome, profile)), profile };
+    } catch (e) {
+      await rm(profile, { recursive: true, force: true }).catch(() => {});
+      if (attempt >= 2) throw e;
+      console.error(`${e.message}\nЗапускаю Chrome ещё раз.`);
+    }
+  }
 }
 
 /** Вкладка браузера по протоколу отладки. */
@@ -123,8 +166,7 @@ async function main() {
   }
   const server = await serve();
   const base = `http://127.0.0.1:${server.address().port}`;
-  const profile = await mkdtemp(join(tmpdir(), 'canopycraft-smoke-'));
-  const { proc, port } = await launch(chrome, profile);
+  const { proc, port, profile } = await startBrowser(chrome);
   const started = Date.now();
 
   try {
