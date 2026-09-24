@@ -6,9 +6,11 @@ import { FASTENERS, BEAM_TIES, POST_BASES, CONCRETE, SOILS, HEAVE_STATES, HEAVE_
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel, decodeNotes, upgradeModel } from '../core/share.js';
+import { VERSION } from '../core/version.js';
 import { drawPlan, drawSection, drawDiagrams, drawNodes, pickElement, uColor, f2 } from './views.js';
 
 const $ = (id) => document.getElementById(id);
+$('app-version').textContent = `v${VERSION}`;
 const STORE_KEY = 'canopycraft.model.v2';
 
 /**
@@ -1255,6 +1257,21 @@ document.addEventListener('keydown', (e) => {
 
 /* ─────────────────── отчёт ─────────────────── */
 
+/**
+ * Ссылка на расчёт в отчёте: по распечатке вариант открывается снова ровно
+ * таким, каким его посчитали. Вместе с версией это делает отчёт воспроизводимым.
+ * Открытый двойным кликом файл даёт адрес file://, который у другого человека
+ * не откроется, — тогда нужна своя копия калькулятора, о чём и сказано.
+ */
+function reportLink() {
+  const url = shareUrl();
+  const local = url.startsWith('file:');
+  const safe = url.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  return `<p class="report-link">Расчёт по ссылке: <a href="${safe}">${safe}</a>${local
+    ? '<br>Ссылка ведёт на файл на этом компьютере. На другом — откройте свою копию калькулятора и замените в адресе всё до «#p=».'
+    : ''}</p>`;
+}
+
 function buildReport(res) {
   const m = res.model, b = billOfMaterials(res);
   const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
@@ -1266,7 +1283,8 @@ function buildReport(res) {
   const wp = m.wallPosts;
   $('report').innerHTML = `
     <h1>Расчёт навеса, пристроенного к дому</h1>
-    <p>Дата: ${new Date().toLocaleDateString('ru-RU')}. Нормы: СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017.</p>
+    <p>Дата: ${new Date().toLocaleDateString('ru-RU')}. CanopyCraft v${VERSION}. Нормы: СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017.</p>
+    ${reportLink()}
     <h2>1. Исходные данные</h2>
     <table>
       <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>

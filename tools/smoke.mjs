@@ -299,6 +299,12 @@ async function main() {
       await ev(stubs);
       await ev("document.getElementById('btn-report').click()");
       if (!(await ev("document.querySelectorAll('#report h2').length >= 5"))) fail('отчёт не собрался');
+      // по распечатке вариант должен открываться снова: версия и ссылка с моделью
+      const ver = await ev("document.getElementById('app-version').textContent");
+      if (!/^v\d+\.\d+\.\d+$/.test(ver)) fail(`версия в подвале: «${ver}»`);
+      if (!(await ev(`document.getElementById('report').textContent.includes('CanopyCraft ${ver}')`))) fail('в отчёте нет версии');
+      const link = await ev("document.querySelector('#report .report-link a')?.getAttribute('href') ?? ''");
+      if (!link.includes('#p=')) fail(`в отчёте нет ссылки на расчёт: «${link}»`);
       await ev("document.getElementById('btn-link').click()");
       await wait(300);
       for (const id of ['btn-theme', 'btn-theme', 'zoom-in', 'zoom-out', 'zoom-reset']) await ev(`document.getElementById('${id}').click()`);

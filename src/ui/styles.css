@@ -178,6 +178,9 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
   #report h2{margin-top:14pt}
   #report table{font-size:9.5pt}
   #report th,#report td{border-bottom:1px solid #999}
+  /* ссылка на расчёт длинная и без пробелов — переносится где угодно */
+  #report .report-link{font-size:8.5pt; overflow-wrap:anywhere}
+  #report .report-link a{color:inherit}
 }
 
 @media (max-width:1000px){
