@@ -1020,19 +1020,31 @@ function solveBeam(o) {
   const reactions = fixed.map((fx) => ({ x: fx.x, R: Fload[fx.dof] - KU[fx.dof] }));
 
   // --- эпюры статикой
-  const nSample = 401;
-  const xs = new Float64Array(nSample);
+  // Сетка вывода — равномерная плюс точки, где у эпюр излом или скачок: опоры,
+  // силы, моменты, стыки. На одной равномерной сетке они проскакивают между
+  // точками, и пик момента над опорой занижается на V·dx/2 (у стропила по
+  // умолчанию — на 2 %). Перед каждой такой точкой ставится ещё одна вплотную
+  // слева: там Q до скачка, который даёт реакция или сила.
+  const JUMP = 1e-6; // мм
+  const grid = new Set();
+  for (let i = 0; i <= 400; i++) grid.add((length * i) / 400);
+  const kinks = [...o.supports, ...point.map((p) => p.x), ...moments.map((p) => p.x), ...(o.hinges ?? [])];
+  for (const k of kinks) {
+    if (k <= 0 || k > length) continue;
+    grid.add(k);
+    grid.add(k - JUMP);
+  }
+  const xs = Float64Array.from([...grid].sort((a, b) => a - b).filter((v, i, a) => i === 0 || v - a[i - 1] > JUMP / 2));
+  const nSample = xs.length;
   const V = new Float64Array(nSample);
   const M = new Float64Array(nSample);
-  const dx = length / (nSample - 1);
   // I0 = ∫q dt, I1 = ∫q·t dt — момент считается точной статикой,
   // а не интегрированием эпюры Q (иначе скачки в опорах дают ошибку ~ΔR·dx/2)
   let I0 = 0, I1 = 0;
   for (let i = 0; i < nSample; i++) {
-    const x = i * dx;
-    xs[i] = x;
+    const x = xs[i];
     if (i > 0) {
-      const xa = x - dx, xm = xa + dx / 2;
+      const xa = xs[i - 1], dx = x - xa, xm = xa + dx / 2;
       I0 += ((q(xa) + 4 * q(xm) + q(x)) / 6) * dx;
       I1 += ((q(xa) * xa + 4 * q(xm) * xm + q(x) * x) / 6) * dx;
     }
@@ -2387,7 +2399,9 @@ function analyseRafter(model, x, trib, ctx) {
 
   // огибающая по всем вариантам и сочетаниям
   let Mmax = 0, Vmax = 0, Mcant = 0;
-  const iSup = Math.round((xSup / Ls) * (uplift.x.length - 1));
+  // опора — точка сетки эпюр (см. solveBeam), берётся ближайшая
+  let iSup = 0;
+  uplift.x.forEach((x, i) => { if (Math.abs(x - xSup) < Math.abs(uplift.x[iSup] - xSup)) iSup = i; });
   const envelope = byVariant.flatMap((g) => [g['ULS-1'], g['ULS-2']]).concat([uplift]);
   for (const r of envelope) {
     for (let i = 0; i < r.M.length; i++) {
