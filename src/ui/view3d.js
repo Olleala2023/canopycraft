@@ -9,6 +9,9 @@
  *
  * Модуль не знает состояния приложения: create3D(host, { onPick }) и дальше
  * update(res, sel) на каждую перерисовку — как у остальных видов.
+ *
+ * Стена дома с окнами и дверями — только ориентир (buildContext): не
+ * выбирается и не красится по U.
  */
 import {
   WebGLRenderer, Scene, PerspectiveCamera, BoxGeometry, MeshLambertMaterial, MeshBasicMaterial,
@@ -120,8 +123,22 @@ export function create3D(host, { onPick }) {
 
     // стена дома и земля — ориентир, светлые и полупрозрачные
     const ctx = buildContext(res);
-    const wall = bar(ctx.wall, new MeshLambertMaterial({ color: token('--rule-2'), transparent: true, opacity: 0.35 }));
-    parts.add(wall);
+    const wall = bar(ctx.wall, new MeshLambertMaterial({ color: token('--rule-2'), transparent: true, opacity: 0.6 }));
+    const wallEdges = new LineSegments(new EdgesGeometry(wall.geometry), new LineBasicMaterial({ color: rule, transparent: true, opacity: 0.6 }));
+    wallEdges.quaternion.copy(wall.quaternion);
+    wallEdges.position.copy(wall.position);
+    parts.add(wall, wallEdges);
+    // окна и двери — щиты в проёмах: окно — стекло, дверь — глухая, с контуром рамы
+    const frameMat = new LineBasicMaterial({ color: token('--ink-2') });
+    for (const o of ctx.openings) {
+      const leaf = bar(o, new MeshLambertMaterial(o.kind === 'door'
+        ? { color: token('--ink-3'), transparent: true, opacity: 0.85 }
+        : { color: token('--accent-2'), transparent: true, opacity: 0.7 }));
+      const frame = new LineSegments(new EdgesGeometry(leaf.geometry), frameMat);
+      frame.quaternion.copy(leaf.quaternion);
+      frame.position.copy(leaf.position);
+      parts.add(leaf, frame);
+    }
     const ground = new Mesh(new PlaneGeometry(ctx.ground.size * MM, ctx.ground.size * MM),
       new MeshBasicMaterial({ color: token('--sunk'), transparent: true, opacity: 0.82, depthWrite: false }));
     ground.renderOrder = 1; // поверх фундаментов: они под землёй и видны сквозь неё приглушённо

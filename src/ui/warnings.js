@@ -1,9 +1,11 @@
 /**
- * Предупреждения над сводкой: стыки по длине и мороз. Чистые функции —
+ * Предупреждения над сводкой: стыки по длине, проёмы дома и мороз. Чистые функции —
  * результат расчёта на входе, HTML на выходе.
  */
 import { f2 } from './views.js';
 import { plural } from './format.js';
+import { houseClashes } from '../core/analysis.js';
+import { levels } from '../core/model.js';
 
 /**
  * Предупреждения над сводкой: то, о чём расчёт молчит, хотя обязан сказать.
@@ -15,7 +17,7 @@ import { plural } from './format.js';
  */
 export function warningsHtml(res) {
   const list = res.splices;
-  const frostWarns = frostWarnings(res);
+  const frostWarns = [...houseWarnings(res), ...frostWarnings(res)];
   if (!list.length) return frostWarns.join('');
   const stock = res.model.opts.stockLength ?? 6000;
   const butt = (res.model.opts.spliceJoint ?? 'butt') === 'butt';
@@ -88,4 +90,28 @@ function frostWarnings(res) {
     (поле «Против пучения»), гладкая опалубка вместо заливки в яму, или конструктивные меры —
     уширение ниже промерзания, скользящий слой, утеплённый мелкозаглублённый фундамент; их калькулятор
     не считает. Трение о талый грунт ниже промерзания учтено как у набивной сваи на выдёргивание (СП 24, п. 7.2.13) — ${kN(h.Frf)} кН. ${more}.</div>`];
+}
+
+/**
+ * Окна и двери дома против столбов у стены и обвязки. Прочности это не
+ * меняет — расчёт считает, что шпильки заведены в стену, — но на проёме их
+ * заводить некуда, и расчёт тогда не про этот навес.
+ */
+function houseWarnings(res) {
+  const more = '<a href="help/house.html#openings" target="_blank" rel="noopener">окна и двери</a>';
+  const what = (o) => `${o.label === 'окно' ? 'окно' : 'дверь'} ${Math.round(o.x1 - o.x0)} мм`;
+  const out = [];
+  for (const c of houseClashes(res.model)) {
+    if (c.kind === 'post') {
+      const bolts = c.bolts ? ` — ${plural(c.bolts, 'шпилька попадает', 'шпильки попадают', 'шпилек попадают')} в проём, их некуда завести` : '';
+      out.push(`<div class="warn bad"><b>Столб у стены ${c.post + 1} стоит на проёме: ${what(c.opening)}${bolts}.</b>
+        Расчёт считает, что столб притянут к кладке, а у проёма кладки нет${c.opening.kind === 'door' ? ', и столб ещё загораживает проход' : ''}.
+        Передвиньте столб на простенок — на плане его можно перетащить — или поменяйте их число. ${more}.</div>`);
+    } else {
+      out.push(`<div class="warn"><b>Обвязка у стены проходит по ${c.opening.kind === 'door' ? 'двери' : 'окну'} ${Math.round(c.opening.x1 - c.opening.x0)} мм.</b>
+        Верх проёма выше низа обвязки на ${Math.round(c.opening.top - levels(res.model).wallPostTop)} мм: обвязка и стропила закроют его верх.
+        Поднимите навес (высота столба, уклон) или проверьте размеры проёма. ${more}.</div>`);
+    }
+  }
+  return out;
 }

@@ -16,7 +16,9 @@
  * формой описываются и столбы, и наклонные стропила, и диагонали связей.
  */
 import { levels } from '../core/model.js';
+import { houseWall, openingsOf } from '../core/analysis.js';
 
+const OPENING_T = 20; // мм, толщина щита проёма на стене — только для рисунка
 const CROSS_INSET = 150; // мм, как в расчёте креста (posts.js): диагональ не до самой базы
 
 /**
@@ -110,7 +112,11 @@ export function buildSolids(res) {
   return out;
 }
 
-/** Стена дома и земля — для ориентира, не детали навеса. */
+/**
+ * Стена дома, её окна и двери и земля — для ориентира, не детали навеса.
+ * Стена по ширине — из модели (houseWall), проём — тонкий щит на лицевой
+ * стороне стены, под навесом.
+ */
 export function buildContext(res) {
   const m = res.model;
   const lv = levels(m);
@@ -118,8 +124,18 @@ export function buildContext(res) {
   const face = -(wallPost?.h ?? 60) / 2;
   const t = m.wallPosts.wallThickness ?? 300;
   const top = lv.houseRoof;
+  const { x0, x1 } = houseWall(m);
+  const yc = face - t / 2;
+  const openings = openingsOf(m).map((o) => {
+    // проём не выше стены: окно под самой кровлей рисуется до её края
+    const bottom = Math.min(o.bottom, top), up = Math.min(o.top, top);
+    return { kind: o.kind, label: o.label, index: o.index,
+      from: [(o.x0 + o.x1) / 2, face + OPENING_T / 2, bottom], to: [(o.x0 + o.x1) / 2, face + OPENING_T / 2, up], w: o.x1 - o.x0, h: OPENING_T, up: [0, 1, 0] };
+  }).filter((o) => o.to[2] > o.from[2]);
+  const xMin = Math.min(0, x0), xMax = Math.max(m.geom.B, x1);
   return {
-    wall: { from: [m.geom.B / 2, face - t / 2, 0], to: [m.geom.B / 2, face - t / 2, top], w: m.geom.B + 1200, h: t, up: [0, 1, 0] },
-    ground: { size: Math.max(m.geom.B, m.geom.L + m.geom.a) * 2.2, center: [m.geom.B / 2, (m.geom.L + m.geom.a) / 2] },
+    wall: { from: [(x0 + x1) / 2, yc, 0], to: [(x0 + x1) / 2, yc, top], w: x1 - x0, h: t, up: [0, 1, 0] },
+    openings,
+    ground: { size: Math.max(xMax - xMin, m.geom.L + m.geom.a) * 2.2, center: [(xMin + xMax) / 2, (m.geom.L + m.geom.a) / 2] },
   };
 }

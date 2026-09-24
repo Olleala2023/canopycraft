@@ -134,6 +134,14 @@ export const CONTROLS = [
       : 'связей нет — не используется'),
     note: 'Диагонали работают на растяжение по очереди. К стали привариваются швом по контуру торца: катет не меньше табличного по толщине более толстого элемента и не больше 1,2 толщины более тонкого — стенку 2 мм к столбу 3 мм не приварить. К дереву — болтами М12, не больше четырёх на конец.' },
 
+  { group: 'Стена дома' },
+  { k: 'house.width', label: 'Ширина стены дома, мм', help: 'house.html#width', helpTitle: 'ширина стены и положение навеса', type: 'number', min: 0, step: 100,
+    live: (r) => (r?.model.house.width > 0
+      ? `навес — от ${r.model.house.offset} до ${r.model.house.offset + r.model.geom.B} мм от левого угла дома`
+      : 'не задана — стена рисуется по ширине навеса') },
+  { k: 'house.offset', label: 'От левого угла дома до навеса, мм', help: 'house.html#width', helpTitle: 'ширина стены и положение навеса', type: 'number', min: 0, step: 50 },
+  { k: 'house.openings', label: 'Окна и двери', help: 'house.html#openings', helpTitle: 'окна и двери', type: 'openings' },
+
   { group: 'Крепление к дому' },
   { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', help: 'sections.html#sections', helpTitle: 'сечения: доска и труба', type: 'select', options: anyOpts, pick: 'wallPurlin' },
   { k: 'wallPurlinTie.id', label: 'Узел «обвязка — столб»', type: 'select',
