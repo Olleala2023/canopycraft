@@ -618,6 +618,49 @@ async function main() {
       if (!(await ev("!!document.querySelector('#canvas svg') && !document.querySelector('#canvas canvas')"))) fail('после 3D план не вернулся');
     });
 
+    // стена дома: проём добавляется кнопкой, правится в поле без потери фокуса,
+    // столб на двери даёт предупреждение, стена и проёмы видны в 3D, проём убирается
+    await step('стена дома: окна и двери', async () => {
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      await ev("document.getElementById('c_house_openings').closest('details').open = true");
+      await ev("document.querySelector('[data-op-add=\"door\"]').click()");
+      await ev("document.querySelector('[data-op-add=\"window\"]').click()");
+      const rows = await ev("document.querySelectorAll('#c_house_openings .op-row').length");
+      if (rows !== 2) fail(`после двух «+» строк ${rows}`);
+      // дверь на третий столб (x = 3000): печатают в поле — фокус остаётся в нём
+      const kept = await ev(`(() => {
+        const el = document.querySelector('#c_house_openings [data-op="0"][data-f="x"]');
+        el.focus(); el.value = '2600'; el.dispatchEvent(new Event('input', { bubbles: true }));
+        return document.activeElement === el;
+      })()`);
+      if (!kept) fail('поле проёма теряет фокус при вводе');
+      const warn = await ev("document.getElementById('warns').textContent");
+      if (!/Столб у стены 3 стоит на проёме: дверь/.test(warn)) fail('нет предупреждения о столбе на двери');
+      if (!(await ev("!!document.querySelector('#canvas svg rect[stroke=\"var(--u-bad)\"]')"))) fail('на плане дверь со столбом не красная');
+      // стена длиннее навеса
+      for (const [id, v] of [['c_house_width', 9000], ['c_house_offset', 1500]]) {
+        await ev(`(() => { const el = document.getElementById('${id}'); el.value = '${v}'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      }
+      const live = await ev("document.querySelector('[data-live=\"c_house_width\"]').textContent");
+      if (!/от 1500 до 7500 мм/.test(live)) fail(`подсказка у ширины стены: «${live}»`);
+      await ev("document.getElementById('tab-3d').click()");
+      await wait(500);
+      const painted = await ev("document.getElementById('canvas').view3d?.painted() ?? 0");
+      if (painted < 0.2) fail(`сцена со стеной дома почти пустая: ${Math.round(painted * 100)} %`);
+      await shoot('house-3d');
+      // крестик убирает проёмы, отмена возвращает
+      await ev("document.querySelector('[data-op-del=\"1\"]').click()");
+      if (await ev("document.querySelectorAll('#c_house_openings .op-row').length") !== 1) fail('крестик не убрал проём');
+      await wait(450); // правки быстрее 400 мс история сливает в одну
+      await ev("document.querySelector('[data-op-del=\"0\"]').click()");
+      if (/стоит на проёме/.test(await ev("document.getElementById('warns').textContent"))) fail('проёмы убраны, а предупреждение осталось');
+      await ev("document.getElementById('btn-undo').click()");
+      if (await ev("document.querySelectorAll('#c_house_openings .op-row').length") !== 1) fail('отмена не вернула проём');
+      await ev("document.getElementById('tab-plan').click()");
+    });
+
     // модульная версия dev.html — то, чем пользуются при разработке: она
     // грузит модули браузером напрямую, без сборки. Ошибка в модуле проявляется
     // только там, где имя вызывается, — поэтому

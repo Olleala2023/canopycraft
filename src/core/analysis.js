@@ -106,4 +106,5 @@ export { analyseRoof, analyseLineBeam, supportLoads } from './roof.js';
 export { analysePostRow, analyseCross, analyseRoofBrace, postMu, crossBays, CROSS_INSET } from './posts.js';
 export { analyseTies, analyseBeamTies } from './ties.js';
 export { analysePostBases } from './bases.js';
+export { OPENING_KINDS, houseWall, openingsOf, houseClashes } from './house.js';
 export { spliceReport, spliceHinges, spliceScheme, analyseSpliceJoints } from './splices.js';

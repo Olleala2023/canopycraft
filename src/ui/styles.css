@@ -72,6 +72,16 @@ input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color
 .field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
 .field label .btn{white-space:nowrap; flex:0 0 auto}
 .field .note{display:block; margin-top:3px; font-size:10.5px; line-height:1.4; color:var(--ink-3)}
+/* окна и двери стены дома: строка на проём — вид и четыре размера */
+.field-label{font-size:11.5px; color:var(--ink-2); display:flex; justify-content:space-between; gap:8px}
+.ops{display:flex; flex-direction:column; gap:6px}
+.op-row{padding:5px 6px; border:1px solid var(--rule); background:var(--surface-2)}
+.op-head{display:flex; gap:5px; margin-bottom:4px}
+.op-head .btn{flex:0 0 auto; padding:0 8px}
+.op-nums{display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:4px}
+.field .op-num{display:flex; flex-direction:column; gap:1px; font-size:10px; color:var(--ink-3)}
+.op-num input{padding:2px 3px; font-size:12px}
+.op-units{font-size:10px; color:var(--ink-3)}
 .help{
   flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px; padding:0;
   border:1px solid var(--rule-2); border-radius:50%; background:transparent; color:var(--ink-3); text-decoration:none;

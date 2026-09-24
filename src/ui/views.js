@@ -1,6 +1,7 @@
 /** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
 import { levels, boltHeights } from '../core/model.js';
 import { section } from '../core/sections.js';
+import { openingsOf, houseClashes } from '../core/analysis.js';
 
 export const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
@@ -47,6 +48,17 @@ export function drawPlan(res, sel) {
   }
   s.push(`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(g.B)}" y2="${Y(0)}" stroke="var(--ink)" stroke-width="5"/>`);
   s.push(`<text x="${X(0)}" y="${Y(0) - 12}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · газоблок ${m.wallPosts.wallThickness} мм, столбы на сквозных шпильках М${m.wallPosts.boltDiameter}</text>`);
+  // окна и двери дома — разрывы в линии стены: видно, куда столб у стены не ставить.
+  // Проём, на который встал столб, — красный
+  const clashed = new Set(houseClashes(m).filter((c) => c.kind === 'post').map((c) => c.opening.index));
+  for (const o of openingsOf(m)) {
+    const a = Math.max(0, o.x0), b = Math.min(g.B, o.x1);
+    if (b <= a) continue;
+    const col = clashed.has(o.index) ? 'var(--u-bad)' : 'var(--ink-2)';
+    s.push(`<g pointer-events="none"><rect x="${X(a)}" y="${Y(0) - 3}" width="${(b - a) * sc}" height="6" fill="var(--surface)" stroke="${col}"/>`
+      + (o.kind === 'window' ? `<line x1="${X(a)}" y1="${Y(0)}" x2="${X(b)}" y2="${Y(0)}" stroke="${col}"/>` : '')
+      + `<title>${o.kind === 'window' ? 'Окно' : 'Дверь'} ${Math.round(o.x1 - o.x0)} × ${Math.round(o.top - o.bottom)} мм, низ на ${Math.round(o.bottom)} мм</title></g>`);
+  }
   s.push(`<g class="pickable" data-pick="wallPurlin"><rect x="${X(0)}" y="${Y(0)}" width="${W}" height="12" fill="transparent"/>
     <line x1="${X(0)}" y1="${Y(0) + 5}" x2="${X(g.B)}" y2="${Y(0) + 5}" stroke="${uColor(res.wallPurlin.U)}" stroke-width="5"/>
     <title>Обвязка у стены ${res.wallPurlin.sec.label} · U ${f2(res.wallPurlin.U)}</title></g>`);

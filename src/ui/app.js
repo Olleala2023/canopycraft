@@ -17,6 +17,7 @@ import { initAudio } from './audio.js';
 import { initTip, tipButton } from './tip.js';
 import { createHistory } from './history.js';
 import { create3D } from './view3d.js';
+import { openingsRows, openingsShape, applyOpeningInput, newOpening } from './openings.js';
 
 $('app-version').textContent = `v${VERSION}`;
 const STORE_KEY = 'canopycraft.model.v2';
@@ -152,6 +153,13 @@ function buildParams() {
       wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}${helpLink(c)}</span></label>`;
     } else if (c.type === 'number') {
       wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
+    } else if (c.type === 'openings') {
+      wrap.innerHTML = `<span class="field-label">${c.label}${helpLink(c)}</span><div class="ops" id="${id}"></div>`
+        + '<div style="display:flex;gap:5px;margin-top:4px"><button type="button" class="btn" data-op-add="window" style="padding:0 6px;font-size:11px">+ окно</button> '
+        + '<button type="button" class="btn" data-op-add="door" style="padding:0 6px;font-size:11px">+ дверь</button></div>';
+      body.appendChild(wrap);
+      wireOpenings(wrap, wrap.querySelector('.ops'));
+      continue;
     } else if (c.type === 'range') {
       const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(' ');
       wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
@@ -211,12 +219,48 @@ function buildParams() {
   }
 }
 
+/**
+ * Окна и двери: список правится на месте, перерисовка — как у любого поля.
+ * Строки строятся заново, только когда проёмы добавили, убрали или сменили
+ * вид, — иначе поле, в котором сейчас печатают, потеряло бы фокус.
+ */
+function wireOpenings(wrap, box) {
+  const list = () => state.model.house.openings;
+  box.addEventListener('input', (e) => {
+    if (e.target.matches('[data-op]') && applyOpeningInput(list(), e.target)) render();
+  });
+  wrap.addEventListener('click', (e) => {
+    const add = e.target.closest('[data-op-add]');
+    const del = e.target.closest('[data-op-del]');
+    if (add) list().push(newOpening(add.getAttribute('data-op-add'), state.model));
+    else if (del) list().splice(Number(del.getAttribute('data-op-del')), 1);
+    else return;
+    e.preventDefault();
+    render(add ? 'Проём добавлен — задайте его размеры и положение' : 'Проём убран');
+  });
+}
+
+function syncOpenings(box) {
+  const list = state.model.house.openings;
+  const shape = openingsShape(list);
+  if (box.dataset.shape !== shape || !box.childElementCount) {
+    box.innerHTML = openingsRows(list);
+    box.dataset.shape = shape;
+    return;
+  }
+  box.querySelectorAll('input[data-op]').forEach((el) => {
+    const v = list[Number(el.getAttribute('data-op'))]?.[el.getAttribute('data-f')];
+    if (el !== document.activeElement && String(v) !== el.value) el.value = String(v);
+  });
+}
+
 function syncParams() {
   for (const c of CONTROLS) {
     if (c.group) continue;
     const id = 'c_' + c.k.replace(/[.#]/g, '_');
     const el = $(id);
     if (!el) continue;
+    if (c.type === 'openings') { syncOpenings(el); continue; }
     const v = readVirtual(c.k);
     if (c.type === 'check') el.checked = !!v;
     else el.value = String(v);
