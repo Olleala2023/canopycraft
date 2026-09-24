@@ -1,6 +1,6 @@
 {
   "name": "canopycraft",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Расчёт навеса, пристроенного к дому: стропила, обрешётка, прогоны, столбы. Сосна и профильная труба.",
   "type": "module",
   "private": true,
@@ -16,5 +16,8 @@
     "esbuild": "0.28.2",
     "eslint": "10.11.0",
     "globals": "17.12.0"
+  },
+  "dependencies": {
+    "three": "0.186.1"
   }
 }
