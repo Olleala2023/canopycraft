@@ -30,6 +30,13 @@ const ORDER = [
   'src/core/optimize.js',
   'src/core/search.js',
   'src/ui/views.js',
+  'src/ui/dom.js',
+  'src/ui/format.js',
+  'src/ui/controls.js',
+  'src/ui/warnings.js',
+  'src/ui/report.js',
+  'src/ui/theme.js',
+  'src/ui/audio.js',
   'src/ui/app.js',
 ];
 

@@ -1,15 +1,20 @@
 import { defaultModel, spread } from '../core/model.js';
 import { analyse, billOfMaterials } from '../core/analysis.js';
-import { SECTIONS, section } from '../core/sections.js';
-import { ROOFING, SNOW_REGIONS, WIND_REGIONS } from '../core/loads.js';
-import { FASTENERS, BEAM_TIES, POST_BASES, CONCRETE, SOILS, HEAVE_STATES, HEAVE_SURFACES } from '../core/fasteners.js';
+import { section } from '../core/sections.js';
+import { CONCRETE } from '../core/fasteners.js';
 import { pickSection, pickRafterSpacing, pickAll } from '../core/optimize.js';
 import { searchByCost } from '../core/search.js';
 import { encodeModel, decodeModel, decodeNotes, upgradeModel } from '../core/share.js';
 import { VERSION } from '../core/version.js';
 import { drawPlan, drawSection, drawDiagrams, drawNodes, pickElement, uColor, f2 } from './views.js';
+import { $ } from './dom.js';
+import { kN, plural } from './format.js';
+import { CONTROLS } from './controls.js';
+import { warningsHtml } from './warnings.js';
+import { reportHtml } from './report.js';
+import { initTheme } from './theme.js';
+import { initAudio } from './audio.js';
 
-const $ = (id) => document.getElementById(id);
 $('app-version').textContent = `v${VERSION}`;
 const STORE_KEY = 'canopycraft.model.v2';
 
@@ -75,199 +80,6 @@ function shareUrl() {
 }
 
 /* ─────────────────── панель параметров ─────────────────── */
-
-const timberOpts = () => SECTIONS.filter((s) => s.material === 'timber');
-const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
-/** Диагональ креста — квадратная труба небольшого сечения. */
-const braceOpts = () => SECTIONS.filter((s) => s.material === 'steel' && s.h === s.b && s.h <= 80);
-const kN = (v) => f2(v / 1000);
-const anyOpts = () => SECTIONS;
-
-/**
- * Кнопки «подобрать» у блока фундамента целятся в тот же запас 0,9, что и
- * подбор сечений: needDepth и needSide из расчёта — это ровно единица.
- */
-const blockMargin = (mm) => Math.ceil(mm / 0.9 / 50) * 50;
-
-const CONTROLS = [
-  { group: 'Геометрия', open: true },
-  { k: 'geom.B', label: 'Ширина навеса', type: 'range', min: 3000, max: 12000, step: 250, unit: 'мм' },
-  { k: 'geom.L', label: 'Пролёт до столбов', type: 'range', min: 2000, max: 6500, step: 100, unit: 'мм' },
-  { k: 'geom.a', label: 'Свес за столбы', type: 'range', min: 0, max: 2000, step: 50, unit: 'мм' },
-  { k: 'geom.alpha', label: 'Уклон', type: 'range', min: 3, max: 30, step: 1, unit: '°' },
-  { k: 'geom.postHeight', label: 'Высота столба', type: 'range', min: 1800, max: 4000, step: 50, unit: 'мм' },
-  { k: 'geom.driftH', label: 'Перепад до кровли дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'range', min: 0, max: 4000, step: 100, unit: 'мм' },
-
-  { group: 'Элементы', open: true },
-  { k: '#rafterCount', label: 'Стропил', type: 'range', min: 3, max: 25, step: 1, unit: 'шт', actions: [
-      ['равномерно', (m) => { m.rafters.xs = spread(m.geom.B, m.rafters.xs.length); return 'Стропила распределены равномерно'; }],
-      ['подобрать шаг', (m) => {
-        const r = pickRafterSpacing(m, 0.9);
-        if (!r) return 'Даже при 31 стропиле сечение не проходит — нужно крупнее';
-        m.rafters.xs = spread(m.geom.B, r.count);
-        return `Шаг ${Math.round(r.step)} мм (${r.count} шт), U = ${f2(r.U)}`;
-      }]] },
-  { k: 'roofing', label: 'Покрытие', type: 'select', options: () => Object.entries(ROOFING).map(([id, v]) => ({ id, label: v.label })) },
-  { k: 'rafters.sectionId', label: 'Сечение стропила', type: 'select', options: anyOpts, pick: 'rafters' },
-  { k: 'battens.sectionId', label: 'Обрешётка', type: 'select', options: anyOpts, pick: 'battens' },
-  { k: 'battens.spacing', label: 'Шаг обрешётки', type: 'range', min: 200, max: 1200, step: 50, unit: 'мм' },
-  { k: 'purlin.sectionId', label: 'Прогон наружный', type: 'select', options: anyOpts, pick: 'purlin' },
-  { k: 'rafterTie.id', label: 'Крепление стропила к опоре', type: 'select',
-    options: () => FASTENERS.map((f) => ({ id: f.id, label: f.label })),
-    note: 'Ветер поднимает лёгкую кровлю, и стропило висит на крепеже. Уголок нужен затем, чтобы усилие пришло на крепёж срезом: на выдёргивание гвозди и саморезы в несущих узлах не работают. Число крепежей считается, проверяется — помещается ли оно по правилам расстановки.' },
-  { k: 'purlinTie.id', label: 'Узел «прогон — столб»', type: 'select',
-    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
-    note: 'Вниз прогон держит само опирание, торец в торец. Узел нужен против ветрового отрыва и горизонтальной силы. Катет шва не может быть больше 1,2 толщины самой тонкой стенки — на трубе 3 мм это 3,6 мм.' },
-  { k: '#postCount', label: 'Столбов наружных', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
-  { k: 'posts.sectionId', label: 'Сечение наружного столба', type: 'select', options: steelOpts, pick: 'posts' },
-  { k: 'postBase.id', label: 'База столба', type: 'select',
-    options: () => POST_BASES.map((b) => ({ id: b.id, label: b.label })),
-    note: 'Пока вдоль стены связей нет, столб — консоль, защемлённая внизу: база обязана воспринять момент от ветра. Два анкера с малым разносом его не держат, и тогда «защемлён внизу» остаётся словами.' },
-  { k: 'postBase.footing', label: 'Сторона блока фундамента', type: 'range', min: 300, max: 1200, step: 50, unit: 'мм',
-    actions: [['подобрать сторону', (m) => {
-      const r = analyse(m);
-      const need = blockMargin(Math.max(r.bases.outer.needSide, r.bases.wall.needSide));
-      m.postBase.footing = Math.min(1200, Math.max(300, need));
-      return need > 1200
-        ? `При такой глубине нужна сторона ${need} мм — копайте глубже`
-        : `Сторона ${m.postBase.footing} мм — блок держит отрыв`;
-    }]],
-    note: 'Сторона бетонного блока под столбом — и для забетонированного, и под плитой. Его вес держит навес от вырыва вверх: проверка «Вес фундамента против отрыва» в карточке «База столба».' },
-  { k: 'postBase.depth', label: 'Глубина блока фундамента', type: 'range', min: 300, max: 3000, step: 50, unit: 'мм',
-    actions: [['подобрать глубину', (m) => {
-      const r = analyse(m);
-      const byWeight = blockMargin(Math.max(r.bases.outer.needDepth, r.bases.wall.needDepth));
-      const byFrost = r.bases.outer.frost.needDepth;
-      const need = Math.max(byWeight, byFrost);
-      m.postBase.depth = Math.min(3000, Math.max(300, need));
-      if (need > 3000) return `При такой стороне нужна глубина ${need} мм — делайте блок шире`;
-      return byFrost >= byWeight
-        ? `Глубина ${m.postBase.depth} мм — определяет промерзание, по весу хватило бы ${byWeight}`
-        : `Глубина ${m.postBase.depth} мм — блок держит отрыв${byFrost ? ' и ниже промерзания' : ''}`;
-    }]],
-    note: 'У забетонированного столба блок не может быть мельче заделки — если поставить меньше, в расчёт всё равно пойдёт глубина заделки. Если задана глубина промерзания, подошва для пучинистого грунта должна быть не выше неё.' },
-  { k: 'postBase.surface', label: 'Поверхность блока', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
-    options: () => Object.entries(HEAVE_SURFACES).map(([id, v]) => ({ id, label: v.label })),
-    note: 'Коэффициент к силе пучения (прим. 4 к табл. 6.12 СП 22): бетон, залитый прямо в яму, повторяет все неровности стенок, и мёрзлому грунту есть за что держаться.' },
-  { k: 'postBase.antiHeave', label: 'Против пучения', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
-    options: () => [
-      { id: 'none', label: 'ничего — блок в родном грунте' },
-      { id: 'replace', label: 'пазухи засыпаны непучинистым грунтом' }],
-    live: (r) => {
-      const h = r?.bases?.outer?.heave;
-      if (!h) return '';
-      if (h.reason === 'noFrost') return 'глубина промерзания не задана — пучение не проверяется';
-      if (h.reason === 'nonHeaving') return 'грунт непучинистый — касательных сил нет';
-      if (h.reason === 'replaced') return 'проверка касательных сил не применяется: у блока непучинистый грунт';
-      return `грунт тянет блок вверх с силой ${f2(h.pull / 1000)} кН, держат ${f2(h.F / 1000)} кН`
-        + (h.check.U > 1 ? ` — не проходит в ${Math.round(h.check.U)} раз` : ' — проходит');
-    },
-    note: 'Засыпка пазух песком средней крупности или ПГС с отводом воды — мера из п. 6.8.12 СП 22: у боковой поверхности блока грунт не пучится. Ширину засыпки и дренаж калькулятор не считает — их конструируют.' },
-  { k: 'bracing.along', label: 'Что держит верх ряда вдоль стены', help: 'braces.html', helpTitle: 'раскрепление столбов', type: 'select', options: () => [
-      { id: 'none', label: 'ничего — столбы консоли, μ = 2' },
-      { id: 'cross', label: 'крест в крайнем пролёте — μ = 1' },
-      { id: 'roof', label: 'диагонали в плоскости кровли — μ = 1' }],
-    live: (r) => {
-      if (!r) return '';
-      const along = r.model.bracing?.along;
-      if (!r.brace) {
-        if (along === 'cross') return 'Крест не поставить: в ряду нужен хотя бы один пролёт';
-        if (along === 'roof') return 'Диагонали по кровле не поставить: нужно хотя бы два стропила';
-        return `μ вдоль ряда 2,0 — верх свободен, ветер вдоль стены ${kN(r.thrust.alongOuter)} кН идёт в консоли столбов. Поперёк ряда верх держат стропила: μ = 1`;
-      }
-      const c = r.brace;
-      const per = r.cross ? r.cross.bays.length : 1;
-      return `μ = 1 в обеих плоскостях. ${r.cross ? 'Крест' : 'Диагонали по кровле'} держат ${kN(c.F)} кН: ветер ${kN(c.wind / per)} + условная сила столбов ${kN(c.qfic / per)} · U ${f2(c.U)}`;
-    },
-    note: 'μ не выбирается, а следует из того, что держит верх. Поперёк ряда это стропила — распорки до стены; их крепление и обвязка у стены на это усилие проверяются. Вдоль стены стропила на шарнирах держать не могут: без связи столб — консоль, и сечение определяет гибкость. Крест ставится между столбами и добавляет им вертикаль; диагонали по кровле идут от прогона к обвязке и отдают силу в шпильки у дома. Подкос от столба к прогону связью не является.' },
-  { k: 'bracing.bays', label: 'Крест в пролётах', type: 'select', numeric: true, options: () => [
-      { id: '1', label: 'в одном крайнем' },
-      { id: '2', label: 'в обоих крайних — усилие делится пополам' }],
-    live: (r) => (r?.cross
-      ? `пролёт ${Math.round(r.cross.span)} мм, диагонали ${r.cross.count} × ${Math.round(r.cross.length)} мм; столбам пролёта +${kN(r.cross.V)} кН в сжатие и ${kN(r.cross.Vup)} в отрыв`
-      : 'только для креста') },
-  { k: 'bracing.roofBays', label: 'Ячейка диагоналей по кровле', type: 'select', numeric: true, options: () => [
-      { id: '1', label: 'один шаг стропил' },
-      { id: '2', label: 'два шага стропил' },
-      { id: '3', label: 'три шага стропил' }],
-    live: (r) => (r?.roofBrace
-      ? `ячейка ${Math.round(r.roofBrace.w)} × ${Math.round(r.roofBrace.Lr)} мм: диагональ тянет ${kN(r.roofBrace.T)} кН при силе ${kN(r.roofBrace.F)}, крайним стропилам ±${kN(r.roofBrace.Nchord)} кН`
-      : 'только для диагоналей по кровле'),
-    note: 'Ячейка узкая и длинная, диагональ почти параллельна стропилам: усилие в ней во столько раз больше силы, во сколько она длиннее ширины ячейки. Шире ячейка — легче диагонали, крепление и крайние стропила.' },
-  { k: 'bracing.sectionId', label: 'Сечение диагоналей', type: 'select', options: braceOpts, pick: 'bracing',
-    live: (r) => (r?.brace
-      ? `растяжение ${kN(r.brace.T)} кН · гибкость ${Math.round(r.brace.lambda)} из 400 · U ${f2(r.brace.U)}${r.brace.U > 1 ? ` — не проходит: ${r.brace.worst.name.toLowerCase()}` : ''}`
-      : 'связей нет — не используется'),
-    note: 'Диагонали работают на растяжение по очереди. К стали привариваются швом по контуру торца: катет не меньше табличного по толщине более толстого элемента и не больше 1,2 толщины более тонкого — стенку 2 мм к столбу 3 мм не приварить. К дереву — болтами М12, не больше четырёх на конец.' },
-
-  { group: 'Крепление к дому' },
-  { k: 'wallPurlin.sectionId', label: 'Обвязка поверх столбов', type: 'select', options: anyOpts, pick: 'wallPurlin' },
-  { k: 'wallPurlinTie.id', label: 'Узел «обвязка — столб»', type: 'select',
-    options: () => BEAM_TIES.map((t) => ({ id: t.id, label: t.label })),
-    note: 'К деревянной обвязке не приварить: если выбрана сварка, расчёт всё равно считает болтовой узел и пишет об этом.' },
-  { k: '#wallPostCount', label: 'Столбов у стены', type: 'range', min: 2, max: 9, step: 1, unit: 'шт' },
-  { k: 'wallPosts.sectionId', label: 'Сечение стенового столба', type: 'select', options: steelOpts, pick: 'wallPosts',
-    note: 'Столб притянут к стене шпильками в нескольких точках по высоте — уехать вбок он не может ни в одной плоскости, поэтому μ = 1. Шпильки на это проверяются.' },
-  { k: 'wallPosts.boltCount', label: 'Шпилек на столб', type: 'range', min: 2, max: 6, step: 1, unit: 'шт' },
-  { k: 'wallPosts.boltDiameter', label: 'Диаметр шпильки', type: 'select', numeric: true, options: () => [
-      { id: '12', label: 'М12' }, { id: '16', label: 'М16' }, { id: '20', label: 'М20' }, { id: '24', label: 'М24' }] },
-  { k: 'wallPosts.boltGrade', label: 'Класс прочности шпильки', type: 'select', options: () => [
-      { id: '4.8', label: '4.8' }, { id: '5.8', label: '5.8' }, { id: '8.8', label: '8.8' }] },
-  { k: 'wallPosts.plateSize', label: 'Шайба-пластина изнутри', type: 'range', min: 60, max: 250, step: 10, unit: 'мм' },
-  { k: 'wallPosts.blockClass', label: 'Класс газоблока', type: 'select', options: () => [
-      { id: 'B2.0', label: 'B2,0 (D400) — R 0,85 МПа' },
-      { id: 'B2.5', label: 'B2,5 (D500) — R 1,0 МПа' },
-      { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
-      { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
-  { k: 'wallPosts.wallThickness', label: 'Толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
-  { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
-
-  { group: 'Площадка', side: 'right' },
-  { k: 'site.snowRegion', label: 'Снеговой район', help: 'site.html', helpTitle: 'где взять район и на что он влияет', type: 'select', options: () => Object.entries(SNOW_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
-  { k: 'site.windRegion', label: 'Ветровой район', help: 'site.html', helpTitle: 'где взять район и на что он влияет', type: 'select', options: () => Object.entries(WIND_REGIONS).map(([id, v]) => ({ id, label: `${id} — ${String(v).replace('.', ',')} кПа` })) },
-  { k: 'site.terrain', label: 'Тип местности', help: 'site.html', helpTitle: 'тип местности и пульсации ветра', type: 'select', options: () => [
-      { id: 'A', label: 'A — открытая' }, { id: 'B', label: 'B — пригород, лес' }, { id: 'C', label: 'C — плотная застройка' }],
-    note: 'Районы берутся по картам приложения Е СП 20. По умолчанию стоит Воронеж: снег III, ветер II, местность B — если строите не там, это первое, что нужно поменять.' },
-  { k: 'site.frostDepth', label: 'Глубина промерзания для суглинков', help: 'frost.html', helpTitle: 'мороз, пучение и глубина фундамента', type: 'range', min: 0, max: 3000, step: 50, unit: 'мм',
-    note: 'С карты нормативных глубин промерзания — она даётся для суглинков и глин, на ваш грунт калькулятор пересчитает сам. 0 — не задано: тогда фундамент по морозу не проверяется.' },
-  { k: 'site.soil', label: 'Грунт на площадке', help: 'frost.html', helpTitle: 'мороз, пучение и глубина фундамента', type: 'select',
-    options: () => Object.entries(SOILS).map(([id, v]) => ({ id, label: `${v.label}${v.heaving ? ' — пучинистый' : ''}` })) },
-  { k: 'site.soilState', label: 'Состояние пучинистого грунта', help: 'frost.html', helpTitle: 'касательные силы пучения', type: 'select',
-    options: () => Object.entries(HEAVE_STATES).map(([id, v]) => ({ id, label: `${v.label} — τ ${v.tau[0]} кПа` })),
-    note: 'Строка табл. 6.12 СП 22: чем влажнее и мягче грунт, тем сильнее он тянет блок за бока. I_L — показатель текучести глинистого грунта, S_r — степень влажности песка; без изысканий берите первую строку, по ней же считается обратная засыпка.' },
-  { k: 'site.geoCat1', label: 'Геотехническая категория 1 (τ × 0,9)', type: 'check' },
-  { k: 'site.drift', label: 'Снеговой мешок у стены дома', help: 'snow.html', helpTitle: 'снеговой мешок у стены', type: 'check' },
-  { k: 'site.houseRoofLength', label: 'Длина ската дома l₁', type: 'range', min: 0, max: 30000, step: 500, unit: 'мм' },
-  { k: 'site.houseRoofSlope', label: 'Уклон кровли дома α', type: 'range', min: 0, max: 45, step: 1, unit: '°' },
-  { k: 'site.crossSlope', label: 'Поперечный уклон навеса φ', type: 'range', min: 0, max: 30, step: 1, unit: '°' },
-  { k: 'site.reverseSlope', label: 'Уклон навеса к стене (обратный, k₂ = 1)', type: 'check' },
-  { k: 'site.parapet', label: 'Сплошной парапет у перепада (m₁ = 0)', type: 'check' },
-
-  { group: 'Материалы', side: 'right' },
-  { k: 'opts.timber.grade', label: 'Сорт сосны', type: 'select', numeric: true,
-    options: () => [{ id: '1', label: '1 сорт' }, { id: '2', label: '2 сорт' }, { id: '3', label: '3 сорт' }] },
-  { k: 'opts.timber.serviceClass', label: 'Условия эксплуатации', type: 'select', numeric: true,
-    options: () => [{ id: '2', label: '2 — под навесом, m_в = 1,0' }, { id: '3', label: '3 — открытый воздух, m_в = 0,9' }, { id: '4', label: '4 — влажная среда, m_в = 0,85' }] },
-  { k: 'opts.steel.grade', label: 'Сталь', type: 'select',
-    options: () => [{ id: 'C245', label: 'С245 — R_y 240 МПа' }, { id: 'C255', label: 'С255 — R_y 240 МПа' }, { id: 'C345', label: 'С345 — R_y 315 МПа' }] },
-  { k: 'opts.concreteClass', label: 'Бетон фундамента', type: 'select',
-    options: () => Object.keys(CONCRETE).map((id) => ({ id, label: `${id} — R_b ${String(CONCRETE[id].Rb).replace('.', ',')} МПа` })) },
-  { k: 'opts.stockLength', label: 'Стандартная длина в продаже', type: 'select', numeric: true,
-    options: () => [{ id: '4000', label: '4 м' }, { id: '6000', label: '6 м' }, { id: '12000', label: '12 м' }] },
-  { k: 'opts.spliceJoint', label: 'Стык по длине', type: 'select',
-    options: () => [
-      { id: 'butt', label: 'встык — момент не передаётся' },
-      { id: 'plate', label: 'накладка — сечение восстановлено' },
-    ],
-    note: 'Что делать, когда элемент длиннее хлыста. Простой стык встык работает шарниром: опорный момент в нём исчезает, а пролётные растут. Накладка с восстановлением сечения оставляет балку неразрезной — но её саму расчёт пока не проверяет, это на вас.' },
-
-  { group: 'Цены — подставьте свои', side: 'right' },
-  { k: 'prices.timberM3', label: 'Доска обрезная, ₽/м³', type: 'number', min: 0, step: 500 },
-  { k: 'prices.steelKg', label: 'Профильная труба, ₽/кг', type: 'number', min: 0, step: 5 },
-  { k: 'prices.roofingM2', label: 'Кровля, ₽/м²', type: 'number', min: 0, step: 50 },
-  { k: 'prices.fastenerPc', label: 'Комплект шпилька+пластина, ₽/шт', type: 'number', min: 0, step: 10 },
-  { k: 'prices.anglePc', label: 'Уголок крепёжный, ₽/шт', type: 'number', min: 0, step: 10 },
-];
 
 const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
 function setPath(o, p, v) {
@@ -633,99 +445,6 @@ function selectRow(res, key) {
   return { type: row[1], index: i };
 }
 
-/**
- * Предупреждения над сводкой: то, о чём расчёт молчит, хотя обязан сказать.
- *
- * Балки решаются неразрезными по всей ширине, но элемент длиннее хлыста
- * придётся стыковать, и стык без накладки работает шарниром. Отдельной
- * строкой — случай, когда кусок ложится меньше чем на две опоры: это уже
- * не пониженный запас, а геометрически изменяемая схема.
- */
-function renderWarns(res) {
-  const list = res.splices;
-  const host = $('warns');
-  const frostWarns = frostWarnings(res);
-  if (!list.length) { host.innerHTML = frostWarns.join(''); return; }
-  const stock = res.model.opts.stockLength ?? 6000;
-  const butt = (res.model.opts.spliceJoint ?? 'butt') === 'butt';
-  const mm = (x) => Math.round(x);
-  const out = [];
-
-  for (const s of list.filter((e) => e.impossible)) {
-    out.push(`<div class="warn bad"><b>${s.label}: стык встык сюда не поставить.</b>
-      Элемент длиной ${mm(s.length)} мм не помещается в хлыст ${(stock / 1000).toFixed(0)} м,
-      а опоры в пределах хлыста от отметки ${mm(s.from)} мм нет. Стык встык обязан лежать на
-      опоре — он не передаёт ни момента, ни поперечной силы. Поставьте опору ближе или
-      выберите стык с накладкой.</div>`);
-  }
-
-  for (const s of list.filter((e) => e.unstable && !e.impossible)) {
-    const bad = s.cuts.filter((c) => c.unstable)
-      .map((c) => `${mm(c.x0)}–${mm(c.x1)} мм (опор: ${c.supports})`).join(', ');
-    out.push(butt
-      ? `<div class="warn bad"><b>${s.label}: стык оставляет кусок меньше чем на двух опорах.</b>
-          Куски ${bad} — при стыке встык это геометрически изменяемая схема, считать там нечего.
-          Переставьте опоры так, чтобы каждый кусок лёг минимум на две, или выполните стык накладкой.</div>`
-      : `<div class="warn bad"><b>${s.label}: кусок держится только накладкой.</b>
-          Куски ${bad} — без накладки, восстанавливающей сечение, это изменяемая схема.
-          Расчёт верит, что накладка есть, и сам её не проверяет.</div>`);
-  }
-
-  const spliced = list.filter((s) => s.splices > 0);
-  if (!spliced.length) { host.innerHTML = [...frostWarns, ...out].join(''); return; }
-  const items = spliced.map((s) => `${s.label} — ${plural(s.pieces, 'хлыст', 'хлыста', 'хлыстов')}, ${plural(s.splices, 'стык', 'стыка', 'стыков')} при ${s.at.map(mm).join(' и ')} мм`);
-  out.push(`<div class="warn"><b>Длиннее хлыста ${(stock / 1000).toFixed(0)} м — потребуются стыки.</b>
-    ${items.join('; ')}. ${butt
-      ? 'Стык принят встык и посчитан шарниром: момент через него не идёт, опорный момент исчезает, а пролётные растут. Если стык будет с накладкой, переключите «Стык по длине» в блоке «Материалы».'
-      : 'Стык принят с накладкой, и балка считается неразрезной. Сама накладка посчитана — решение в карточке «Стык по длине» внизу; накладку надо выполнить именно так, иначе неразрезности не будет.'}
-    <a href="help/limits.html" target="_blank" rel="noopener">Что считается, а что нет</a>.</div>`);
-
-  host.innerHTML = [...frostWarns, ...out].join('');
-}
-
-/**
- * Мороз: два честных предупреждения. Глубина промерзания не задана — значит,
- * фундамент по морозу не проверен вовсе. Задана, грунт пучинистый — подошва
- * ниже промерзания проверена, но это условие необходимое, а не достаточное:
- * касательные силы пучения тянут столб за боковую поверхность, и их расчёт
- * пока не сделан. Зелёная проверка глубины не должна выглядеть как «по морозу
- * всё хорошо».
- */
-function frostWarnings(res) {
-  const f = res.bases.outer.frost;
-  const more = '<a href="help/frost.html" target="_blank" rel="noopener">мороз и пучение</a>';
-  if (!f.set) {
-    return [`<div class="warn"><b>Глубина промерзания не задана — фундамент по морозу не проверен.</b>
-      Задайте её в блоке «Площадка» по карте нормативных глубин для суглинков и выберите грунт.
-      Для пучинистых грунтов глубину фундамента в средней полосе обычно определяет именно мороз,
-      а не вес против отрыва — ${more}.</div>`];
-  }
-  if (!f.soil.heaving) return [];
-  const h = res.bases.outer.heave;
-  if (h.reason === 'replaced') {
-    return [`<div class="warn"><b>Касательные силы пучения не проверяются — принята засыпка пазух непучинистым грунтом.</b>
-      Так расчёт верен, только если на площадке так и сделано: вокруг блока на всю глубину промерзания —
-      песок средней крупности, крупный или ПГС, и воде есть куда уйти. Засыпка вынутым суглинком по
-      СП 22 считается пучинистой — ${more}.</div>`];
-  }
-  if (!h.applies) return [];
-  const kN = (v) => f2(v / 1000);
-  return [`<div class="warn bad"><b>Блок выдавит морозом: грунт тянет вверх ${kN(h.pull)} кН, держат ${kN(h.F)} кН.</b>
-    Пучинистый грунт (${f.soil.label}) смерзается с боковой поверхностью блока на глубину промерзания и тянет его
-    за бока, даже когда подошва ниже промерзания (п. 6.8.6 СП 22). Размером блока это не лечится:
-    шире блок — больше поверхность, за которую тянут. Что помогает: засыпать пазухи непучинистым грунтом
-    (поле «Против пучения»), гладкая опалубка вместо заливки в яму, или конструктивные меры —
-    уширение ниже промерзания, скользящий слой, утеплённый мелкозаглублённый фундамент; их калькулятор
-    не считает. Трение о талый грунт ниже промерзания учтено как у набивной сваи на выдёргивание (СП 24, п. 7.2.13) — ${kN(h.Frf)} кН. ${more}.</div>`];
-}
-
-/** Склонение числительного: 1 стык, 2 стыка, 5 стыков. */
-function plural(n, one, few, many) {
-  const a = Math.abs(n) % 100, b = a % 10;
-  const word = a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
-  return `${n} ${word}`;
-}
-
 function renderSummary(res) {
   $('summary').innerHTML = res.summary.map((s) => `
     <div class="card" data-sel="${s.key}">
@@ -739,25 +458,6 @@ function renderSummary(res) {
       state.sel = selectRow(res, c.getAttribute('data-sel'));
       render();
     }));
-}
-
-/**
- * Строка под спецификацией: сколько стыков придётся сделать.
- *
- * Цена считается по чистому объёму и массе, поэтому сам стык в неё не входит —
- * ни накладка, ни метизы. Сказать об этом надо там же, где человек смотрит,
- * что покупать.
- */
-function spliceReportNote(b) {
-  const spliced = b.items.filter((i) => i.splices > 0);
-  if (!spliced.length) return '';
-  const list = spliced.map((i) => `${i.name.toLowerCase()} — ${i.splices} на ${i.count} шт`).join(', ');
-  const joints = b.spliceJoints ?? [];
-  return `<p><b>Стыки по длине.</b> Элементы длиннее хлыста ${(b.stock / 1000).toFixed(0)} м собираются
-    из кусков: ${list}. ${joints.length
-      ? 'Стыки выполняются накладками, и балка считается неразрезной. Решение по каждому: '
-        + joints.map((j) => `${j.label.toLowerCase()} — ${j.solution}`).join('; ') + '.'
-      : 'Стыки выполняются встык и по расчёту лежат на опорах: момент через них не передаётся, накладки не нужны.'}</p>`;
 }
 
 function spliceNote(b) {
@@ -1257,147 +957,6 @@ document.addEventListener('keydown', (e) => {
 
 /* ─────────────────── отчёт ─────────────────── */
 
-/**
- * Ссылка на расчёт в отчёте: по распечатке вариант открывается снова ровно
- * таким, каким его посчитали. Вместе с версией это делает отчёт воспроизводимым.
- * Открытый двойным кликом файл даёт адрес file://, который у другого человека
- * не откроется, — тогда нужна своя копия калькулятора, о чём и сказано.
- */
-function reportLink() {
-  const url = shareUrl();
-  const local = url.startsWith('file:');
-  const safe = url.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-  return `<p class="report-link">Расчёт по ссылке: <a href="${safe}">${safe}</a>${local
-    ? '<br>Ссылка ведёт на файл на этом компьютере. На другом — откройте свою копию калькулятора и замените в адресе всё до «#p=».'
-    : ''}</p>`;
-}
-
-function buildReport(res) {
-  const m = res.model, b = billOfMaterials(res);
-  const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
-  const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
-    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}${c.U === Infinity && c.note ? ` — ${c.note}` : ''}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
-  const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
-  const worstPost = res.posts.reduce((a, c) => (a.U > c.U ? a : c));
-  const worstWallPost = res.wallPosts.reduce((a, c) => (a.U > c.U ? a : c));
-  const wp = m.wallPosts;
-  $('report').innerHTML = `
-    <h1>Расчёт навеса, пристроенного к дому</h1>
-    <p>Дата: ${new Date().toLocaleDateString('ru-RU')}. CanopyCraft v${VERSION}. Нормы: СП 20.13330.2016, СП 64.13330.2017, СП 16.13330.2017.</p>
-    ${reportLink()}
-    <h2>1. Исходные данные</h2>
-    <table>
-      <tr><td>Габариты</td><td>${m.geom.B} × ${m.geom.L} мм, свес ${m.geom.a} мм, уклон ${m.geom.alpha}°</td></tr>
-      <tr><td>Крепление стропил</td><td>${res.ties.outer.need} × ${res.ties.outer.fastener.short} у прогона, ${res.ties.wall.need} × ${res.ties.wall.fastener.short} у обвязки; шаги S1 ${Math.round(res.ties.outer.spacing.s1)}, S2 ${Math.round(res.ties.outer.spacing.s2)}, S3 ${Math.round(res.ties.outer.spacing.s3)} мм</td></tr>
-      <tr><td>Высота столбов</td><td>${m.geom.postHeight} мм; μ наружных ${f2(worstPost.muX)}/${f2(worstPost.muY)}, стеновых ${f2(worstWallPost.muX)}/${f2(worstWallPost.muY)} (поперёк/вдоль ряда)</td></tr>
-      <tr><td>Раскрепление наружного ряда</td><td>поперёк ряда верх держат стропила: сила ${kN(res.bracing.holdX)} кН уходит по ним к стене и проверяется в креплении стропил и в обвязке;
-        вдоль стены ${res.cross
-          ? `крест из диагоналей ${res.cross.sec.label} в ${res.cross.bays.length === 2 ? 'обоих крайних пролётах' : 'крайнем пролёте'}, держит ${kN(res.cross.F)} кН (ветер плюс условная поперечная сила столбов по формуле (18) СП 16)`
-          : res.roofBrace
-            ? `диагонали ${res.roofBrace.sec.label} в плоскости кровли в крайней ячейке ${Math.round(res.roofBrace.w)} × ${Math.round(res.roofBrace.Lr)} мм, держат ${kN(res.roofBrace.F)} кН и отдают их по обвязке в шпильки у дома; крайние стропила ячейки проверены как стойки фермы`
-            : 'связей нет — столбы консоли, μ = 2, ветер вдоль стены идёт в них'}</td></tr>
-      <tr><td>Крепление к дому</td><td>${wp.xs.length} стальных столба ${worstWallPost.sec.label}, притянуты сквозными шпильками М${wp.boltDiameter} класса ${wp.boltGrade} по ${wp.boltCount} шт на столб через стену из газоблока ${wp.blockClass} толщиной ${wp.wallThickness} мм; шайба-пластина ${wp.plateSize}×${wp.plateSize} мм с внутренней стороны. Поверх столбов — обвязка ${res.wallPurlin.sec.label}, по ней идут стропила.</td></tr>
-      <tr><td>Покрытие</td><td>${ROOFING[m.roofing].label}</td></tr>
-      <tr><td>Снеговой район</td><td>${m.site.snowRegion}, S_g = ${SNOW_REGIONS[m.site.snowRegion]} кПа</td></tr>
-      <tr><td>Ветровой район</td><td>${m.site.windRegion}, местность ${m.site.terrain}</td></tr>
-      <tr><td>Снеговой мешок</td><td>${m.site.drift && res.snow.drift && res.snow.drift.applies
-        ? `перепад h = ${(res.snow.drift.h).toFixed(2)} м, l₁ = ${res.snow.drift.l1.toFixed(1)} м, l₂ = ${res.snow.drift.l2.toFixed(1)} м, m₁ = ${res.snow.drift.m1}, m₂ = ${res.snow.drift.m2}.
-           По формуле (Б.5) μ = ${f2(res.snow.drift.raw)}; ограничения: 2h/S_g = ${f2(res.snow.drift.capGeom)}, потолок ${res.snow.drift.capAbs}.
-           Принято μ = ${f2(res.snow.muWall)} — ${res.snow.drift.governs}.
-           m₂ по перечислению «в» = ${f2(res.snow.drift.m2)}${res.snow.drift.m2parts ? ` (k₁ = ${f2(res.snow.drift.m2parts.k1)}, k₂ = ${f2(res.snow.drift.m2parts.k2)}, k₃ = ${f2(res.snow.drift.m2parts.k3)})` : ''}.
-           Зона b ${res.snow.drift.spread ? 'по формуле (Б.6)' : '= 2h'} = ${Math.round(res.snow.driftLength)} мм, μ₁ по перечислению «е» = ${f2(res.snow.drift.mu1)}.
-           Нижнее покрытие рассчитано в двух вариантах загружения — равномерном и с мешком (схема Б.8), принята огибающая.`
-        : (res.snow.drift ? `не учитывается: ${res.snow.drift.governs}` : 'не учитывается')}</td></tr>
-      <tr><td>Материалы</td><td>сосна ${m.opts.timber.grade} сорт, класс эксплуатации ${m.opts.timber.serviceClass}; сталь ${m.opts.steel.grade}</td></tr>
-    </table>
-    <h2>2. Нагрузки</h2>
-    <table>
-      <tr><td>Собственный вес кровли и обрешётки</td><td>${f2(res.dead.total)} кН/м² по скату</td></tr>
-      <tr><td>Снег у стены / в поле</td><td>нормативный ${f2(res.snow.at(0))} / ${f2(res.snow.at(m.geom.L + m.geom.a))} кПа;
-        расчётный (γ_f = 1,4) ${f2(res.snow.at(0) * 1.4)} / ${f2(res.snow.at(m.geom.L + m.geom.a) * 1.4)} кПа</td></tr>
-      <tr><td>Ветровой отрыв</td><td>${f2(res.wind.up)} кПа</td></tr>
-      <tr><td>Сосредоточенная (п. 8.3.4)</td><td>1,0 кН на обрешётку</td></tr>
-    </table>
-    <h2>3. Результаты по элементам</h2>
-    <table><tr><th>Элемент</th><th>Итог</th><th>U</th><th>Определяющая проверка</th></tr>${res.summary.map(el).join('')}</table>
-    ${checkRows(`Стропило ${worstRafter.sec.label} (самое нагруженное)`, worstRafter.checks)}
-    ${checkRows(`Обрешётка ${res.battens.sec.label}`, res.battens.checks)}
-    ${checkRows(`Прогон ${res.purlin.sec.label}`, res.purlin.checks)}
-    ${checkRows(`Обвязка у стены ${res.wallPurlin.sec.label}`, res.wallPurlin.checks)}
-    ${checkRows(`Наружный столб ${worstPost.sec.label} (самый нагруженный)`, worstPost.checks)}
-    ${checkRows(`Стеновой столб ${worstWallPost.sec.label} и его крепление (самый нагруженный)`, worstWallPost.checks)}
-    ${res.cross ? checkRows(`Связи наружного ряда: крест ${res.cross.sec.label}`, res.cross.checks) : ''}
-    ${res.roofBrace ? checkRows(`Связи в плоскости кровли: диагонали ${res.roofBrace.sec.label}`, res.roofBrace.checks) : ''}
-    <h2>4. Узлы и фундамент (оценочно)</h2>
-    <table>
-      <tr><td>Горизонтальный распор на стеновой ряд</td><td>${kN(res.bracing.toWall)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)} + верх наружного ряда ${kN(res.bracing.holdX)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
-      <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
-      <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
-      <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
-      <tr><td>Касательные силы пучения</td><td>${(() => {
-        const h = res.bases.outer.heave;
-        if (h.applies) return `τ_fh·A_fh = ${f2(h.pull / 1000)} кН против F = ${f2(h.F / 1000)} кН (постоянная нагрузка и блок при γ_f = 0,9) плюс трение о талый грунт ${f2(h.Frf / 1000)} кН / 1,1 — ${h.check.U > 1 ? 'не проходит' : 'проходит'} (СП 22, ф. (6.35), (6.38), табл. 6.12; СП 24, п. 7.2.13, табл. 7.3 и 7.6)`;
-        if (h.reason === 'replaced') return 'не проверяются: принята засыпка пазух непучинистым грунтом (п. 6.8.12 СП 22)';
-        if (h.reason === 'nonHeaving') return 'грунт непучинистый';
-        return 'глубина промерзания не задана — не проверено';
-      })()}</td></tr>
-    </table>
-    <h2>5. Массы конструкции</h2>
-    <p>Собственный вес всех элементов входит в расчёт нагрузок: стропила и прогоны — погонным
-    весом сечения, обрешётка — весом на 1 м², столбы — весом ствола в осевой силе. Формулы:</p>
-    <p><i>дерево:</i> V = b·h·L·n, m = V·ρ, ρ = 500 кг/м³ (сухая сосна; свежераспиленная до 700–800).<br>
-       <i>сталь:</i> m = A·L·n·ρ, ρ = 7850 кг/м³ — то же, что A[см²]·0,785 кг/м.<br>
-       <i>кровля:</i> m = g·S/g₀, где g — вес покрытия по скату, S — площадь ската.</p>
-    <table><tr><th>Группа</th><th>Что входит</th><th>Масса, кг</th></tr>
-      ${b.weights.groups.map((g) => `<tr><td>${g.name}</td><td>${g.note}</td><td>${g.mass.toFixed(1)}</td></tr>`).join('')}
-      <tr><td colspan="2"><b>Всего</b></td><td><b>${b.weights.total.toFixed(0)}</b></td></tr>
-    </table>
-    <table>
-      <tr><td>Сосна</td><td>${b.weights.timber.volume.toFixed(3)} м³ = ${b.weights.timber.mass.toFixed(0)} кг</td></tr>
-      <tr><td>Сталь</td><td>${b.weights.steel.length.toFixed(1)} пог. м = ${b.weights.steel.mass.toFixed(0)} кг</td></tr>
-      <tr><td>Кровля</td><td>${b.weights.roofing.area.toFixed(1)} м² = ${b.weights.roofing.mass.toFixed(0)} кг</td></tr>
-      <tr><td>Метизы</td><td>${b.weights.fasteners.mass.toFixed(1)} кг</td></tr>
-      <tr><td>Удельный вес навеса</td><td>${b.weights.perSqm.toFixed(1)} кг/м² в плане</td></tr>
-      <tr><td>Собственный вес кровельной части</td><td>${f2(b.weights.deadPressure)} кПа — это ${(b.weights.deadShareWall * 100).toFixed(0)} % полной нагрузки у стены и ${(b.weights.deadShareField * 100).toFixed(0)} % в поле</td></tr>
-    </table>
-
-    <h2>6. Стоимость материалов</h2>
-    <p>Цены — те, что заданы в расчёте; метизы посчитанных узлов в смете есть, а работа, фундамент,
-    доставка и раскрой не учтены.</p>
-    <table><tr><th>Группа</th><th>Расчёт</th><th>Стоимость, ${b.costs.currency}</th></tr>
-      ${b.costs.groups.map((g) => `<tr><td>${g.name}</td><td>${g.base}</td><td>${Math.round(g.cost).toLocaleString('ru-RU')}</td></tr>`).join('')}
-      <tr><td colspan="2"><b>Всего</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')}</b></td></tr>
-      <tr><td colspan="2">На 1 м² навеса</td><td>${Math.round(b.costs.perSqm).toLocaleString('ru-RU')}</td></tr>
-    </table>
-
-    <h2>7. Спецификация</h2>
-    <table><tr><th>Элемент</th><th>Сечение</th><th>Шт</th><th>Длина, мм</th><th>Хлыстов по ${(b.stock / 1000).toFixed(0)} м</th><th>Объём</th><th>Масса</th><th>Стоимость</th></tr>
-      ${b.items.map((i) => `<tr><td>${i.name}</td><td>${i.section}</td><td>${i.count}</td><td>${i.length}</td><td>${i.stockPieces ?? '—'}</td><td>${i.volume ? i.volume.toFixed(3) + ' м³' : '—'}</td><td>${i.mass.toFixed(1)} кг</td><td>${Math.round(i.cost).toLocaleString('ru-RU')} ${b.costs.currency}</td></tr>`).join('')}
-      <tr><td colspan="5"><b>Итого</b></td><td><b>${b.timberVolume.toFixed(3)} м³</b></td><td><b>${b.weights.total.toFixed(0)} кг</b></td><td><b>${Math.round(b.costs.total).toLocaleString('ru-RU')} ${b.costs.currency}</b></td></tr></table>
-    <p>${b.fasteners.map((x) => `${x.name} — ${x.count} шт, ${x.note}`).join('<br>')}</p>
-    ${spliceReportNote(b)}
-    <h2>8. Ограничения</h2>
-    <p>Расчёт не охватывает: расчёт основания по грунту (несущая способность и осадка), анкерные
-    уширения и другие конструктивные меры против пучения, кроме засыпки пазух непучинистым грунтом, диагонали в плоскости кровли, огнестойкость, температурные воздействия. Опирание стропил принято шарнирным. Внецентренное сжатие столбов проверено
-    с усилением момента по деформированной схеме (консервативнее табличного φ_e прил. Д.3 СП 16).</p>
-    <p>Снеговой мешок посчитан по схеме Б.8 приложения Б СП 20.13330.2016: формула (Б.5),
-    перечисление «в» для m₂, перечисление «г» с формулой (Б.6) для длины зоны, перечисление «д»
-    для потолка μ, перечисление «е» для μ₁, примечание 3 (при h &lt; S₀/2 мешок не учитывается).
-    Эпюра — по профилю «в» рисунка Б.11 (навес): линейный спад от μ у стены до μ₁ на длине b.
-    Нижнее покрытие рассчитано в двух вариантах загружения, как требует перечисление «а».</p>
-    <p>Не реализованы: схемы с продольными фонарями и ступенчатыми перепадами (l′ = l* − 2h′),
-    вариант с парапетом на нижнем покрытии проверен не полностью, разрыв между покрытием
-    и стенкой перепада (перечисление «ж»). Потолок μ ≤ 8 из онлайн-калькуляторов в СП отсутствует.</p>
-    <p>Крепление к газоблоку: расчётное сопротивление кладки принято ориентировочно по СП 15.13330
-    (B2,5 → 1,0 МПа) — уточните по данным производителя блоков. Принято, что стеновые столбы опираются
-    на собственное основание, а шпильки воспринимают только горизонтальные силы и отрыв; неравномерность
-    между шпильками учтена коэффициентом 1,5 на верхнюю. Поперёк ряда горизонтальная сила идёт
-    по стропилам к стене, и это проверено: крепление стропил, изгиб обвязки из плоскости, стеновой ряд.
-    Вдоль стены стропила держать не могут, и кровля диском не считается: без креста в ряду наружные
-    столбы работают консолями.</p>
-    <p>Результат — инженерная оценка, а не проект, прошедший экспертизу.</p>`;
-}
-
 /* ─────────────────── рендер ─────────────────── */
 
 /**
@@ -1425,7 +984,7 @@ function render(hint) {
   syncParams();
   renderCanvas(res);
   renderInspector(res);
-  renderWarns(res);
+  $('warns').innerHTML = warningsHtml(res);
   renderSummary(res);
   renderBom(res, bom);
   renderCost(bom);
@@ -1463,7 +1022,10 @@ $('btn-pick-all').addEventListener('click', () => {
     render('Подобрано: ' + out.log.map((l) => `${l.label ?? '—'}`).join(' · ') + (sp ? ` · стропил ${sp.count} шт` : ''));
   }, 10);
 });
-$('btn-report').addEventListener('click', () => { buildReport(state.result); window.print(); });
+$('btn-report').addEventListener('click', () => {
+  $('report').innerHTML = reportHtml(state.result, shareUrl());
+  window.print();
+});
 $('btn-link').addEventListener('click', async () => {
   const url = shareUrl();
   try {
@@ -1473,164 +1035,9 @@ $('btn-link').addEventListener('click', async () => {
     window.prompt('Ссылка на расчёт:', url);
   }
 });
-/* ─────────────────── тема оформления ─────────────────── */
 
-/**
- * Три положения: «как в системе» (по умолчанию), светлая, тёмная.
- * Палитра целиком на CSS-переменных, поэтому переключение — это один атрибут
- * data-theme на <html>; при «как в системе» атрибута нет и решает
- * prefers-color-scheme. Перерисовывать чертёж не нужно: SVG тоже красится
- * переменными.
- */
-const THEME_KEY = 'canopycraft.theme';
-const THEMES = [
-  { id: 'auto', icon: '◐', label: 'как в системе' },
-  { id: 'light', icon: '☀', label: 'светлая' },
-  { id: 'dark', icon: '☾', label: 'тёмная' },
-];
-const readTheme = () => { try { return localStorage.getItem(THEME_KEY) ?? 'auto'; } catch { return 'auto'; } };
-
-function applyTheme(id) {
-  const t = THEMES.find((x) => x.id === id) ?? THEMES[0];
-  if (t.id === 'auto') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', t.id);
-  const b = $('btn-theme');
-  b.textContent = t.icon;
-  b.title = `Тема: ${t.label}. Нажмите, чтобы сменить`;
-  b.setAttribute('aria-label', `Тема: ${t.label}`);
-}
-
-$('btn-theme').addEventListener('click', () => {
-  const next = THEMES[(THEMES.findIndex((x) => x.id === readTheme()) + 1) % THEMES.length];
-  try { localStorage.setItem(THEME_KEY, next.id); } catch { /* приватный режим */ }
-  applyTheme(next.id);
-  render(`Тема: ${next.label}`);
-});
-applyTheme(readTheme());
-
-/* ─────────────────── фоновая музыка ─────────────────── */
-
-/**
- * Плейлист в случайном порядке, кнопка ♪ рядом с темой и ползунок громкости.
- *
- * Имена файлов заданы списком, а не читаются из папки: статическая страница
- * не может получить её содержимое — на GitHub Pages нет листинга каталога, а
- * при открытии index.html двойным кликом fetch к file:// запрещён вовсе.
- * Поэтому треки называются числами: какие из 1..8 лежат в папке, выясняется
- * при первом включении — недостающие отсеиваются по ошибке загрузки и больше
- * не трогаются. Так файл можно добавить или убрать, не трогая код.
- *
- * preload='none' — ничего не качается, пока не нажали play: у тех, кто музыку
- * не включает, страница не тяжелеет ни на байт. Сам запуск возможен только
- * после действия пользователя (браузеры блокируют автозапуск со звуком),
- * поэтому включённая в прошлый раз музыка подхватывается не при загрузке, а
- * при первом клике или нажатии клавиши.
- */
-const AUDIO_DIR = 'assets/audio/';
-const AUDIO_FILES = ['1.mp3', '2.mp3', '3.mp3', '4.mp3', '5.mp3', '6.mp3', '7.mp3', '8.mp3'];
-const AUDIO_KEY = 'canopycraft.audio';
-const AUDIO_DEFAULT = { on: false, vol: 35 };
-const readAudio = () => {
-  try { return { ...AUDIO_DEFAULT, ...JSON.parse(localStorage.getItem(AUDIO_KEY) ?? '{}') }; }
-  catch { return { ...AUDIO_DEFAULT }; }
-};
-const writeAudio = (v) => { try { localStorage.setItem(AUDIO_KEY, JSON.stringify(v)); } catch { /* приватный режим */ } };
-
-let audioState = readAudio();
-let audioTag = null;
-let audioPool = [...AUDIO_FILES];   // имена, которые ещё не оказались отсутствующими
-let audioQueue = [];                // перемешанный порядок на текущий круг
-let audioNow = null;
-
-const shuffle = (a) => {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-};
-
-/** Следующий трек: круг в случайном порядке, и он не начинается тем же, чем кончился прошлый. */
-function nextTrack() {
-  if (!audioQueue.length) {
-    audioQueue = shuffle([...audioPool]);
-    if (audioQueue.length > 1 && audioQueue[0] === audioNow) audioQueue.push(audioQueue.shift());
-  }
-  audioNow = audioQueue.shift();
-  return audioNow;
-}
-
-function audioTagOf() {
-  if (!audioTag) {
-    audioTag = new Audio();
-    audioTag.preload = 'none';
-    // трек кончился — сразу следующий; файла нет — вычёркиваем и берём следующий
-    audioTag.addEventListener('ended', () => { if (audioState.on) playAudio(); });
-    audioTag.addEventListener('error', () => {
-      if (!audioState.on) return;
-      audioPool = audioPool.filter((n) => n !== audioNow);
-      audioQueue = audioQueue.filter((n) => n !== audioNow);
-      if (audioPool.length) { playAudio(); return; }
-      audioState = { ...audioState, on: false };
-      writeAudio(audioState);
-      paintAudio();
-      render(`Музыки нет. Положите файлы ${AUDIO_DIR}1.mp3, 2.mp3 … (до 8) в репозиторий рядом с index.html`);
-    });
-  }
-  return audioTag;
-}
-
-function paintAudio() {
-  const b = $('btn-audio');
-  const vol = $('audio-vol');
-  b.classList.toggle('off', !audioState.on);
-  // без числа треков: до первого круга в списке ещё лежат имена, которых в
-  // папке нет, и счётчик показывал бы 8 при пяти файлах
-  b.title = audioState.on
-    ? `Играет ${audioNow ?? '…'}. Нажмите, чтобы выключить`
-    : 'Включить фоновую музыку';
-  b.setAttribute('aria-pressed', String(audioState.on));
-  vol.hidden = !audioState.on;
-  vol.value = String(audioState.vol);
-  if (audioTag) audioTag.volume = audioState.vol / 100;
-}
-
-async function playAudio() {
-  const a = audioTagOf();
-  a.volume = audioState.vol / 100;
-  a.src = AUDIO_DIR + nextTrack();
-  try { await a.play(); } catch { /* автозапуск заблокирован — ждём клика */ }
-  paintAudio();
-}
-
-$('btn-audio').addEventListener('click', () => {
-  audioState = { ...audioState, on: !audioState.on };
-  writeAudio(audioState);
-  paintAudio();
-  if (audioState.on) {
-    audioPool = audioPool.length ? audioPool : [...AUDIO_FILES];
-    audioQueue = [];
-    playAudio();
-  } else {
-    audioTagOf().pause();
-  }
-});
-$('audio-vol').addEventListener('input', (e) => {
-  audioState = { ...audioState, vol: Number(e.target.value) };
-  writeAudio(audioState);
-  if (audioTag) audioTag.volume = audioState.vol / 100;
-});
-paintAudio();
-if (audioState.on) {
-  // включена с прошлого раза: браузер даст звук только после действия пользователя
-  const resume = () => {
-    window.removeEventListener('pointerdown', resume);
-    window.removeEventListener('keydown', resume);
-    if (audioState.on) playAudio();
-  };
-  window.addEventListener('pointerdown', resume);
-  window.addEventListener('keydown', resume);
-}
+initTheme((label) => render(`Тема: ${label}`));
+initAudio((text) => render(text));
 
 $('btn-reset').addEventListener('click', () => {
   state.model = defaultModel();

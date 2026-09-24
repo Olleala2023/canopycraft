@@ -466,6 +466,25 @@ async function main() {
       if (inf) fail(`на странице «Infinity» вместо ∞: ${inf.replace(/\\s+/g, ' ')}`);
     });
 
+    // модульная версия: склейка прячет забытый импорт (имя и так общее),
+    // а dev.html на нём падает — проверяем, что она поднимается без ошибок
+    // Забытый импорт проявляется только там, где имя вызывается, — поэтому
+    // включаются сценарии с узкими полями и карточками: крест, мороз, стык
+    // накладкой, и обходятся все вкладки и отчёт.
+    await step('модульная версия dev.html', async () => {
+      await open('dev.html');
+      await appReady();
+      const set = (id, v) => ev(`(() => { const el = document.getElementById('${id}'); el.value = '${v}'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await set('c_bracing_along', 'cross');
+      await set('c_site_frostDepth', '1200');
+      await set('c_site_soil', 'clay');
+      await set('c_opts_spliceJoint', 'plate');
+      await set('c_geom_B', '9000');
+      await visitAll();
+      await ev("window.print = () => {}; document.getElementById('btn-report').click()");
+      if (!(await ev("document.querySelectorAll('#report h2').length >= 5"))) fail('dev.html: отчёт не собрался');
+    });
+
     await step('справка', async () => {
       const pages = readdirSync(join(root, 'help')).filter((f) => f.endsWith('.html'));
       for (const p of pages) {
