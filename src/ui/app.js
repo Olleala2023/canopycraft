@@ -14,6 +14,7 @@ import { warningsHtml } from './warnings.js';
 import { reportHtml } from './report.js';
 import { initTheme } from './theme.js';
 import { initAudio } from './audio.js';
+import { createHistory } from './history.js';
 
 $('app-version').textContent = `v${VERSION}`;
 const STORE_KEY = 'canopycraft.model.v2';
@@ -39,6 +40,9 @@ const state = {
   result: null,
   meta: null,
 };
+
+/** «Отменить» и «Вернуть»: снимки модели после каждой перерисовки (см. history.js). */
+const undoLog = createHistory();
 
 function load() {
   try {
@@ -938,7 +942,22 @@ $('canvas').addEventListener('dblclick', (e) => {
   render(`Добавлено стропило на ${x} мм`);
 });
 
+/**
+ * Где клавиши принадлежат полю, а не чертежу. В поле ввода Backspace стирает
+ * цифру, а Ctrl+Z отменяет набранный текст — перехватывать их нельзя: раньше
+ * Backspace в поле заодно удалял выбранное стропило.
+ */
+const typingIn = (el) => !!el?.closest?.('textarea, select, input:not([type=range]):not([type=checkbox]):not([type=radio])');
+
 document.addEventListener('keydown', (e) => {
+  // по физической клавише: в русской раскладке на Z стоит «я»
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+    if (typingIn(e.target)) return;
+    e.preventDefault();
+    if (e.code === 'KeyY' || e.shiftKey) redoStep(); else undoStep();
+    return;
+  }
+  if (typingIn(e.target)) return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (state.sel.type === 'rafter' && state.model.rafters.xs.length > 3) {
       state.model.rafters.xs.splice(state.sel.index, 1);
@@ -972,7 +991,7 @@ function infiniteCause(res) {
   return `${bad[0].label.toLowerCase()}: ${bad[0].worst.name.toLowerCase()}`;
 }
 
-let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
+let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · Ctrl+Z — отменить, Ctrl+Y — вернуть';
 
 function render(hint) {
   if (hint) hintText = hint;
@@ -999,7 +1018,31 @@ function render(hint) {
     ? 'Чертежи собраны по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные · клик по детали открывает её проверки справа · меняйте исполнение узлов в блоке «Элементы»'
     : hintText;
   save();
+  undoLog.record(state.model);
+  paintUndo();
 }
+
+function paintUndo() {
+  $('btn-undo').disabled = !undoLog.canUndo;
+  $('btn-redo').disabled = !undoLog.canRedo;
+}
+
+function undoStep() {
+  const m = undoLog.undo();
+  if (!m) return;
+  state.model = m;
+  render(undoLog.canUndo ? 'Отменено · Ctrl+Z — ещё, Ctrl+Y — вернуть' : 'Отменено до начала · Ctrl+Y — вернуть');
+}
+
+function redoStep() {
+  const m = undoLog.redo();
+  if (!m) return;
+  state.model = m;
+  render('Возвращено · Ctrl+Z — снова отменить');
+}
+
+$('btn-undo').addEventListener('click', undoStep);
+$('btn-redo').addEventListener('click', redoStep);
 
 /* ─────────────────── события шапки ─────────────────── */
 
@@ -1063,4 +1106,5 @@ function selectWorst(res) {
 
 buildParams();
 selectWorst(analyse(state.model));
+undoLog.reset(state.model);
 render(upgradeNotes.join(' ') || undefined);

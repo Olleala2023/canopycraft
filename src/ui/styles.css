@@ -31,6 +31,7 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
   border:1px solid var(--rule-2); cursor:pointer}
 .btn.icon{padding:5px 9px; font-size:13px}
 .btn.icon.off{color:var(--ink-3); border-color:var(--rule)}
+.btn:disabled{color:var(--ink-3); border-color:var(--rule); cursor:default}
 .audio{display:inline-flex; gap:6px; align-items:center}
 input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color:var(--accent-2)}
 .btn:hover{border-color:var(--accent-2); color:var(--accent-2)}
