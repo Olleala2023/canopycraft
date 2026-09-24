@@ -116,14 +116,21 @@ input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color
 .field label b{font-family:"IBM Plex Mono",monospace; font-weight:500; color:var(--ink)}
 .field label .btn{white-space:nowrap; flex:0 0 auto}
 .field .note{display:block; margin-top:3px; font-size:10.5px; line-height:1.4; color:var(--ink-3)}
-a.help{
-  flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px;
-  border:1px solid var(--rule-2); border-radius:50%; color:var(--ink-3); text-decoration:none;
-  font-size:10px; line-height:1; font-family:"IBM Plex Mono",ui-monospace,monospace;
+.help{
+  flex:0 0 auto; display:inline-grid; place-items:center; width:15px; height:15px; padding:0;
+  border:1px solid var(--rule-2); border-radius:50%; background:transparent; color:var(--ink-3); text-decoration:none;
+  font-size:10px; line-height:1; font-family:"IBM Plex Mono",ui-monospace,monospace; cursor:pointer;
 }
-a.help:hover{border-color:var(--accent-2); color:var(--accent-2)}
-.check a.help{margin-left:5px; vertical-align:middle}
-.pane-title a.help{margin-left:7px; vertical-align:-4px}
+.help:hover, .help[aria-expanded="true"]{border-color:var(--accent-2); color:var(--accent-2)}
+.check .help{margin-left:5px; vertical-align:middle}
+.pane-title .help{margin-left:7px; vertical-align:-4px}
+/* карточка пояснения у «?» — верхний слой Popover API, место задаёт tip.js */
+.tip{position:fixed; inset:auto; margin:0; width:min(300px, calc(100vw - 16px)); max-height:min(60vh, 420px); overflow:auto;
+  padding:10px 12px; background:var(--surface); color:var(--ink); border:1px solid var(--rule-2);
+  border-left:3px solid var(--accent-2); font-size:12px; line-height:1.5}
+.tip .tip-title{display:block; margin-bottom:4px; font-weight:600}
+.tip p{margin:0 0 6px; color:var(--ink-2)}
+.tip a{color:var(--accent-2)}
 input[type=range]{width:100%; accent-color:var(--accent-2); height:16px; margin:0}
 select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3px 5px;
   background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-2)}
@@ -322,6 +329,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
   </div>
 
   <div id="report"></div>
+  <div id="tip" class="tip" popover></div>
 </div>
 <script>
 (() => {
@@ -3673,7 +3681,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
   }
 
   // src/core/version.js
-  var VERSION = "0.5.2";
+  var VERSION = "0.6.0";
 
   // src/ui/views.js
   var uColor = (U) => U > 1 ? "var(--u-bad)" : U > 0.85 ? "var(--u-warn)" : U > 0.5 ? "var(--u-ok)" : "var(--u-low)";
@@ -5124,6 +5132,83 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     }
   }
 
+  // src/ui/tip.js
+  var esc2 = (s) => String(s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]);
+  function tipButton(key, label) {
+    return `<button type="button" class="help" data-tip="${esc2(key)}" aria-label="Пояснение: ${esc2(label)}" aria-expanded="false">?</button>`;
+  }
+  var HOVER_OPEN = 350;
+  var HOVER_CLOSE = 200;
+  function initTip(lookup) {
+    const tip = $("tip");
+    let owner = null;
+    let pinned = false;
+    let timer = 0;
+    const html = (t) => [
+      `<b class="tip-title">${esc2(t.label)}</b>`,
+      t.note ? `<p>${esc2(t.note)}</p>` : "",
+      t.help ? `<a href="help/${esc2(t.help)}" target="_blank" rel="noopener">Подробнее${t.helpTitle ? `: ${esc2(t.helpTitle)}` : ""} →</a>` : ""
+    ].join("");
+    function place(btn) {
+      const b = btn.getBoundingClientRect();
+      const w = tip.offsetWidth, h = tip.offsetHeight, pad = 8;
+      let left = Math.min(Math.max(pad, b.left - 12), innerWidth - w - pad);
+      let top = b.bottom + 6;
+      if (top + h > innerHeight - pad) top = Math.max(pad, b.top - h - 6);
+      tip.style.left = `${Math.round(left)}px`;
+      tip.style.top = `${Math.round(top)}px`;
+    }
+    function open(btn, byClick) {
+      const t = lookup(btn.getAttribute("data-tip"));
+      if (!t) return;
+      if (owner && owner !== btn) owner.setAttribute("aria-expanded", "false");
+      owner = btn;
+      pinned = byClick;
+      tip.innerHTML = html(t);
+      if (!tip.matches(":popover-open")) tip.showPopover();
+      place(btn);
+      btn.setAttribute("aria-expanded", "true");
+    }
+    function close() {
+      if (tip.matches(":popover-open")) tip.hidePopover();
+    }
+    tip.addEventListener("toggle", (e) => {
+      if (e.newState === "closed" && owner) {
+        owner.setAttribute("aria-expanded", "false");
+        owner = null;
+        pinned = false;
+      }
+    });
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest?.("[data-tip]");
+      if (!btn) return;
+      e.preventDefault();
+      clearTimeout(timer);
+      if (owner === btn && pinned) close();
+      else open(btn, true);
+    });
+    document.addEventListener("pointerover", (e) => {
+      if (e.pointerType !== "mouse") return;
+      const btn = e.target.closest?.("[data-tip]");
+      if (btn) {
+        clearTimeout(timer);
+        if (owner !== btn) timer = setTimeout(() => open(btn, false), HOVER_OPEN);
+      } else if (e.target.closest?.("#tip")) {
+        clearTimeout(timer);
+      }
+    });
+    document.addEventListener("pointerout", (e) => {
+      if (e.pointerType !== "mouse") return;
+      if (!e.target.closest?.("[data-tip], #tip")) return;
+      if (e.relatedTarget?.closest?.("[data-tip], #tip")) return;
+      clearTimeout(timer);
+      if (!pinned) timer = setTimeout(close, HOVER_CLOSE);
+    });
+    addEventListener("scroll", () => {
+      if (owner) place(owner);
+    }, true);
+  }
+
   // src/ui/history.js
   function createHistory({ limit = 100, merge = 400 } = {}) {
     let undo = [];
@@ -5275,7 +5360,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     } catch {
     }
   };
-  var helpLink = (c) => c.help ? ` <a class="help" href="help/${c.help}" target="_blank" rel="noopener" title="Справка: ${c.helpTitle ?? "подробнее"}" aria-label="Справка: ${c.helpTitle ?? "подробнее"}">?</a>` : "";
+  var helpLink = (c) => c.help || c.note ? ` ${tipButton(c.k, c.label)}` : "";
   function buildParams() {
     const hosts = { left: $("params"), right: $("params-right") };
     hosts.left.innerHTML = "";
@@ -5303,7 +5388,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
       if (c.type === "check") {
         wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}${helpLink(c)}</span></label>`;
       } else if (c.type === "number") {
-        wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
+        wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
       } else if (c.type === "range") {
         const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(" ");
         wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ""}`;
@@ -5315,12 +5400,6 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
         const n = document.createElement("small");
         n.className = "note live";
         n.setAttribute("data-live", id);
-        wrap.appendChild(n);
-      }
-      if (c.note) {
-        const n = document.createElement("small");
-        n.className = "note";
-        n.textContent = c.note;
         wrap.appendChild(n);
       }
       body.appendChild(wrap);
@@ -6125,6 +6204,10 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
     }
   });
   initTheme((label) => render(`Тема: ${label}`));
+  initTip((key) => {
+    const c = CONTROLS.find((x) => x.k === key);
+    return c ? { label: c.label, note: c.note, help: c.help, helpTitle: c.helpTitle } : null;
+  });
   initAudio((text) => render(text));
   $("btn-reset").addEventListener("click", () => {
     state.model = defaultModel();

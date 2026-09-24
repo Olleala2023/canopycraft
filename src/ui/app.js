@@ -14,6 +14,7 @@ import { warningsHtml } from './warnings.js';
 import { reportHtml } from './report.js';
 import { initTheme } from './theme.js';
 import { initAudio } from './audio.js';
+import { initTip, tipButton } from './tip.js';
 import { createHistory } from './history.js';
 
 $('app-version').textContent = `v${VERSION}`;
@@ -118,9 +119,8 @@ const writeGroups = (v) => { try { localStorage.setItem(GROUPS_KEY, JSON.stringi
  * Ссылка на статью справки рядом с подписью поля. Открывается в новой вкладке:
  * расчёт в текущей остаётся нетронутым.
  */
-const helpLink = (c) => (c.help
-  ? ` <a class="help" href="help/${c.help}" target="_blank" rel="noopener" title="Справка: ${c.helpTitle ?? 'подробнее'}" aria-label="Справка: ${c.helpTitle ?? 'подробнее'}">?</a>`
-  : '');
+/** Кнопка «?» у поля: пояснение и ссылка на статью — в карточке (tip.js). */
+const helpLink = (c) => (c.help || c.note ? ` ${tipButton(c.k, c.label)}` : '');
 
 function buildParams() {
   const hosts = { left: $('params'), right: $('params-right') };
@@ -150,7 +150,7 @@ function buildParams() {
     if (c.type === 'check') {
       wrap.innerHTML = `<label class="check" for="${id}"><input type="checkbox" id="${id}"><span>${c.label}${helpLink(c)}</span></label>`;
     } else if (c.type === 'number') {
-      wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
+      wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)}</label><input type="number" id="${id}" min="${c.min ?? 0}" step="${c.step ?? 1}" inputmode="numeric">`;
     } else if (c.type === 'range') {
       const acts = (c.actions ?? []).map((a, i) => `<button class="btn" data-act="${c.k}:${i}" style="padding:0 6px;font-size:11px">${a[0]}</button>`).join(' ');
       wrap.innerHTML = `<label for="${id}">${c.label}${helpLink(c)} <b data-val="${id}"></b></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">${acts ? `<div style="display:flex;gap:5px;margin-top:3px">${acts}</div>` : ''}`;
@@ -163,12 +163,6 @@ function buildParams() {
       const n = document.createElement('small');
       n.className = 'note live';
       n.setAttribute('data-live', id);
-      wrap.appendChild(n);
-    }
-    if (c.note) {
-      const n = document.createElement('small');
-      n.className = 'note';
-      n.textContent = c.note;
       wrap.appendChild(n);
     }
     body.appendChild(wrap);
@@ -1087,6 +1081,10 @@ $('btn-link').addEventListener('click', async () => {
 });
 
 initTheme((label) => render(`Тема: ${label}`));
+initTip((key) => {
+  const c = CONTROLS.find((x) => x.k === key);
+  return c ? { label: c.label, note: c.note, help: c.help, helpTitle: c.helpTitle } : null;
+});
 initAudio((text) => render(text));
 
 $('btn-reset').addEventListener('click', () => {
