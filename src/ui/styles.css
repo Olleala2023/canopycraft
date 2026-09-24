@@ -100,6 +100,14 @@ select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3p
 .canvas svg{display:block; width:100%; height:100%; touch-action:none}
 .canvas{cursor:grab; touch-action:none; overflow:hidden; height:min(72vh, 620px); min-height:380px}
 .canvas:active{cursor:grabbing}
+/* На широком экране чертёж — главное: область сцены по высоте окна и прилипает
+   к верху, пока прокручиваются длинные панели по бокам. Поле забирает всю высоту,
+   что остаётся после легенды и подсказки. 96px — шапка над сценой: на верху
+   страницы сцена целиком в окне. */
+@media (min-width:1001px){
+  .stage{position:sticky; top:8px; align-self:start; height:calc(100vh - 96px); height:calc(100dvh - 96px); min-height:480px}
+  .canvas{flex:1 1 auto; height:auto; min-height:380px}
+}
 g.pickable, g.draggable{cursor:pointer}
 .hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
 .legend{display:flex; flex-wrap:wrap; gap:4px 14px; padding:7px 13px; border-top:1px solid var(--rule); font-size:11px; color:var(--ink-2)}
