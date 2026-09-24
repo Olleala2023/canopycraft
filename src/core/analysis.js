@@ -74,14 +74,18 @@ function analyseRafter(model, x, trib, ctx) {
   const Ls = (geom.L + geom.a) / ca;      // полная длина по скату
   const xSup = geom.L / ca;               // опора на прогон
   const supports = [0, xSup];
-  const gammaDead = sec.material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel;
+  // γf по табл. 7.1 СП 20 — у каждого слоя по своему материалу: деревянная
+  // обрешётка на стальном стропиле остаётся деревом (1,1, а не 1,05)
+  const gammaOf = (material) => (material === 'timber' ? GAMMA_F.timber : GAMMA_F.steel);
+  const gammaDead = gammaOf(sec.material);
+  const gammaBatten = gammaOf(section(model.battens.sectionId).material);
 
   // погонные нагрузки, Н/мм, перпендикулярно скату
   const lineRoofN = (ctx.dead.roof * trib) / 1000;
   const lineBattenN = (ctx.dead.batten * trib) / 1000;
   const lineSelfN = sec.weight;
   const deadPerpN = (lineRoofN + lineBattenN + lineSelfN) * ca;
-  const deadPerpD = (GAMMA_F.roofing * lineRoofN + gammaDead * (lineBattenN + lineSelfN)) * ca;
+  const deadPerpD = (GAMMA_F.roofing * lineRoofN + gammaBatten * lineBattenN + gammaDead * lineSelfN) * ca;
 
   const windUpPerp = (ctx.wind.up * trib) / 1000;
   const windDownPerp = (ctx.wind.down * trib) / 1000;
