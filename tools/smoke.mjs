@@ -63,6 +63,26 @@ function findChrome() {
   return list.find((p) => existsSync(p));
 }
 
+/**
+ * Холодный Chrome на раннере GitHub иногда стартует дольше 20 с — прогон падал,
+ * не дойдя до первого шага. Ждём дольше и пробуем второй раз: это про запуск
+ * браузера, сами проверки от этого не мягче.
+ */
+const LAUNCH_WAIT = 60000;
+const LAUNCH_TRIES = 2;
+
+async function launchWithRetry(chrome, profile) {
+  for (let i = 1; ; i++) {
+    try {
+      // своя папка профиля на попытку: убитый Chrome оставляет в старой блокировку
+      return await launch(chrome, i === 1 ? profile : join(profile, `try${i}`));
+    } catch (e) {
+      if (i >= LAUNCH_TRIES) throw e;
+      console.log(`Chrome не запустился (${e.message.split('\n')[0]}), вторая попытка`);
+    }
+  }
+}
+
 async function launch(chrome, profile) {
   const proc = spawn(chrome, [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
@@ -71,7 +91,7 @@ async function launch(chrome, profile) {
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
   const ws = await new Promise((ok, fail) => {
     let buf = '';
-    const t = setTimeout(() => fail(new Error('Chrome не ответил за 20 с')), 20000);
+    const t = setTimeout(() => { proc.kill(); fail(new Error(`Chrome не ответил за ${LAUNCH_WAIT / 1000} с`)); }, LAUNCH_WAIT);
     proc.stderr.on('data', (d) => {
       buf += d;
       const m = buf.match(/DevTools listening on (ws:\/\/\S+)/);
@@ -124,7 +144,7 @@ async function main() {
   const server = await serve();
   const base = `http://127.0.0.1:${server.address().port}`;
   const profile = await mkdtemp(join(tmpdir(), 'canopycraft-smoke-'));
-  const { proc, port } = await launch(chrome, profile);
+  const { proc, port } = await launchWithRetry(chrome, profile);
   const started = Date.now();
 
   try {
@@ -257,6 +277,12 @@ async function main() {
       await ev(stubs);
       await ev("document.getElementById('btn-report').click()");
       if (!(await ev("document.querySelectorAll('#report h2').length >= 5"))) fail('отчёт не собрался');
+      // по распечатке вариант должен открываться снова: версия и ссылка с моделью
+      const ver = await ev("document.getElementById('app-version').textContent");
+      if (!/^v\d+\.\d+\.\d+$/.test(ver)) fail(`версия в подвале: «${ver}»`);
+      if (!(await ev(`document.getElementById('report').textContent.includes('CanopyCraft ${ver}')`))) fail('в отчёте нет версии');
+      const link = await ev("document.querySelector('#report .report-link a')?.getAttribute('href') ?? ''");
+      if (!link.includes('#p=')) fail(`в отчёте нет ссылки на расчёт: «${link}»`);
       await ev("document.getElementById('btn-link').click()");
       await wait(300);
       for (const id of ['btn-theme', 'btn-theme', 'zoom-in', 'zoom-out', 'zoom-reset']) await ev(`document.getElementById('${id}').click()`);

@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ORDER = [
+  'src/core/version.js',
   'src/core/sections.js',
   'src/core/materials.js',
   'src/core/loads.js',
