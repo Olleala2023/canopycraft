@@ -94,3 +94,14 @@ test('стык по длине попадает на чертежи, а без �
   assert.ok(section.includes('вне плоскости разреза'), 'разрез честно говорит, что стык не в его плоскости');
   assert.ok(section.includes('накладках'), 'и на чём он держится');
 });
+
+test('изменяемая схема: вместо эпюр — слова, U подписан знаком ∞', () => {
+  const m = defaultModel();
+  m.geom.alpha = 45;
+  const res = analyse(m);
+  const diagrams = drawDiagrams(res, { type: 'rafter', index: 0 }).svg;
+  assert.ok(diagrams.includes('изменяемая схема'), 'эпюры механизма нарисованы как у нормальной балки');
+  const plan = drawPlan(res, { type: 'rafter', index: 0 }).svg;
+  assert.ok(plan.includes('∞'), 'U стропила на плане подписан не знаком ∞');
+  assert.ok(!plan.includes('Infinity'), 'на плане «Infinity» вместо ∞');
+});

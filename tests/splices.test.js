@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, splicePlan, spread } from '../src/core/model.js';
-import { analyse, billOfMaterials, spliceReport, spliceHinges } from '../src/core/analysis.js';
+import { analyse, billOfMaterials, spliceReport, spliceHinges, spliceScheme } from '../src/core/analysis.js';
 import { solveBeam } from '../src/core/beam.js';
 import { dowelDouble } from '../src/core/fasteners.js';
 
@@ -276,4 +276,58 @@ test('накладки и нагели попадают в смету', () => {
   const bb = billOfMaterials(analyse(butt));
   assert.ok(!bb.fasteners.some((f) => f.name.startsWith('Накладка стыка')), 'при стыке встык накладок нет');
   assert.ok(b.costs.total > bb.costs.total, 'накладки стоят денег, и это видно в смете');
+});
+
+/** Случаи, где стык встык оставляет кусок на одной опоре: навес 6,5 м, хлыст 6 м. */
+const LOOSE = {
+  purlin: (m) => { m.geom.B = 6500; m.posts.xs = [250, 6000]; },
+  wallPurlin: (m) => { m.geom.B = 6500; m.wallPosts.xs = [250, 6000]; },
+  battens: (m) => { m.geom.B = 6500; m.rafters.xs = [0, 1500, 3000, 4500, 6000]; },
+};
+
+test('прогон, обвязка и обрешётка с куском на одной опоре — изменяемая схема, U = ∞', () => {
+  for (const [key, change] of Object.entries(LOOSE)) {
+    const m = defaultModel();
+    change(m);
+    assert.ok(spliceReport(m).find((p) => p.key === key)?.unstable,
+      `${key}: предупреждение не видит куска 6000–6500 мм на одной опоре — пример не тот`);
+    const r = analyse(m);
+    assert.equal(r[key].U, Infinity, `${key}: U = ${r[key].U} — проверки по вырожденному решению`);
+    assert.deepEqual(r[key].checks.map((c) => c.name), ['Изменяемая схема'], `${key}: лишние проверки у механизма`);
+    assert.deepEqual(r[key].mechanism.map((c) => [Math.round(c.x0), Math.round(c.x1), c.supports]), [[6000, 6500, 1]],
+      `${key}: не тот кусок назван болтающимся`);
+    assert.equal(r.maxU, Infinity, `${key}: механизм не попал в максимум`);
+  }
+});
+
+test('изменяемая схема передаёт на опоры всю нагрузку, а не теряет кусок', () => {
+  // вырожденное решение теряло нагрузку с болтающегося куска: сумма реакций
+  // выходила меньше приложенных сил. Эпюра Q строится статикой по реакциям,
+  // поэтому на правом конце она равна ΣR − ΣF и у равновесной схемы — нулю
+  const m = defaultModel();
+  LOOSE.purlin(m);
+  const { uls, sls } = analyse(m).purlin.res;
+  const total = uls.reactions.reduce((a, x) => a + x.R, 0);
+  const tail = uls.V[uls.V.length - 1];
+  assert.ok(Math.abs(tail) < 1e-6 * total, `на опоры не дошло ${Math.round(-tail)} Н из ${Math.round(total - tail)} Н`);
+  const w = Math.max(...sls.w.map(Math.abs));
+  assert.ok(w < 1000, `прогиб ${Math.round(w)} мм — решена вырожденная система`);
+});
+
+test('при накладке кусок на одной опоре механизмом не считается', () => {
+  const m = defaultModel();
+  LOOSE.purlin(m);
+  m.opts.spliceJoint = 'plate';
+  const s = spliceScheme(m, 6500, [250, 6000]);
+  assert.equal(s.mechanism, false, 'накладка восстанавливает сечение — кусок держится');
+  assert.ok(Number.isFinite(analyse(m).purlin.U), 'прогон на накладке проверяется как обычно');
+});
+
+test('стропило решается по той же длине, что и предупреждение о стыке', () => {
+  // длина по скату 5950 мм влезает в хлыст, а с припуском на торцовку 100 мм —
+  // уже нет: предупреждение говорило «изменяемая схема», а проверки проходили
+  const m = defaultModel();
+  Object.assign(m.geom, { alpha: 0, L: 4000, a: 1950 });
+  assert.ok(spliceReport(m).find((p) => p.key === 'rafters')?.unstable, 'предупреждение не видит стыка — пример не тот');
+  assert.equal(analyse(m).rafters[0].U, Infinity, 'расчёт стропила разошёлся с предупреждением о стыке');
 });

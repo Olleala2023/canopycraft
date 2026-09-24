@@ -1343,6 +1343,33 @@ function deflectionCheck(spans, ratio) {
 }
 
 /**
+ * Геометрически изменяемая схема: кусок между стыками встык лежит меньше чем
+ * на двух опорах. Стык встык не передаёт ни момента, ни поперечной силы, и
+ * такой кусок поворачивается вокруг единственной опоры (или падает, если опор
+ * нет). Это строительная механика, а не пункт норм: прочность здесь проверять
+ * не на чем, и никакое сечение схему не спасает.
+ *
+ * value — число таких кусков, предел — ноль, U = value / 0 = ∞. Бесконечность
+ * явная (а не NaN от испорченных данных): интерфейс по ней пишет «изменяемая
+ * схема», а не «расчёт не сошёлся».
+ *
+ * @param {{x0:number,x1:number,supports:number}[]} loose куски меньше чем на двух опорах
+ */
+function mechanismCheck(loose) {
+  const mm = (x) => Math.round(x);
+  return {
+    name: 'Изменяемая схема',
+    value: loose.length,
+    limit: 0,
+    unit: 'шт',
+    U: Infinity,
+    formula: 'каждый кусок между стыками встык — не меньше чем на двух опорах',
+    note: `${loose.map((c) => `кусок ${mm(c.x0)}–${mm(c.x1)} мм, опор: ${c.supports}`).join('; ')}`
+      + ' — такой кусок поворачивается вокруг опоры, удержать его нечему',
+  };
+}
+
+/**
  * Худшая проверка из набора и общий коэффициент использования.
  * Нечисловой U (испорченные исходные данные) считается бесконечным:
  * такой результат должен бросаться в глаза, а не прятаться за нулём.
@@ -2347,6 +2374,14 @@ function stiffness(sec, mat) {
   return { EI: mat.E * p.Ix, GAs: mat.G * p.As };
 }
 
+/**
+ * Припуск на торцовку стропила, мм: столько добавляется к длине по скату,
+ * когда стропило покупают и режут. По этой же длине решается, влезает ли оно
+ * в хлыст, — и в спецификации, и в расчётной схеме, иначе предупреждение
+ * «нужен стык» и проверки стропила разойдутся на последних 100 мм.
+ */
+const RAFTER_TRIM = 100;
+
 /** Собственный вес кровельного «пирога» без стропил, кН/м² по скату. */
 function roofDead(model) {
   const roof = ROOFING[model.roofing];
@@ -2382,7 +2417,8 @@ function analyseRafter(model, x, trib, ctx) {
   // Схема Б.8 требует считать нижнее покрытие в двух вариантах — равномерном
   // и со снеговым мешком. За расчётное принимается худшее из них, причём
   // поэлементно: у стены правит мешок, в дальней части — равномерный снег.
-  const hinges = spliceHinges(model, Ls, supports);
+  const scheme = spliceScheme(model, Ls + RAFTER_TRIM, supports);
+  const hinges = scheme.hinges.filter((x) => x < Ls);
   const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, hinges, nEl: 120 });
   const byVariant = ctx.snow.variants.map((v) => {
     const snowAt = (xs) => (v.at(xs * ca) * trib) / 1000 * ca * ca;
@@ -2447,9 +2483,10 @@ function analyseRafter(model, x, trib, ctx) {
   }
   checks.push(deflectionCheck(spans, 200));
 
-  const w = worstOf(checks);
+  const w = worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks);
   return {
     x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans, hinges,
+    mechanism: scheme.mechanism ? scheme.loose : null,
     res,
     variant: lead.variant.label,
     reactions: {
@@ -2486,7 +2523,8 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (Math.max(...ctx.snow.variants.map((v) => v.at(0))) * sp) / 1000 * ca * ca;
 
-  const hinges = spliceHinges(model, B, xs, { always: true });
+  const scheme = spliceScheme(model, B, xs, { always: true });
+  const hinges = scheme.hinges;
   const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, hinges, nEl: 160 });
 
@@ -2521,7 +2559,11 @@ function analyseBattens(model, ctx) {
     note: ctx.dead.def.label,
   });
 
-  return { sec, mat, span, res: { uls, sls, point }, spans, hinges, ...worstOf(checks) };
+  return {
+    sec, mat, span, res: { uls, sls, point }, spans, hinges,
+    mechanism: scheme.mechanism ? scheme.loose : null,
+    ...worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks),
+  };
 }
 
 /* ───────────────────── ПРОГОН И БРУС У СТЕНЫ ───────────────────── */
@@ -2535,7 +2577,8 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
   const self = sec.weight * gammaDead;
 
   // элемент длиннее хлыста собирается из кусков: стык встык момент не передаёт
-  const hinges = spliceHinges(model, B, supports);
+  const scheme = spliceScheme(model, B, supports);
+  const hinges = scheme.hinges;
 
   const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
@@ -2556,7 +2599,9 @@ function analyseLineBeam(model, sectionId, supports, loads, label) {
   checks.push(deflectionCheck(spans, 200));
   return {
     label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions,
-    dead: dead?.reactions ?? null, ...worstOf(checks),
+    dead: dead?.reactions ?? null,
+    mechanism: scheme.mechanism ? scheme.loose : null,
+    ...worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks),
   };
 }
 
@@ -3580,11 +3625,32 @@ function supportLoads(model, roof = analyseRoof(model)) {
  * конце элемента ничего не рвёт, поэтому в схему не идёт.
  */
 function spliceHinges(model, length, supports = [], opts = {}) {
+  return spliceScheme(model, length, supports, opts).hinges;
+}
+
+/**
+ * Расчётная схема элемента со стыками встык: где шарниры и держится ли она.
+ *
+ * Кусок между стыками встык меньше чем на двух опорах — механизм. Решатель
+ * такую систему всё равно «решит»: матрица вырождена, прогиб выходит порядка
+ * 10¹² мм, а нагрузка с болтающегося куска в реакции не попадает. Поэтому для
+ * изменяемой схемы шарниры не отдаются вовсе: элемент решается неразрезным —
+ * таким он станет, если стык перекрыть накладкой, — и по этим реакциям
+ * нагрузка идёт дальше по цепочке. Сам элемент при этом не проверяется:
+ * вместо проверок у него одна «Изменяемая схема» с U = ∞ (mechanismCheck).
+ *
+ * @returns {{hinges:number[], loose:object[], mechanism:boolean}}
+ *   hinges — стыки для решателя; loose — куски меньше чем на двух опорах
+ */
+function spliceScheme(model, length, supports = [], opts = {}) {
   // обрешётку стыкуют на стропиле внахлёст, накладок на неё не ставят —
   // для неё стык всегда работает шарниром, какой бы тип ни был выбран
-  if (!opts.always && (model.opts.spliceJoint ?? 'butt') !== 'butt') return [];
+  if (!opts.always && (model.opts.spliceJoint ?? 'butt') !== 'butt') return { hinges: [], loose: [], mechanism: false };
   const stock = model.opts.stockLength ?? 6000;
-  return splicePlan(length, stock, supports, { onSupports: true }).at.filter((x) => x > 0 && x < length);
+  const plan = splicePlan(length, stock, supports, { onSupports: true });
+  const loose = plan.splices ? plan.cuts.filter((c) => c.unstable) : [];
+  if (loose.length) return { hinges: [], loose, mechanism: true };
+  return { hinges: plan.at.filter((x) => x > 0 && x < length), loose, mechanism: false };
 }
 
 function spliceReport(model) {
@@ -3594,7 +3660,7 @@ function spliceReport(model) {
   const lv = levels(model);
   const parts = [
     { key: 'rafters', label: 'Стропило', beam: true,
-      length: (geom.L + geom.a) / ca + 100, supports: [0, geom.L / ca] },
+      length: (geom.L + geom.a) / ca + RAFTER_TRIM, supports: [0, geom.L / ca] },
     { key: 'battens', label: 'Обрешётка', beam: true,
       length: geom.B, supports: [...model.rafters.xs] },
     { key: 'wallPurlin', label: 'Обвязка у стены', beam: true,
@@ -3634,7 +3700,9 @@ function analyse(model) {
   const nR = Math.max(1, model.rafters.xs.length);
   const ties = analyseTies(model, rafters, ctx, { outer: holdX / nR, wall: toWall / nR });
   const lateral = wallPurlinLateral(model, wallPurlin, sl.wall.supports, toWall);
-  Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]), { lateral, lateralH: toWall });
+  // у изменяемой схемы других проверок нет — боковой изгиб тоже не к чему прикладывать
+  if (!wallPurlin.mechanism) Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]));
+  Object.assign(wallPurlin, { lateral, lateralH: toWall });
   const cross = analyseCross(model, posts);
   const roofBrace = analyseRoofBrace(model, posts, rafters, { purlin, wallPurlin });
   const brace = cross ?? roofBrace;
@@ -3740,7 +3808,7 @@ function billOfMaterials(result) {
     });
   };
   const ca = Math.cos(deg(m.geom.alpha));
-  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + 100, m.rafters.xs.length);
+  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + RAFTER_TRIM, m.rafters.xs.length);
   const nBatten = Math.floor((m.geom.L + m.geom.a) / ca / m.battens.spacing) + 1;
   add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
   add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);
@@ -4405,7 +4473,9 @@ async function searchByCost(model, opts = {}) {
 const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
 
-const f2 = (x) => x.toFixed(2).replace('.', ',');
+// явная бесконечность — у изменяемой схемы и накладки, которая не подбирается:
+// «Infinity» из toFixed человеку ничего не скажет
+const f2 = (x) => (x === Infinity ? '∞' : x.toFixed(2).replace('.', ','));
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const mono = 'IBM Plex Mono, ui-monospace, monospace';
 
@@ -4702,6 +4772,8 @@ function drawDiagrams(res, sel) {
   const el = pickElement(res, sel);
   if (!el) return emptyDiagrams('Выберите элемент на плане или в сводке внизу');
   if (!el.res) return emptyDiagrams(`Для элемента «${el.title.toLowerCase()}» эпюры не строятся`);
+  // эпюры изменяемой схемы — это эпюры другой, неразрезной балки: не рисуем
+  if (el.mechanism) return emptyDiagrams(`«${el.title.toLowerCase()}» — изменяемая схема, эпюр нет`);
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
   const vertical = el.kind === 'post' || el.kind === 'wallPost';
@@ -5723,7 +5795,11 @@ function renderInspector(res) {
     </div>`);
   }
   const worstName = el.worst?.name ?? '—';
-  const v = !Number.isFinite(el.U)
+  const v = el.worst?.U === Infinity
+    ? `<b>Не проходит: ${worstName.toLowerCase()}.</b>${el.worst.note ? ` ${el.worst.note[0].toUpperCase()}${el.worst.note.slice(1)}.` : ''}${el.mechanism
+      ? ' Усилия ниже — по неразрезной схеме, какой элемент станет со стыком на накладке: по ним нагрузка передана на опоры.'
+      : ''}`
+    : !Number.isFinite(el.U)
     ? '<b>Расчёт не сошёлся.</b> Проверьте исходные данные — какой-то из параметров задан некорректно.'
     : el.U > 1 ? `<b>Не проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`
     : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${worstName}» — ${f2(el.U)}.`
@@ -6527,7 +6603,7 @@ function buildReport(res) {
   const m = res.model, b = billOfMaterials(res);
   const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
   const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
-    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
+    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}${c.U === Infinity && c.note ? ` — ${c.note}` : ''}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
   const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
   const worstPost = res.posts.reduce((a, c) => (a.U > c.U ? a : c));
   const worstWallPost = res.wallPosts.reduce((a, c) => (a.U > c.U ? a : c));
@@ -6650,6 +6726,19 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
+/**
+ * Почему максимальный U бесконечен, если причина названа: элемент с проверкой,
+ * которой нечего считать (изменяемая схема, накладка не подбирается). Такая
+ * проверка ставит U = Infinity явно. NaN от испорченных данных worstOf тоже
+ * превращает в бесконечность, но у худшей проверки U остаётся NaN — тогда
+ * причины нет, и честнее сказать «расчёт не сошёлся».
+ */
+function infiniteCause(res) {
+  const bad = res.summary.filter((s) => !Number.isFinite(s.U));
+  if (!bad.length || bad.some((s) => s.worst?.U !== Infinity)) return null;
+  return `${bad[0].label.toLowerCase()}: ${bad[0].worst.name.toLowerCase()}`;
+}
+
 let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
 
 function render(hint) {
@@ -6667,9 +6756,10 @@ function render(hint) {
   renderBom(res, bom);
   renderCost(bom);
   const pill = $('verdict-pill');
+  const cause = infiniteCause(res);
   pill.textContent = Number.isFinite(res.maxU)
     ? `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`
-    : 'расчёт не сошёлся — проверьте данные';
+    : cause ? `U = ∞ · ${cause}` : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
   $('hint').textContent = state.view === 'nodes'

@@ -383,6 +383,41 @@ async function main() {
       await send('Emulation.clearDeviceMetricsOverride');
     });
 
+    // Стропило длиннее хлыста: стык встык ложится на прогон, свес остаётся куском
+    // на одной опоре. Раньше в шапке стояло «макс U = 396372569068,9» — число по
+    // вырожденному решению. Ползунок уклона кончается на 30°, поэтому 45° — ссылкой
+    await step('изменяемая схема: уклон 45° по ссылке', async () => {
+      const code = Buffer.from(JSON.stringify({ geom: { alpha: 45 } }), 'utf8').toString('base64')
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+      await open(`index.html?smoke=mechanism#p=${code}`);
+      await appReady();
+      await ev(stubs);
+      const pill = await ev("document.getElementById('verdict-pill').textContent");
+      if (!/U = ∞/.test(pill) || !/изменяемая схема/.test(pill)) fail(`в шапке «${pill}» вместо U = ∞ и изменяемой схемы`);
+      if (/\d{5,}|Infinity/.test(pill)) fail(`в шапке мусорное число: «${pill}»`);
+      if (await ev('document.documentElement.scrollWidth > document.documentElement.clientWidth + 1')) fail('шапка с изменяемой схемой шире телефона');
+      await shoot('phone-light-mechanism');
+      await send('Emulation.clearDeviceMetricsOverride');
+
+      const card = await ev("document.querySelector('#summary [data-sel=\"rafters\"]')?.textContent ?? ''");
+      if (!/∞/.test(card) || !/Изменяемая схема/.test(card)) fail(`карточка стропил: «${card.replace(/\s+/g, ' ').trim()}»`);
+      await ev("document.querySelector('#summary [data-sel=\"rafters\"]').click()");
+      if (!(await ev("/Не проходит: изменяемая схема/.test(document.getElementById('inspector').textContent)"))) fail('инспектор не называет изменяемую схему');
+      await ev("document.getElementById('tab-diagrams').click()");
+      if (!(await ev("/изменяемая схема/.test(document.querySelector('#canvas svg')?.textContent ?? '')"))) fail('эпюры механизма нарисованы');
+      await ev("document.getElementById('btn-report').click()");
+      if (!(await ev("/Изменяемая схема/.test(document.getElementById('report').textContent)"))) fail('в отчёте нет изменяемой схемы');
+      // по ячейкам: в сплошном textContent соседние числа таблицы склеиваются
+      const junk = await ev(`[...document.querySelectorAll('#report td')].map((td) => td.textContent)
+        .find((t) => /Infinity|\\d{7,},\\d/.test(t)) ?? null`);
+      if (junk) fail(`в отчёте мусорное число: ${junk.slice(0, 80)}`);
+      await visitAll();
+      // innerText, а не textContent: в textContent попадает и исходник встроенного скрипта
+      const inf = await ev("(/.{0,60}Infinity.{0,30}/.exec(document.body.innerText) ?? [])[0] ?? null");
+      if (inf) fail(`на странице «Infinity» вместо ∞: ${inf.replace(/\\s+/g, ' ')}`);
+    });
+
     await step('справка', async () => {
       const pages = readdirSync(join(root, 'help')).filter((f) => f.endsWith('.html'));
       for (const p of pages) {
