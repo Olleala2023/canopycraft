@@ -19,6 +19,13 @@ const ORDER = [
   'src/core/fasteners.js',
   'src/core/model.js',
   'src/core/share.js',
+  'src/core/common.js',
+  'src/core/splices.js',
+  'src/core/roof.js',
+  'src/core/ties.js',
+  'src/core/posts.js',
+  'src/core/bases.js',
+  'src/core/bom.js',
   'src/core/analysis.js',
   'src/core/optimize.js',
   'src/core/search.js',
@@ -33,7 +40,7 @@ const ORDER = [
  */
 function aliasedImports(src, file) {
   const out = [];
-  for (const m of src.matchAll(/^import\s*\{([^}]*)\}\s*from\s*'([^']+)';/gm)) {
+  for (const m of src.matchAll(/^(?:import|export)\s*\{([^}]*)\}\s*from\s*'([^']+)';/gm)) {
     for (const part of m[1].split(',')) {
       const as = /(\S+)\s+as\s+(\S+)/.exec(part.trim());
       if (as) out.push(`${as[1]} as ${as[2]} (${file} ← ${m[2]})`);
@@ -45,6 +52,8 @@ function aliasedImports(src, file) {
 function strip(src) {
   return src
     .replace(/^import[\s\S]*?from\s+'[^']+';\s*$/gm, '')
+    // реэкспорт (export { a } from './b.js') — в склейке имя и так общее
+    .replace(/^export\s*\{[^}]*\}\s*from\s*'[^']+';\s*$/gm, '')
     .replace(/^export\s+\{[^}]*\};\s*$/gm, '')
     .replace(/^export\s+(const|let|var|function|class|async)/gm, '$1');
 }
