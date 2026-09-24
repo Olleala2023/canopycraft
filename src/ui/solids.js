@@ -1,0 +1,125 @@
+/**
+ * Детали навеса для 3D-вида — по результату расчёта.
+ *
+ * Чистая функция без three.js и без браузера: на входе результат analyse(),
+ * на выходе список брусков. Геометрия — только из расчёта: отметки из
+ * levels(), координаты стропил и столбов из модели, сечения из результата.
+ * Своих чисел «на глаз» здесь нет, как и в чертежах, — иначе 3D разойдётся с
+ * расчётом (так на узловом чертеже однажды стропило врезалось в опору).
+ *
+ * Система координат, мм: x — вдоль стены (0…B), y — от оси столбов у стены
+ * наружу (0 у стены, L у наружного ряда, L + a — край свеса), z — вверх от
+ * верха фундамента.
+ *
+ * Брусок — { from, to, w, h, up }: ось от точки from до to, сечение w × h, где
+ * h откладывается вдоль up (перпендикулярно оси), w — поперёк. Так одной
+ * формой описываются и столбы, и наклонные стропила, и диагонали связей.
+ */
+import { levels } from '../core/model.js';
+
+const CROSS_INSET = 150; // мм, как в расчёте креста (posts.js): диагональ не до самой базы
+
+/**
+ * @returns {{ kind:string, label:string, sel:object|null, U:number|null,
+ *   from:number[], to:number[], w:number, h:number, up:number[], ghost?:boolean }[]}
+ */
+export function buildSolids(res) {
+  const m = res.model;
+  const { B, L, a, alpha } = m.geom;
+  const lv = levels(m);
+  const t = (alpha * Math.PI) / 180;
+  const ca = Math.cos(t), sa = Math.sin(t);
+  // вдоль ската вниз, от стены наружу, и нормаль к скату вверх
+  const down = [0, ca, -sa];
+  const normal = [0, sa, ca];
+  const add = (p, v, k) => [p[0] + v[0] * k, p[1] + v[1] * k, p[2] + v[2] * k];
+  /** Низ стропила над точкой y — плоскость, на которой лежат стропила. */
+  const rafterBottom = (x, y) => [x, y, lv.rafterBottomWall - y * Math.tan(t)];
+  const Ls = (L + a) / ca;
+  const out = [];
+
+  // стропила: низом — по плоскости опирания, от оси стеновых столбов до края свеса
+  const raf = res.rafters[0].sec;
+  res.rafters.forEach((r, i) => {
+    const p0 = add(rafterBottom(r.x, 0), normal, raf.h / 2);
+    out.push({ kind: 'rafter', label: `Стропило ${i + 1}`, sel: { type: 'rafter', index: i }, U: r.U,
+      from: p0, to: add(p0, down, Ls), w: raf.b, h: raf.h, up: normal });
+  });
+
+  // обрешётка — поперёк стропил, по их верху, с шагом вдоль ската
+  const bat = res.battens.sec;
+  const nBatten = Math.floor(Ls / m.battens.spacing) + 1;
+  for (let k = 0; k < nBatten; k++) {
+    const s = Math.min(Ls - bat.b / 2, bat.b / 2 + k * m.battens.spacing);
+    const c = add(add(rafterBottom(0, 0), down, s), normal, raf.h + bat.h / 2);
+    out.push({ kind: 'batten', label: 'Обрешётка', sel: { type: 'battens' }, U: res.battens.U,
+      from: c, to: [B, c[1], c[2]], w: bat.b, h: bat.h, up: normal });
+  }
+
+  // кровля — тонкий лист поверх обрешётки, полупрозрачный и не выбирается
+  const roof0 = add(rafterBottom(0, 0), normal, raf.h + bat.h + 3);
+  out.push({ kind: 'roof', label: 'Кровля', sel: null, U: null, ghost: true,
+    from: [B / 2, roof0[1], roof0[2]], to: add([B / 2, roof0[1], roof0[2]], down, Ls), w: B, h: 6, up: normal });
+
+  // прогон на наружных столбах и обвязка на стеновых — вдоль стены
+  const pur = res.purlin.sec, wpur = res.wallPurlin.sec;
+  out.push({ kind: 'purlin', label: 'Прогон', sel: { type: 'purlin' }, U: res.purlin.U,
+    from: [0, L, lv.postTop + pur.h / 2], to: [B, L, lv.postTop + pur.h / 2], w: pur.b, h: pur.h, up: [0, 0, 1] });
+  out.push({ kind: 'wallPurlin', label: 'Обвязка у стены', sel: { type: 'wallPurlin' }, U: res.wallPurlin.U,
+    from: [0, 0, lv.wallPostTop + wpur.h / 2], to: [B, 0, lv.wallPostTop + wpur.h / 2], w: wpur.b, h: wpur.h, up: [0, 0, 1] });
+
+  // столбы — от верха фундамента до низа прогона и обвязки
+  res.posts.forEach((p, i) => out.push({ kind: 'post', label: `Столб ${i + 1}`, sel: { type: 'post', index: i }, U: p.U,
+    from: [p.x, L, 0], to: [p.x, L, lv.postTop], w: p.sec.b, h: p.sec.h, up: [0, 1, 0] }));
+  res.wallPosts.forEach((p, i) => out.push({ kind: 'wallPost', label: `Столб у стены ${i + 1}`, sel: { type: 'wallPost', index: i }, U: p.U,
+    from: [p.x, 0, 0], to: [p.x, 0, lv.wallPostTop], w: p.sec.b, h: p.sec.h, up: [0, 1, 0] }));
+
+  // блоки фундамента под столбами — ниже нуля
+  for (const [side, row, y] of [['outer', res.posts, L], ['wall', res.wallPosts, 0]]) {
+    const b = res.bases[side];
+    if (!b?.side || !b?.depth) continue;
+    for (const p of row) {
+      out.push({ kind: 'base', label: side === 'wall' ? 'Фундамент столба у стены' : 'Фундамент наружного столба',
+        sel: { type: 'base', side }, U: b.U,
+        from: [p.x, y, -b.depth], to: [p.x, y, 0], w: b.side, h: b.side, up: [0, 1, 0] });
+    }
+  }
+
+  // крест в пролёте наружного ряда
+  if (res.cross) {
+    const d = res.cross.sec;
+    for (const bay of res.cross.bays) {
+      const z0 = CROSS_INSET, z1 = lv.postTop - CROSS_INSET;
+      for (const [xa, xb] of [[bay.x0, bay.x1], [bay.x1, bay.x0]]) {
+        out.push({ kind: 'brace', label: 'Связь — крест', sel: { type: 'bracing' }, U: res.cross.U,
+          from: [xa, L, z0], to: [xb, L, z1], w: d.b, h: d.h, up: [0, 1, 0] });
+      }
+    }
+  }
+
+  // диагонали в плоскости кровли — под стропилами, от прогона к обвязке
+  if (res.roofBrace) {
+    const rb = res.roofBrace, d = rb.sec;
+    const under = (x, y) => add(rafterBottom(x, y), normal, -d.h / 2);
+    for (const [xa, xb] of [[rb.x0, rb.x1], [rb.x1, rb.x0]]) {
+      out.push({ kind: 'brace', label: 'Связи по кровле', sel: { type: 'bracing' }, U: rb.U,
+        from: under(xa, L), to: under(xb, 0), w: d.b, h: d.h, up: normal });
+    }
+  }
+
+  return out;
+}
+
+/** Стена дома и земля — для ориентира, не детали навеса. */
+export function buildContext(res) {
+  const m = res.model;
+  const lv = levels(m);
+  const wallPost = res.wallPosts[0]?.sec;
+  const face = -(wallPost?.h ?? 60) / 2;
+  const t = m.wallPosts.wallThickness ?? 300;
+  const top = lv.houseRoof;
+  return {
+    wall: { from: [m.geom.B / 2, face - t / 2, 0], to: [m.geom.B / 2, face - t / 2, top], w: m.geom.B + 1200, h: t, up: [0, 1, 0] },
+    ground: { size: Math.max(m.geom.B, m.geom.L + m.geom.a) * 2.2, center: [m.geom.B / 2, (m.geom.L + m.geom.a) / 2] },
+  };
+}

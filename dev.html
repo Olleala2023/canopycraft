@@ -32,6 +32,7 @@
       <button id="tab-section" aria-pressed="false">Разрез</button>
       <button id="tab-diagrams" aria-pressed="false">Эпюры</button>
       <button id="tab-nodes" aria-pressed="false">Узлы</button>
+      <button id="tab-3d" aria-pressed="false">3D</button>
     </div>
     <div class="status">
       <span class="verdict-pill" id="verdict-pill">—</span>
@@ -92,6 +93,9 @@
   <div id="report"></div>
   <div id="tip" class="tip" popover></div>
 </div>
+<!-- модульная версия без сборки: браузеру нужно знать, где лежит three.js;
+     сборка эту карту убирает — в index.html библиотека уже внутри -->
+<script type="importmap">{ "imports": { "three": "./node_modules/three/build/three.module.js", "three/addons/": "./node_modules/three/examples/jsm/" } }</script>
 <script type="module" src="src/ui/app.js"></script>
 </body>
 </html>

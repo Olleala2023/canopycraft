@@ -16,6 +16,7 @@ import { initTheme } from './theme.js';
 import { initAudio } from './audio.js';
 import { initTip, tipButton } from './tip.js';
 import { createHistory } from './history.js';
+import { create3D } from './view3d.js';
 
 $('app-version').textContent = `v${VERSION}`;
 const STORE_KEY = 'canopycraft.model.v2';
@@ -696,7 +697,18 @@ $('btn-cost-search').addEventListener('click', runCostSearch);
 
 /* ─────────────────── сцена и перетаскивание ─────────────────── */
 
+/** 3D-вид живёт, пока открыта его вкладка: камера сохраняется между перерисовками. */
+let view3d = null;
+
 function renderCanvas(res) {
+  if (state.view === '3d') {
+    view3d ??= create3D($('canvas'), { onPick: (sel) => { state.sel = sel; render(); } });
+    $('canvas').view3d = view3d; // для смоука: где на экране деталь, нарисован ли кадр
+    view3d?.update(res, state.sel);
+    state.meta = null;
+    return;
+  }
+  if (view3d) { view3d.dispose(); view3d = null; $('canvas').view3d = null; }
   const DRAW = { plan: drawPlan, section: drawSection, diagrams: drawDiagrams, nodes: drawNodes };
   const out = (DRAW[state.view] ?? drawPlan)(res, state.sel);
   $('canvas').innerHTML = out.svg;
@@ -789,6 +801,7 @@ function zoomAt(point, factor) {
 
 const canvasEl = $('canvas');
 canvasEl.addEventListener('wheel', (e) => {
+  if (state.view === '3d') return; // камерой 3D управляет сам вид
   e.preventDefault();
   zoomAt(toFrame(e.clientX, e.clientY), e.deltaY < 0 ? 1.18 : 1 / 1.18);
 }, { passive: false });
@@ -798,6 +811,7 @@ const pointers = new Map();
 let pinch = null;
 
 canvasEl.addEventListener('pointerdown', (e) => {
+  if (state.view === '3d') return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { // щипок на сенсорном экране
     pan = null;
@@ -811,6 +825,7 @@ canvasEl.addEventListener('pointerdown', (e) => {
 });
 
 canvasEl.addEventListener('pointermove', (e) => {
+  if (state.view === '3d') return;
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pinch && pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -838,9 +853,18 @@ const endPointer = (e) => {
 canvasEl.addEventListener('pointerup', endPointer);
 canvasEl.addEventListener('pointercancel', endPointer);
 
-$('zoom-in').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1.4); });
-$('zoom-out').addEventListener('click', () => { const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1 / 1.4); });
-$('zoom-reset').addEventListener('click', () => { const z = zv(); z.k = 1; z.tx = 0; z.ty = 0; applyZoom(); });
+$('zoom-in').addEventListener('click', () => {
+  if (view3d) { view3d.zoom(1.4); return; }
+  const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1.4);
+});
+$('zoom-out').addEventListener('click', () => {
+  if (view3d) { view3d.zoom(1 / 1.4); return; }
+  const f = frame(); if (f) zoomAt({ x: f.w / 2, y: f.h / 2 }, 1 / 1.4);
+});
+$('zoom-reset').addEventListener('click', () => {
+  if (view3d) { view3d.reset(); return; }
+  const z = zv(); z.k = 1; z.tx = 0; z.ty = 0; applyZoom();
+});
 
 /** Массивы координат, которые можно таскать мышью. */
 const ARRAY_OF = {
@@ -1015,7 +1039,9 @@ function render(hint) {
     : cause ? `U = ∞ · ${cause}` : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
-  $('hint').textContent = state.view === 'nodes'
+  $('hint').textContent = state.view === '3d'
+    ? 'Тянуть — вращать · колесо или щипок — ближе и дальше · правой кнопкой или двумя пальцами — сдвиг · клик по детали открывает её проверки справа · ⌂ — вернуть вид · цвет — коэффициент U'
+    : state.view === 'nodes'
     ? 'Чертежи собраны по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные · клик по детали открывает её проверки справа · меняйте исполнение узлов в блоке «Элементы»'
     : hintText;
   save();
@@ -1047,7 +1073,7 @@ $('btn-redo').addEventListener('click', redoStep);
 
 /* ─────────────────── события шапки ─────────────────── */
 
-const TABS = [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams'], ['tab-nodes', 'nodes']];
+const TABS = [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams'], ['tab-nodes', 'nodes'], ['tab-3d', '3d']];
 for (const [id, view] of TABS) {
   $(id).addEventListener('click', () => {
     state.view = view;

@@ -20,9 +20,9 @@ const { outputFiles } = buildSync({
   bundle: true,
   format: 'iife',
   target: 'es2022',
-  // без минификации: собранный index.html лежит в репозитории, и его разница
-  // в PR должна читаться
-  minify: false,
+  // минификация: внутри three.js, без неё страница весит 1,5 МБ вместо ~0,8.
+  // Читать и сравнивать — исходники в src/, собранный файл — только результат
+  minify: true,
   charset: 'utf8',
   legalComments: 'inline',
   write: false,
@@ -41,15 +41,24 @@ writeFileSync(join(root, 'help/help.css'), helpCss);
 const page = read('dev.html');
 const links = '<link rel="stylesheet" href="src/ui/tokens.css">\n<link rel="stylesheet" href="src/ui/styles.css">';
 const entry = '<script type="module" src="src/ui/app.js"></script>';
+// карта импортов нужна только модульной dev.html: в сборке библиотеки уже внутри
+const importmap = /<!-- модульная версия без сборки[\s\S]*?<\/script>\n/;
 for (const part of [links, entry]) {
   if (!page.includes(part)) {
     console.error(`В dev.html нет ожидаемой строки — сборке некуда вклеить:\n  ${part}`);
     process.exit(1);
   }
 }
+if (!importmap.test(page)) {
+  console.error('В dev.html нет карты импортов three.js — модульная версия не загрузит библиотеку');
+  process.exit(1);
+}
+// вставка функцией, а не строкой: в минифицированном коде встречаются $& и $`,
+// которые replace со строкой понял бы как шаблоны подстановки и испортил код
 const html = page
-  .replace(links, `<style>\n${css}\n</style>`)
-  .replace(entry, `<script>\n${bundle}</script>`);
+  .replace(importmap, '')
+  .replace(links, () => `<style>\n${css}\n</style>`)
+  .replace(entry, () => `<script>\n${bundle}</script>`);
 writeFileSync(join(root, 'index.html'), html);
 
 // вариант для публикации в Artifact: без doctype/html/head/body — обёртку добавляет платформа

@@ -76,7 +76,9 @@ const LAUNCH_WAIT = 45000;
  */
 async function launch(chrome, profile) {
   const proc = spawn(chrome, [
-    '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+    // WebGL для 3D-вида — программный (SwiftShader): у раннеров CI видеокарты нет
+    '--headless=new', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+    '--no-first-run', '--no-default-browser-check',
     '--disable-background-networking', '--disable-extensions', '--disable-dev-shm-usage',
     '--password-store=basic', '--use-mock-keychain', `--user-data-dir=${profile}`,
     '--remote-debugging-port=0', '--window-size=1400,1000', 'about:blank',
@@ -371,7 +373,7 @@ async function main() {
     // Вид проверяется там, где он чаще всего разъезжается: на ширине телефона
     // (горизонтальная прокрутка страницы) и в тёмной теме (цвет, вписанный мимо
     // токенов, или нечитаемый текст). Заодно снимаются скриншоты каждой вкладки.
-    const tabs = ['tab-plan', 'tab-section', 'tab-diagrams', 'tab-nodes'];
+    const tabs = ['tab-plan', 'tab-section', 'tab-diagrams', 'tab-nodes', 'tab-3d'];
     const shoot = async (name) => {
       const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
       await writeFile(join(shots, `${name}.png`), Buffer.from(data, 'base64'));
@@ -580,6 +582,42 @@ async function main() {
       if (await isOpen()) fail('карточка не закрылась, когда мышь ушла');
     });
 
+    // 3D: сцена нарисована (WebGL программный — SwiftShader), клик по детали
+    // выбирает её, вращение и кнопки масштаба не роняют страницу, вкладки
+    // переключаются туда и обратно.
+    await step('3D-вид', async () => {
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      await ev("document.getElementById('tab-3d').click()");
+      await wait(500);
+      if (!(await ev("!!document.querySelector('#canvas canvas')"))) fail(`нет сцены: ${await ev("document.getElementById('canvas').textContent.slice(0, 80)")}`);
+      const painted = await ev("document.getElementById('canvas').view3d?.painted() ?? 0");
+      if (painted < 0.2) fail(`сцена почти пустая: закрашено ${Math.round(painted * 100)} % кадра`);
+      // клик по второму наружному столбу — инспектор показывает его
+      const at = await ev("document.getElementById('canvas').view3d.screenOf({ type: 'post', index: 1 })");
+      if (!at) fail('столба нет в сцене');
+      else {
+        for (const type of ['mousePressed', 'mouseReleased']) {
+          await send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+        }
+        await wait(200);
+        const title = await ev("document.querySelector('#inspector .pane-title')?.textContent ?? ''");
+        if (!/СТОЛБ 2/.test(title)) fail(`клик по столбу выбрал «${title}»`);
+      }
+      // вращение мышью, кнопки масштаба и ⌂
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 700, y: 400, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 800, y: 430, button: 'left', buttons: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 800, y: 430, button: 'left', clickCount: 1 });
+      for (const id of ['zoom-in', 'zoom-out', 'zoom-reset']) await ev(`document.getElementById('${id}').click()`);
+      // смена темы перекрашивает сцену, изменение модели перестраивает её
+      await ev("document.getElementById('btn-theme').click()");
+      await ev("(() => { const el = document.getElementById('c_bracing_along'); el.value = 'cross'; el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+      if (!(await ev("document.getElementById('canvas').view3d?.screenOf({ type: 'bracing' })"))) fail('крест не появился в сцене');
+      await ev("document.getElementById('tab-plan').click()");
+      if (!(await ev("!!document.querySelector('#canvas svg') && !document.querySelector('#canvas canvas')"))) fail('после 3D план не вернулся');
+    });
+
     // модульная версия dev.html — то, чем пользуются при разработке: она
     // грузит модули браузером напрямую, без сборки. Ошибка в модуле проявляется
     // только там, где имя вызывается, — поэтому
@@ -595,6 +633,11 @@ async function main() {
       await set('c_opts_spliceJoint', 'plate');
       await set('c_geom_B', '9000');
       await visitAll();
+      // three.js в модульной версии грузится по карте импортов из node_modules
+      await ev("document.getElementById('tab-3d').click()");
+      await wait(500);
+      if (!(await ev("!!document.querySelector('#canvas canvas')"))) fail('dev.html: 3D-вид не поднялся — проверьте карту импортов three.js');
+      await ev("document.getElementById('tab-plan').click()");
       await ev("window.print = () => {}; document.getElementById('btn-report').click()");
       if (!(await ev("document.querySelectorAll('#report h2').length >= 5"))) fail('dev.html: отчёт не собрался');
     });
