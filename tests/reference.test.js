@@ -153,6 +153,17 @@ test('изменяемая схема не выдаётся за проходя�
     DEGENERATE[name](m);
     const raf = spliceReport(m).find((p) => p.key === 'rafters');
     assert.ok(raf?.unstable, `${name}: кусок стропила на одной опоре не отмечен как изменяемая схема`);
-    assert.ok(analyse(m).maxU > 1, `${name}: изменяемая схема показана проходящей`);
+    const r = analyse(m);
+    assert.ok(r.maxU > 1, `${name}: изменяемая схема показана проходящей`);
+    // раньше решатель «решал» вырожденную систему: прогиб ~10¹² мм, U ≈ 4·10¹¹ —
+    // конечное число, которое попадало в шапку и отчёт вместо слов
+    assert.equal(r.maxU, Infinity, `${name}: maxU = ${r.maxU} — число по вырожденному решению вместо «изменяемая схема»`);
+    const row = r.summary.find((s) => s.key === 'rafters');
+    assert.equal(row.U, Infinity, `${name}: U стропил ${row.U} — конечное число у механизма`);
+    assert.equal(row.worst.name, 'Изменяемая схема', `${name}: определяет «${row.worst.name}», а не изменяемая схема`);
+    for (const raf of r.rafters) {
+      assert.deepEqual(raf.checks.map((c) => c.name), ['Изменяемая схема'],
+        `${name}: у механизма остались проверки по вырожденному решению`);
+    }
   }
 });

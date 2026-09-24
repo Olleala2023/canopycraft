@@ -5,7 +5,9 @@ import { section } from '../core/sections.js';
 export const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
 
-const f2 = (x) => x.toFixed(2).replace('.', ',');
+// явная бесконечность — у изменяемой схемы и накладки, которая не подбирается:
+// «Infinity» из toFixed человеку ничего не скажет
+const f2 = (x) => (x === Infinity ? '∞' : x.toFixed(2).replace('.', ','));
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const mono = 'IBM Plex Mono, ui-monospace, monospace';
 
@@ -302,6 +304,8 @@ export function drawDiagrams(res, sel) {
   const el = pickElement(res, sel);
   if (!el) return emptyDiagrams('Выберите элемент на плане или в сводке внизу');
   if (!el.res) return emptyDiagrams(`Для элемента «${el.title.toLowerCase()}» эпюры не строятся`);
+  // эпюры изменяемой схемы — это эпюры другой, неразрезной балки: не рисуем
+  if (el.mechanism) return emptyDiagrams(`«${el.title.toLowerCase()}» — изменяемая схема, эпюр нет`);
   const r = el.res.uls ?? el.res['ULS-1'];
   const sls = el.res.sls ?? el.res.SLS;
   const vertical = el.kind === 'post' || el.kind === 'wallPost';

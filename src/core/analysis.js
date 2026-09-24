@@ -21,6 +21,7 @@ import {
   concreteBearing, plateBending, anchorCone, embedDepth, anchorMass, foundationFrost, frostHeave,
   spliceDowel,
   splicePlateBending,
+  mechanismCheck,
 } from './checks.js';
 import {
   fastener, shearCapacity, fitCount, spacingRules, fastenerMass, ANGLE_MASS, SELF_DRILL_D,
@@ -44,6 +45,14 @@ function stiffness(sec, mat) {
   const p = sec.props;
   return { EI: mat.E * p.Ix, GAs: mat.G * p.As };
 }
+
+/**
+ * Припуск на торцовку стропила, мм: столько добавляется к длине по скату,
+ * когда стропило покупают и режут. По этой же длине решается, влезает ли оно
+ * в хлыст, — и в спецификации, и в расчётной схеме, иначе предупреждение
+ * «нужен стык» и проверки стропила разойдутся на последних 100 мм.
+ */
+const RAFTER_TRIM = 100;
 
 /** Собственный вес кровельного «пирога» без стропил, кН/м² по скату. */
 function roofDead(model) {
@@ -80,7 +89,8 @@ function analyseRafter(model, x, trib, ctx) {
   // Схема Б.8 требует считать нижнее покрытие в двух вариантах — равномерном
   // и со снеговым мешком. За расчётное принимается худшее из них, причём
   // поэлементно: у стены правит мешок, в дальней части — равномерный снег.
-  const hinges = spliceHinges(model, Ls, supports);
+  const scheme = spliceScheme(model, Ls + RAFTER_TRIM, supports);
+  const hinges = scheme.hinges.filter((x) => x < Ls);
   const solve = (q) => solveBeam({ length: Ls, supports, EI, GAs, q, hinges, nEl: 120 });
   const byVariant = ctx.snow.variants.map((v) => {
     const snowAt = (xs) => (v.at(xs * ca) * trib) / 1000 * ca * ca;
@@ -145,9 +155,10 @@ function analyseRafter(model, x, trib, ctx) {
   }
   checks.push(deflectionCheck(spans, 200));
 
-  const w = worstOf(checks);
+  const w = worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks);
   return {
     x, trib, sec, mat, Ls, xSup, cantLen, N, Mmax, Vmax, spans, hinges,
+    mechanism: scheme.mechanism ? scheme.loose : null,
     res,
     variant: lead.variant.label,
     reactions: {
@@ -184,7 +195,8 @@ function analyseBattens(model, ctx) {
   const deadD = (GAMMA_F.roofing * (ctx.dead.roof * sp) / 1000 + gammaDead * sec.weight) * ca;
   const snowD = (Math.max(...ctx.snow.variants.map((v) => v.at(0))) * sp) / 1000 * ca * ca;
 
-  const hinges = spliceHinges(model, B, xs, { always: true });
+  const scheme = spliceScheme(model, B, xs, { always: true });
+  const hinges = scheme.hinges;
   const uls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadD + GAMMA_F.snow * snowD, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports: xs, EI, GAs, q: () => deadN + snowD, hinges, nEl: 160 });
 
@@ -219,7 +231,11 @@ function analyseBattens(model, ctx) {
     note: ctx.dead.def.label,
   });
 
-  return { sec, mat, span, res: { uls, sls, point }, spans, hinges, ...worstOf(checks) };
+  return {
+    sec, mat, span, res: { uls, sls, point }, spans, hinges,
+    mechanism: scheme.mechanism ? scheme.loose : null,
+    ...worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks),
+  };
 }
 
 /* ───────────────────── ПРОГОН И БРУС У СТЕНЫ ───────────────────── */
@@ -233,7 +249,8 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   const self = sec.weight * gammaDead;
 
   // элемент длиннее хлыста собирается из кусков: стык встык момент не передаёт
-  const hinges = spliceHinges(model, B, supports);
+  const scheme = spliceScheme(model, B, supports);
+  const hinges = scheme.hinges;
 
   const uls = solveBeam({ length: B, supports, EI, GAs, q: () => self, point: loads.uls, hinges, nEl: 160 });
   const sls = solveBeam({ length: B, supports, EI, GAs, q: () => sec.weight, point: loads.sls, hinges, nEl: 160 });
@@ -254,7 +271,9 @@ export function analyseLineBeam(model, sectionId, supports, loads, label) {
   checks.push(deflectionCheck(spans, 200));
   return {
     label, sec, mat, res: { uls, sls, up }, spans, hinges, reactions: uls.reactions, uplift: up.reactions,
-    dead: dead?.reactions ?? null, ...worstOf(checks),
+    dead: dead?.reactions ?? null,
+    mechanism: scheme.mechanism ? scheme.loose : null,
+    ...worstOf(scheme.mechanism ? [mechanismCheck(scheme.loose)] : checks),
   };
 }
 
@@ -1278,11 +1297,32 @@ export function supportLoads(model, roof = analyseRoof(model)) {
  * конце элемента ничего не рвёт, поэтому в схему не идёт.
  */
 export function spliceHinges(model, length, supports = [], opts = {}) {
+  return spliceScheme(model, length, supports, opts).hinges;
+}
+
+/**
+ * Расчётная схема элемента со стыками встык: где шарниры и держится ли она.
+ *
+ * Кусок между стыками встык меньше чем на двух опорах — механизм. Решатель
+ * такую систему всё равно «решит»: матрица вырождена, прогиб выходит порядка
+ * 10¹² мм, а нагрузка с болтающегося куска в реакции не попадает. Поэтому для
+ * изменяемой схемы шарниры не отдаются вовсе: элемент решается неразрезным —
+ * таким он станет, если стык перекрыть накладкой, — и по этим реакциям
+ * нагрузка идёт дальше по цепочке. Сам элемент при этом не проверяется:
+ * вместо проверок у него одна «Изменяемая схема» с U = ∞ (mechanismCheck).
+ *
+ * @returns {{hinges:number[], loose:object[], mechanism:boolean}}
+ *   hinges — стыки для решателя; loose — куски меньше чем на двух опорах
+ */
+export function spliceScheme(model, length, supports = [], opts = {}) {
   // обрешётку стыкуют на стропиле внахлёст, накладок на неё не ставят —
   // для неё стык всегда работает шарниром, какой бы тип ни был выбран
-  if (!opts.always && (model.opts.spliceJoint ?? 'butt') !== 'butt') return [];
+  if (!opts.always && (model.opts.spliceJoint ?? 'butt') !== 'butt') return { hinges: [], loose: [], mechanism: false };
   const stock = model.opts.stockLength ?? 6000;
-  return splicePlan(length, stock, supports, { onSupports: true }).at.filter((x) => x > 0 && x < length);
+  const plan = splicePlan(length, stock, supports, { onSupports: true });
+  const loose = plan.splices ? plan.cuts.filter((c) => c.unstable) : [];
+  if (loose.length) return { hinges: [], loose, mechanism: true };
+  return { hinges: plan.at.filter((x) => x > 0 && x < length), loose, mechanism: false };
 }
 
 export function spliceReport(model) {
@@ -1292,7 +1332,7 @@ export function spliceReport(model) {
   const lv = levels(model);
   const parts = [
     { key: 'rafters', label: 'Стропило', beam: true,
-      length: (geom.L + geom.a) / ca + 100, supports: [0, geom.L / ca] },
+      length: (geom.L + geom.a) / ca + RAFTER_TRIM, supports: [0, geom.L / ca] },
     { key: 'battens', label: 'Обрешётка', beam: true,
       length: geom.B, supports: [...model.rafters.xs] },
     { key: 'wallPurlin', label: 'Обвязка у стены', beam: true,
@@ -1332,7 +1372,9 @@ export function analyse(model) {
   const nR = Math.max(1, model.rafters.xs.length);
   const ties = analyseTies(model, rafters, ctx, { outer: holdX / nR, wall: toWall / nR });
   const lateral = wallPurlinLateral(model, wallPurlin, sl.wall.supports, toWall);
-  Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]), { lateral, lateralH: toWall });
+  // у изменяемой схемы других проверок нет — боковой изгиб тоже не к чему прикладывать
+  if (!wallPurlin.mechanism) Object.assign(wallPurlin, worstOf([...wallPurlin.checks, lateral]));
+  Object.assign(wallPurlin, { lateral, lateralH: toWall });
   const cross = analyseCross(model, posts);
   const roofBrace = analyseRoofBrace(model, posts, rafters, { purlin, wallPurlin });
   const brace = cross ?? roofBrace;
@@ -1438,7 +1480,7 @@ export function billOfMaterials(result) {
     });
   };
   const ca = Math.cos(deg(m.geom.alpha));
-  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + 100, m.rafters.xs.length);
+  add('Стропила', section(m.rafters.sectionId), (m.geom.L + m.geom.a) / ca + RAFTER_TRIM, m.rafters.xs.length);
   const nBatten = Math.floor((m.geom.L + m.geom.a) / ca / m.battens.spacing) + 1;
   add('Обрешётка', section(m.battens.sectionId), m.geom.B, nBatten);
   add('Обвязка у стены', section(m.wallPurlin.sectionId), m.geom.B, 1);

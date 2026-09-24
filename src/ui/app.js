@@ -451,7 +451,11 @@ function renderInspector(res) {
     </div>`);
   }
   const worstName = el.worst?.name ?? '—';
-  const v = !Number.isFinite(el.U)
+  const v = el.worst?.U === Infinity
+    ? `<b>Не проходит: ${worstName.toLowerCase()}.</b>${el.worst.note ? ` ${el.worst.note[0].toUpperCase()}${el.worst.note.slice(1)}.` : ''}${el.mechanism
+      ? ' Усилия ниже — по неразрезной схеме, какой элемент станет со стыком на накладке: по ним нагрузка передана на опоры.'
+      : ''}`
+    : !Number.isFinite(el.U)
     ? '<b>Расчёт не сошёлся.</b> Проверьте исходные данные — какой-то из параметров задан некорректно.'
     : el.U > 1 ? `<b>Не проходит.</b> Определяет «${worstName}» — ${f2(el.U)}.`
     : el.U > 0.85 ? `<b>На пределе.</b> Определяет «${worstName}» — ${f2(el.U)}.`
@@ -1255,7 +1259,7 @@ function buildReport(res) {
   const m = res.model, b = billOfMaterials(res);
   const el = (x) => `<tr><td>${x.label}</td><td>${x.U > 1 ? 'НЕ ПРОХОДИТ' : 'проходит'}</td><td>${f2(x.U)}</td><td>${x.worst?.name ?? '—'}</td></tr>`;
   const checkRows = (title, checks) => `<h3>${title}</h3><table><tr><th>Проверка</th><th>Условие</th><th>Значение</th><th>Предел</th><th>U</th></tr>` +
-    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
+    checks.map((c) => `<tr><td>${c.name}</td><td>${c.formula}${c.U === Infinity && c.note ? ` — ${c.note}` : ''}</td><td>${f2(c.value)} ${c.unit}</td><td>${f2(c.limit)} ${c.unit}</td><td>${f2(c.U)}</td></tr>`).join('') + '</table>';
   const worstRafter = res.rafters.reduce((a, c) => (a.U > c.U ? a : c));
   const worstPost = res.posts.reduce((a, c) => (a.U > c.U ? a : c));
   const worstWallPost = res.wallPosts.reduce((a, c) => (a.U > c.U ? a : c));
@@ -1378,6 +1382,19 @@ function buildReport(res) {
 
 /* ─────────────────── рендер ─────────────────── */
 
+/**
+ * Почему максимальный U бесконечен, если причина названа: элемент с проверкой,
+ * которой нечего считать (изменяемая схема, накладка не подбирается). Такая
+ * проверка ставит U = Infinity явно. NaN от испорченных данных worstOf тоже
+ * превращает в бесконечность, но у худшей проверки U остаётся NaN — тогда
+ * причины нет, и честнее сказать «расчёт не сошёлся».
+ */
+function infiniteCause(res) {
+  const bad = res.summary.filter((s) => !Number.isFinite(s.U));
+  if (!bad.length || bad.some((s) => s.worst?.U !== Infinity)) return null;
+  return `${bad[0].label.toLowerCase()}: ${bad[0].worst.name.toLowerCase()}`;
+}
+
 let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
 
 function render(hint) {
@@ -1395,9 +1412,10 @@ function render(hint) {
   renderBom(res, bom);
   renderCost(bom);
   const pill = $('verdict-pill');
+  const cause = infiniteCause(res);
   pill.textContent = Number.isFinite(res.maxU)
     ? `макс U = ${f2(res.maxU)} · ${res.maxU > 1 ? 'не проходит' : res.maxU > 0.85 ? 'на пределе' : 'проходит'}`
-    : 'расчёт не сошёлся — проверьте данные';
+    : cause ? `U = ∞ · ${cause}` : 'расчёт не сошёлся — проверьте данные';
   pill.style.color = uColor(res.maxU);
   pill.style.borderColor = uColor(res.maxU);
   $('hint').textContent = state.view === 'nodes'
