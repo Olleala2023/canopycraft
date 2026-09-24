@@ -12,7 +12,6 @@ import { pickRafterSpacing } from '../core/optimize.js';
 import { f2 } from './views.js';
 import { kN } from './format.js';
 
-const timberOpts = () => SECTIONS.filter((s) => s.material === 'timber');
 const steelOpts = () => SECTIONS.filter((s) => s.material === 'steel');
 /** Диагональ креста — квадратная труба небольшого сечения. */
 const braceOpts = () => SECTIONS.filter((s) => s.material === 'steel' && s.h === s.b && s.h <= 80);
