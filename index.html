@@ -80,6 +80,7 @@ h1,h2,h3{font-family:Oswald,"IBM Plex Sans",sans-serif; font-weight:500; margin:
   border:1px solid var(--rule-2); cursor:pointer}
 .btn.icon{padding:5px 9px; font-size:13px}
 .btn.icon.off{color:var(--ink-3); border-color:var(--rule)}
+.btn:disabled{color:var(--ink-3); border-color:var(--rule); cursor:default}
 .audio{display:inline-flex; gap:6px; align-items:center}
 input[type=range].vol{width:72px; flex:0 0 auto; align-self:center; accent-color:var(--accent-2)}
 .btn:hover{border-color:var(--accent-2); color:var(--accent-2)}
@@ -268,6 +269,8 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
       <a class="btn" href="help/index.html" target="_blank" rel="noopener" id="btn-help">Справка</a>
       <button class="btn" id="btn-report">Отчёт</button>
       <button class="btn" id="btn-link" title="Скопировать ссылку на этот расчёт">Ссылка</button>
+      <button class="btn icon" id="btn-undo" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled>↶</button>
+      <button class="btn icon" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
       <button class="btn" id="btn-reset">Сбросить</button>
       <span class="audio">
         <button class="btn icon" id="btn-theme" aria-label="Тема оформления">◐</button>
@@ -325,7 +328,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
  * Совпадение с package.json и верхней записью CHANGELOG.md проверяет
  * tests/version.test.js. Когда поднимать — см. «Версия» в CLAUDE.md.
  */
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 /* ── src/core/sections.js ── */
 /**
@@ -6108,7 +6111,74 @@ function initAudio(onSay) {
   }
 }
 
+/* ── src/ui/history.js ── */
+/**
+ * История изменений модели для «Отменить» и «Вернуть».
+ *
+ * Модель запоминается целиком, снимком: она маленькая (несколько килобайт), а
+ * снимок не требует от каждого места, которое её меняет, знать про историю.
+ * Записывается модель после каждой перерисовки; одинаковая — не запись.
+ *
+ * Непрерывное действие — перетаскивание столба, ползунок — даёт десятки
+ * перерисовок в секунду. Изменения, идущие друг за другом чаще, чем раз в
+ * `merge` мс, сливаются в один шаг: отмена возвращает к тому, что было до
+ * начала движения, а не на один кадр назад.
+ */
+function createHistory({ limit = 100, merge = 400 } = {}) {
+  let undo = [];
+  let redo = [];
+  let current = null;
+  let at = -Infinity;
+
+  return {
+    /** Начать заново с этой модели: после загрузки ссылки истории у неё ещё нет. */
+    reset(model) {
+      undo = [];
+      redo = [];
+      current = JSON.stringify(model);
+      at = -Infinity;
+    },
+
+    /** Модель после перерисовки. Возвращает true, если появился новый шаг. */
+    record(model, now = Date.now()) {
+      const snap = JSON.stringify(model);
+      if (snap === current) return false;
+      const merged = now - at < merge && undo.length > 0;
+      if (!merged) {
+        undo.push(current);
+        if (undo.length > limit) undo.shift();
+      }
+      redo = [];
+      current = snap;
+      at = now;
+      return !merged;
+    },
+
+    /** Модель до последнего шага или null, если отменять нечего. */
+    undo() {
+      if (!undo.length) return null;
+      redo.push(current);
+      current = undo.pop();
+      at = -Infinity; // следующее изменение — новый шаг, а не продолжение отменённого
+      return JSON.parse(current);
+    },
+
+    /** Отменённый шаг обратно или null. */
+    redo() {
+      if (!redo.length) return null;
+      undo.push(current);
+      current = redo.pop();
+      at = -Infinity;
+      return JSON.parse(current);
+    },
+
+    get canUndo() { return undo.length > 0; },
+    get canRedo() { return redo.length > 0; },
+  };
+}
+
 /* ── src/ui/app.js ── */
+
 
 
 
@@ -6149,6 +6219,9 @@ const state = {
   result: null,
   meta: null,
 };
+
+/** «Отменить» и «Вернуть»: снимки модели после каждой перерисовки (см. history.js). */
+const undoLog = createHistory();
 
 function load() {
   try {
@@ -7048,7 +7121,22 @@ $('canvas').addEventListener('dblclick', (e) => {
   render(`Добавлено стропило на ${x} мм`);
 });
 
+/**
+ * Где клавиши принадлежат полю, а не чертежу. В поле ввода Backspace стирает
+ * цифру, а Ctrl+Z отменяет набранный текст — перехватывать их нельзя: раньше
+ * Backspace в поле заодно удалял выбранное стропило.
+ */
+const typingIn = (el) => !!el?.closest?.('textarea, select, input:not([type=range]):not([type=checkbox]):not([type=radio])');
+
 document.addEventListener('keydown', (e) => {
+  // по физической клавише: в русской раскладке на Z стоит «я»
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+    if (typingIn(e.target)) return;
+    e.preventDefault();
+    if (e.code === 'KeyY' || e.shiftKey) redoStep(); else undoStep();
+    return;
+  }
+  if (typingIn(e.target)) return;
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (state.sel.type === 'rafter' && state.model.rafters.xs.length > 3) {
       state.model.rafters.xs.splice(state.sel.index, 1);
@@ -7082,7 +7170,7 @@ function infiniteCause(res) {
   return `${bad[0].label.toLowerCase()}: ${bad[0].worst.name.toLowerCase()}`;
 }
 
-let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить';
+let hintText = 'Колесо или щипок — масштаб, тянуть фон — сдвиг · стропила и столбы тянутся мышью с шагом 50 мм, с Shift 10 мм · двойной клик — добавить стропило · Del — удалить · Ctrl+Z — отменить, Ctrl+Y — вернуть';
 
 function render(hint) {
   if (hint) hintText = hint;
@@ -7109,7 +7197,31 @@ function render(hint) {
     ? 'Чертежи собраны по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные · клик по детали открывает её проверки справа · меняйте исполнение узлов в блоке «Элементы»'
     : hintText;
   save();
+  undoLog.record(state.model);
+  paintUndo();
 }
+
+function paintUndo() {
+  $('btn-undo').disabled = !undoLog.canUndo;
+  $('btn-redo').disabled = !undoLog.canRedo;
+}
+
+function undoStep() {
+  const m = undoLog.undo();
+  if (!m) return;
+  state.model = m;
+  render(undoLog.canUndo ? 'Отменено · Ctrl+Z — ещё, Ctrl+Y — вернуть' : 'Отменено до начала · Ctrl+Y — вернуть');
+}
+
+function redoStep() {
+  const m = undoLog.redo();
+  if (!m) return;
+  state.model = m;
+  render('Возвращено · Ctrl+Z — снова отменить');
+}
+
+$('btn-undo').addEventListener('click', undoStep);
+$('btn-redo').addEventListener('click', redoStep);
 
 /* ─────────────────── события шапки ─────────────────── */
 
@@ -7173,6 +7285,7 @@ function selectWorst(res) {
 
 buildParams();
 selectWorst(analyse(state.model));
+undoLog.reset(state.model);
 render(upgradeNotes.join(' ') || undefined);
 
 })();

@@ -466,6 +466,51 @@ async function main() {
       if (inf) fail(`на странице «Infinity» вместо ∞: ${inf.replace(/\\s+/g, ' ')}`);
     });
 
+    // Отмена и возврат: клавиши (по физической клавише — в русской раскладке
+    // на Z стоит «я»), кнопки, слияние быстрых правок в один шаг, и то, что
+    // клавиши правки текста в поле ввода принадлежат полю.
+    await step('отменить и вернуть', async () => {
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      const val = (id) => ev(`document.getElementById('${id}').value`);
+      const set = (id, v) => ev(`(() => { const el = document.getElementById('${id}'); el.value = '${v}'; el.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      const key = (code, extra = {}, target = 'document.body') => ev(`${target}.dispatchEvent(new KeyboardEvent('keydown', { code: '${code}', key: ${JSON.stringify(extra.key ?? 'z')}, ctrlKey: ${!!extra.ctrl}, shiftKey: ${!!extra.shift}, bubbles: true }))`);
+      const disabled = (id) => ev(`document.getElementById('${id}').disabled`);
+      if (!(await disabled('btn-undo'))) fail('в начале «Отменить» доступна');
+      const B0 = await val('c_geom_B'), L0 = await val('c_geom_L');
+      // ползунок, протянутый быстро, — один шаг
+      for (const v of ['6200', '6400', '6600', '7000']) await set('c_geom_B', v);
+      await wait(500);
+      await set('c_geom_L', '3500');
+      await key('KeyZ', { ctrl: true, key: 'я' });
+      if ((await val('c_geom_L')) !== L0) fail(`Ctrl+Z не вернул вылет: ${await val('c_geom_L')}`);
+      if ((await val('c_geom_B')) !== '7000') fail('Ctrl+Z отменил лишнее');
+      await key('KeyZ', { ctrl: true });
+      if ((await val('c_geom_B')) !== B0) fail(`протянутый ползунок отменился не целиком: ${await val('c_geom_B')}`);
+      if (!(await disabled('btn-undo'))) fail('в начале истории «Отменить» доступна');
+      await key('KeyY', { ctrl: true, key: 'y' });
+      if ((await val('c_geom_B')) !== '7000') fail('Ctrl+Y не вернул ширину');
+      await ev("document.getElementById('btn-redo').click()");
+      if ((await val('c_geom_L')) !== '3500') fail('кнопка «Вернуть» не сработала');
+      if (!(await disabled('btn-redo'))) fail('вернуть больше нечего, а кнопка доступна');
+      // «Сбросить» тоже отменяется
+      await ev("document.getElementById('btn-reset').click()");
+      await ev("document.getElementById('btn-undo').click()");
+      if ((await val('c_geom_L')) !== '3500') fail('сброс не отменился');
+      // Backspace в поле ввода стирает текст, а не стропило
+      const rafters = () => ev("document.querySelectorAll('#canvas [data-pick=\"rafter\"]').length");
+      await ev("document.getElementById('tab-plan').click()");
+      const n0 = await rafters();
+      const field = "document.querySelector('#params input[type=number], #params-right input[type=number]')";
+      await key('Backspace', { key: 'Backspace' }, field);
+      if ((await rafters()) !== n0) fail('Backspace в поле ввода удалил стропило');
+      await key('Delete', { key: 'Delete' });
+      if ((await rafters()) !== n0 - 1) fail('Delete вне поля не удалил выбранное стропило');
+      await key('KeyZ', { ctrl: true });
+      if ((await rafters()) !== n0) fail('удаление стропила не отменилось');
+    });
+
     // модульная версия: склейка прячет забытый импорт (имя и так общее),
     // а dev.html на нём падает — проверяем, что она поднимается без ошибок
     // Забытый импорт проявляется только там, где имя вызывается, — поэтому

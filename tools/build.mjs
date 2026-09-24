@@ -37,6 +37,7 @@ const ORDER = [
   'src/ui/report.js',
   'src/ui/theme.js',
   'src/ui/audio.js',
+  'src/ui/history.js',
   'src/ui/app.js',
 ];
 
