@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultModel, spread } from '../src/core/model.js';
+import { defaultModel } from '../src/core/model.js';
 import { analyse, analyseRoof, analyseLineBeam, analysePostRow, supportLoads, billOfMaterials } from '../src/core/analysis.js';
 import { ladder, section } from '../src/core/sections.js';
 import { searchByCost } from '../src/core/search.js';

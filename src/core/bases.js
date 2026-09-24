@@ -43,7 +43,7 @@ function analysePostBase(model, cfg, posts, ctx) {
   const needsFixity = post.muX !== 1 || post.muY !== 1;
 
   const checks = [];
-  let detail = {};
+  let detail;
 
   // Бетонный блок под столбом — один и тот же и для забетонированного столба,
   // и для базы на плите: сторона и глубина задаются в панели. Его вес —
