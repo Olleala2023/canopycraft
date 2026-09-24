@@ -151,6 +151,10 @@ select,input[type=number]{font:inherit; font-size:12.5px; width:100%; padding:3p
 @media (min-width:1001px){
   .stage{position:sticky; top:8px; align-self:start; height:calc(100vh - 96px); height:calc(100dvh - 96px); min-height:480px}
   .canvas{flex:1 1 auto; height:auto; min-height:380px}
+  /* правая колонка тоже прилипает; она длиннее окна, поэтому прокручивается
+     сама, не утаскивая за собой страницу */
+  .side{position:sticky; top:8px; align-self:start; max-height:calc(100vh - 16px); max-height:calc(100dvh - 16px);
+    overflow-y:auto; overscroll-behavior:contain}
 }
 g.pickable, g.draggable{cursor:pointer}
 .hint{font-size:11.5px; color:var(--ink-3); padding:7px 13px; border-top:1px solid var(--rule)}
@@ -301,7 +305,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
       </div>
       <div class="hint" id="hint"></div>
     </section>
-    <aside class="pane">
+    <aside class="pane side" id="side">
       <div id="inspector"></div>
       <div id="params-right"></div>
     </aside>
@@ -330,7 +334,7 @@ td.n{text-align:right; font-family:"IBM Plex Mono",monospace}
  * Совпадение с package.json и верхней записью CHANGELOG.md проверяет
  * tests/version.test.js. Когда поднимать — см. «Версия» в CLAUDE.md.
  */
-const VERSION = '0.5.1';
+const VERSION = '0.5.2';
 
 /* ── src/core/sections.js ── */
 /**
@@ -6436,9 +6440,16 @@ function syncParams() {
 
 /* ─────────────────── инспектор ─────────────────── */
 
+/** Выбор, для которого инспектор показан сейчас, — чтобы понять, что выбрали другое. */
+let inspected = '';
+
 function renderInspector(res) {
   const el = pickElement(res, state.sel);
   const host = $('inspector');
+  // выбрали другой элемент — правая колонка прокручивается к его проверкам:
+  // она прокручивается сама по себе, и новый инспектор мог оказаться выше края
+  const key = JSON.stringify(state.sel);
+  if (key !== inspected) { inspected = key; $('side').scrollTop = 0; }
   if (!el) { host.innerHTML = ''; return; }
   const rows = [];
   rows.push(`<div class="pane-title">${el.title} · ${el.sec.label}</div>`);
