@@ -74,3 +74,32 @@ export function houseClashes(m) {
   }
   return out;
 }
+
+/**
+ * Точки привязки вдоль стены для цепочки размеров: углы дома, края навеса,
+ * оси столбов у стены и откосы проёмов — по возрастанию x, совпадающие (ближе
+ * 1 мм) склеены в одну. Между соседними точками — размер, который меряют
+ * рулеткой: от угла до откоса, от откоса до оси столба.
+ *
+ * @param {{ from?:number, to?:number }} range — только точки в этих пределах,
+ *   мм по навесу (план показывает стену лишь в пределах навеса)
+ * @returns {{ x:number, kinds:string[] }[]} kinds: 'corner' | 'edge' | 'post' | 'jamb'
+ */
+export function wallMarks(m, { from = -Infinity, to = Infinity } = {}) {
+  const wall = houseWall(m);
+  const raw = [];
+  if (m.house?.width > 0) raw.push([wall.x0, 'corner'], [wall.x1, 'corner']);
+  raw.push([0, 'edge'], [m.geom.B, 'edge']);
+  for (const x of m.wallPosts.xs) raw.push([x, 'post']);
+  for (const o of openingsOf(m)) raw.push([o.x0, 'jamb'], [o.x1, 'jamb']);
+  const inside = raw
+    .map(([x, kind]) => [Math.min(to, Math.max(from, x)), kind, x])
+    .filter(([x, , x0]) => x === x0 || x === from || x === to)
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const [x, kind] of inside) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.x - x) < 1) { if (!last.kinds.includes(kind)) last.kinds.push(kind); } else out.push({ x, kinds: [kind] });
+  }
+  return out;
+}

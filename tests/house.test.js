@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, levels, boltHeights } from '../src/core/model.js';
-import { analyse, houseWall, openingsOf, houseClashes } from '../src/core/analysis.js';
+import { analyse, houseWall, openingsOf, houseClashes, wallMarks } from '../src/core/analysis.js';
+import { drawFacade } from '../src/ui/facade.js';
 import { buildContext } from '../src/ui/solids.js';
 import { encodeModel, decodeModel } from '../src/core/share.js';
 import { drawPlan } from '../src/ui/views.js';
@@ -106,4 +107,44 @@ test('редактор проёмов: смена вида ставит типо
   applyOpeningInput(list, el(0, 'x', '-300'));
   assert.equal(list[0].x, 0, 'отрицательное положение должно обрезаться до нуля');
   assert.equal(applyOpeningInput(list, el(5, 'x', '100')), false, 'правка несуществующей строки должна игнорироваться');
+});
+
+/** Дом 9 м, навес 6 м в 1,5 м от угла: дверь и два окна — как у пользователя. */
+function withOpenings() {
+  const m = defaultModel();
+  m.house.width = 9000;
+  m.house.offset = 1500;
+  m.house.openings = [
+    { kind: 'door', x: 3900, w: 900, h: 2100, bottom: 0 },
+    { kind: 'window', x: 1800, w: 1200, h: 1400, bottom: 900 },
+    { kind: 'window', x: 5400, w: 1200, h: 1400, bottom: 900 },
+  ];
+  return m;
+}
+
+test('привязки вдоль стены: углы, края навеса, оси столбов и откосы по порядку', () => {
+  const marks = wallMarks(withOpenings());
+  // по навесу: угол −1500, окно 300…1500, дверь 2400…3300, окно 3900…5100, угол 7500
+  assert.deepEqual(marks.map((mk) => mk.x), [-1500, 0, 300, 1500, 2400, 3000, 3300, 3900, 4500, 5100, 6000, 7500],
+    'точки привязки не те или не по порядку');
+  assert.deepEqual(marks.find((mk) => mk.x === 1500).kinds.sort(), ['jamb', 'post'], 'откос и ось столба в одной точке должны склеиться');
+  assert.deepEqual(marks.find((mk) => mk.x === 0).kinds, ['edge', 'post'], 'край навеса и крайний столб — одна точка');
+  const clipped = wallMarks(withOpenings(), { from: 0, to: 6000 });
+  assert.equal(clipped[0].x, 0, 'на плане цепочка начинается с края навеса');
+  assert.equal(clipped[clipped.length - 1].x, 6000, 'на плане цепочка кончается краем навеса');
+  assert.ok(clipped.every((mk) => mk.x >= 0 && mk.x <= 6000), 'угол дома за краем навеса попал на план');
+});
+
+test('фасад стены: проёмы с размерами, столбы тянутся, шпилька в проёме красная', () => {
+  const res = analyse(withOpenings());
+  const { svg, meta } = drawFacade(res, { type: 'wallPost', index: 2 });
+  assert.match(svg, /дверь 900×2100/, 'дверь не подписана размерами');
+  assert.equal((svg.match(/>окно 1200×1400</g) ?? []).length, 2, 'не оба окна подписаны');
+  assert.equal((svg.match(/data-pick="wallPost"/g) ?? []).length, 5, 'не все столбы у стены можно взять мышью');
+  // привязка по x такая же, как у плана: x = ox + мм·sc
+  assert.ok(Number.isFinite(meta.sc) && Number.isFinite(meta.ox), 'у фасада нет привязки для перетаскивания');
+  // столб 3 (x = 3000) стоит в двери 2400…3300: две нижние шпильки из трёх — в проёме
+  const post3 = svg.split('data-index="2"')[1].split('</g>')[0];
+  assert.equal((post3.match(/fill="var\(--u-bad\)"/g) ?? []).length, 2, 'шпильки в двери не выделены');
+  for (const len of ['1500', '1200', '900', '300']) assert.match(svg, new RegExp(`>${len}</text>`), `в цепочке нет размера ${len}`);
 });

@@ -229,7 +229,7 @@ async function main() {
     // вкладке, детали плана и узлов. Повторяется после каждого сценария —
     // крест, мороз и подбор добавляют карточки и детали, которых раньше не было
     const visitAll = async () => {
-      for (const tab of ['tab-plan', 'tab-section', 'tab-diagrams', 'tab-nodes']) {
+      for (const tab of ['tab-plan', 'tab-wall', 'tab-section', 'tab-diagrams', 'tab-nodes']) {
         await ev(`document.getElementById('${tab}').click()`);
         if (!(await ev("!!document.querySelector('#canvas svg')"))) fail(`${tab}: нет чертежа`);
         const keys = await ev("[...document.querySelectorAll('#summary [data-sel]')].map((c) => c.getAttribute('data-sel'))");
@@ -238,7 +238,7 @@ async function main() {
           if (!(await ev("document.getElementById('inspector').textContent.trim().length > 0"))) fail(`${tab}, ${k}: пустой инспектор`);
         }
       }
-      for (const tab of ['tab-plan', 'tab-nodes']) {
+      for (const tab of ['tab-plan', 'tab-wall', 'tab-nodes']) {
         await ev(`document.getElementById('${tab}').click()`);
         const n = await ev("document.querySelectorAll('#canvas [data-pick]').length");
         for (let i = 0; i < n; i++) {
@@ -373,7 +373,7 @@ async function main() {
     // Вид проверяется там, где он чаще всего разъезжается: на ширине телефона
     // (горизонтальная прокрутка страницы) и в тёмной теме (цвет, вписанный мимо
     // токенов, или нечитаемый текст). Заодно снимаются скриншоты каждой вкладки.
-    const tabs = ['tab-plan', 'tab-section', 'tab-diagrams', 'tab-nodes', 'tab-3d'];
+    const tabs = ['tab-plan', 'tab-wall', 'tab-section', 'tab-diagrams', 'tab-nodes', 'tab-3d'];
     const shoot = async (name) => {
       const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
       await writeFile(join(shots, `${name}.png`), Buffer.from(data, 'base64'));
@@ -650,6 +650,21 @@ async function main() {
       const painted = await ev("document.getElementById('canvas').view3d?.painted() ?? 0");
       if (painted < 0.2) fail(`сцена со стеной дома почти пустая: ${Math.round(painted * 100)} %`);
       await shoot('house-3d');
+      // фасад стены: проёмы с размерами, столб у стены тянется мышью, как на плане
+      await ev("document.getElementById('tab-wall').click()");
+      const facade = await ev("document.querySelector('#canvas svg[aria-label=\"Фасад стены дома\"]')?.textContent ?? ''");
+      if (!/дверь 900×2100/.test(facade)) fail('на фасаде нет двери с размерами');
+      const before = await ev('JSON.parse(localStorage.getItem("canopycraft.model.v2")).wallPosts.xs[1]');
+      const grip = await ev(`(() => { const r = document.querySelector('#canvas [data-pick="wallPost"][data-index="1"] rect').getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: grip.x, y: grip.y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: grip.x + 40, y: grip.y, button: 'left', buttons: 1 });
+      await wait(100);
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: grip.x + 40, y: grip.y, button: 'left', clickCount: 1 });
+      await wait(100);
+      const after = await ev('JSON.parse(localStorage.getItem("canopycraft.model.v2")).wallPosts.xs[1]');
+      if (!(after > before)) fail(`столб у стены на фасаде не сдвинулся: ${before} → ${after}`);
+      await shoot('wall-facade');
       // крестик убирает проёмы, отмена возвращает
       await ev("document.querySelector('[data-op-del=\"1\"]').click()");
       if (await ev("document.querySelectorAll('#c_house_openings .op-row').length") !== 1) fail('крестик не убрал проём');
