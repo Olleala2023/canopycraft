@@ -661,6 +661,34 @@ async function main() {
       await ev("document.getElementById('tab-plan').click()");
     });
 
+    // фундамент столба у стены: блок у ленты по умолчанию — узел-разрез со
+    // столиком, карточка базы; переключение на блок по оси возвращает прежний узел
+    await step('фундамент столба у стены', async () => {
+      await ev('localStorage.clear()');
+      await open('index.html');
+      await appReady();
+      const live = await ev("document.querySelector('[data-live=\"c_wallPosts_footing\"]').textContent");
+      if (!/центр блока в 250 мм от оси столба/.test(live)) fail(`строка под полем: «${live}»`);
+      await ev("document.getElementById('tab-nodes').click()");
+      const nodes = await ev("document.querySelector('#canvas svg').textContent");
+      if (!/столик 310×250/.test(nodes)) fail('на узлах нет плиты-столика у стены');
+      if (!/овал ↕/.test(nodes)) fail('на узле у стены не показаны овальные отверстия шпилек');
+      await ev("document.querySelector('#canvas [data-pick=\"base\"][data-side=\"wall\"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))");
+      const insp = await ev("document.getElementById('inspector').textContent");
+      if (!/Плита-столик/.test(insp) || !/Смятие бетона у края блока/.test(insp)) fail('в карточке базы у стены нет столика и его проверок');
+      await ev("(() => { const el = document.getElementById('c_wallPosts_footing'); el.value = 'axis'; el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+      const axis = await ev("document.querySelector('#canvas svg').textContent");
+      if (/столик/.test(axis)) fail('при блоке по оси на узлах остался столик');
+      await ev("document.getElementById('tab-3d').click()");
+      await wait(400);
+      const painted = await ev("document.getElementById('canvas').view3d?.painted() ?? 0");
+      if (painted < 0.2) fail(`3D с блоком по оси почти пустой: ${Math.round(painted * 100)} %`);
+      await ev("(() => { const el = document.getElementById('c_wallPosts_footing'); el.value = 'beside'; el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+      await wait(300);
+      await shoot('wall-footing-3d');
+      await ev("document.getElementById('tab-plan').click()");
+    });
+
     // модульная версия dev.html — то, чем пользуются при разработке: она
     // грузит модули браузером напрямую, без сборки. Ошибка в модуле проявляется
     // только там, где имя вызывается, — поэтому

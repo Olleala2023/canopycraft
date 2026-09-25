@@ -356,7 +356,7 @@ function renderInspector(res) {
       kv.push(['Горизонт. распор на столб', `${f2(el.Hpost / 1000)} кН`]);
       kv.push(['Шпилек', `${el.bolts.count} × М${res.model.wallPosts.boltDiameter}`]);
       kv.push(['На шпильку: растяжение', `${f2(el.bolts.Nbolt / 1000)} кН`]);
-      kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН`]);
+      kv.push(['На шпильку: срез', `${f2(el.bolts.Vbolt / 1000)} кН${el.bolts.slotted ? ' — только вдоль стены: отверстия овальные, отрыв не берут' : ''}`]);
       kv.push(['По шпилькам снизу вверх', el.bolts.forces.map((f) => f2(f / 1000)).join(' / ') + ' кН']);
     }
   } else if (el.kind === 'tie') {
@@ -427,6 +427,12 @@ function renderInspector(res) {
     kv.push(['Схема столба', el.needsFixity ? 'с защемлением внизу — база держит момент' : 'шарнир внизу, связи вверху']);
     if (el.base.kind === 'embed') {
       if (el.needsFixity) kv.push(['Заделка для защемления', `не менее ${el.needEmbed} мм`]);
+    } else if (el.beside) {
+      kv.push(['Блок', `рядом с фундаментом дома, зазор ${el.gap} мм; центр в ${Math.round(el.offset)} мм от оси столба`]);
+      kv.push(['Плита-столик', `${el.plate.L}×${el.plate.B}×${el.base.t} мм, столб у края${el.forcedPlate ? ' · вместо заделки' : ''}`]);
+      kv.push(['Анкеры', `в ${Math.round(el.plate.uIn)} и ${Math.round(el.plate.uOut)} мм от стены, до грани блока ${Math.round(el.edge)} мм`]);
+      kv.push(['На анкер: растяжение', `${f2(el.Na / 1000)} кН — ${el.NaComp >= el.NaUp ? 'при сжатии, дальний ряд' : 'при отрыве, ближний ряд'}`]);
+      kv.push(['Шпильки в стену', 'на овальных отверстиях: отрыв держит только блок']);
     } else {
       kv.push(['На анкер: растяжение', `${f2(el.Na / 1000)} кН`]);
       kv.push(['Разнос анкеров', `${el.span} мм · вылет плиты ${Math.round(el.c)} мм`]);

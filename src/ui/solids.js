@@ -76,14 +76,23 @@ export function buildSolids(res) {
   res.wallPosts.forEach((p, i) => out.push({ kind: 'wallPost', label: `Столб у стены ${i + 1}`, sel: { type: 'wallPost', index: i }, U: p.U,
     from: [p.x, 0, 0], to: [p.x, 0, lv.wallPostTop], w: p.sec.b, h: p.sec.h, up: [0, 1, 0] }));
 
-  // блоки фундамента под столбами — ниже нуля
+  // блоки фундамента под столбами — ниже нуля. Блок у стены, стоящий рядом с
+  // фундаментом дома, смещён от оси столба наружу (offset из расчёта), и столб
+  // стоит на краю плиты-«столика»
   for (const [side, row, y] of [['outer', res.posts, L], ['wall', res.wallPosts, 0]]) {
     const b = res.bases[side];
     if (!b?.side || !b?.depth) continue;
+    const label = side === 'wall' ? 'Фундамент столба у стены' : 'Фундамент наружного столба';
+    const yBlock = y + (b.beside ? b.offset : 0);
     for (const p of row) {
-      out.push({ kind: 'base', label: side === 'wall' ? 'Фундамент столба у стены' : 'Фундамент наружного столба',
-        sel: { type: 'base', side }, U: b.U,
-        from: [p.x, y, -b.depth], to: [p.x, y, 0], w: b.side, h: b.side, up: [0, 1, 0] });
+      out.push({ kind: 'base', label, sel: { type: 'base', side }, U: b.U,
+        from: [p.x, yBlock, -b.depth], to: [p.x, yBlock, 0], w: b.side, h: b.side, up: [0, 1, 0] });
+      if (b.base.kind !== 'plate') continue;
+      // плита: у стены — столик от грани стены наружу, у наружных — по центру столба
+      const pl = b.beside ? b.plate : { L: b.base.plate, B: b.base.plate };
+      const yPlate = b.beside ? y - p.sec.h / 2 + pl.L / 2 : y;
+      out.push({ kind: 'basePlate', label: `Плита базы ${pl.L}×${pl.B}`, sel: { type: 'base', side }, U: b.U,
+        from: [p.x, yPlate, 0], to: [p.x, yPlate, b.base.t], w: pl.B, h: pl.L, up: [0, 1, 0] });
     }
   }
 

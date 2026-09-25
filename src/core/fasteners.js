@@ -288,6 +288,28 @@ export const ANCHOR_EDGE = 40;
 /** Плотность железобетона, кг/м³ — для массы фундамента против отрыва. */
 export const CONCRETE_DENSITY = 2400;
 
+/**
+ * Блок столба у стены ставится рядом с фундаментом дома, но не вплотную: между
+ * ними прокладка 20–30 мм (пенополистирол, рубероид в несколько слоёв), чтобы
+ * блок и лента двигались при пучении независимо. Берётся 30 мм — чем шире
+ * зазор, тем дальше край блока от оси столба, в запас.
+ */
+export const WALL_GAP = 30;
+
+/**
+ * Плита-«столик» столба у стены: столб стоит у её края вплотную к стене, анкеры —
+ * за столбом, дальше от стены. Первый ряд анкеров — в ANCHOR_EDGE от грани
+ * столба, чтобы встали гайка и шайба; второй — через разнос, как у обычной
+ * плиты этого типа. Ширина вдоль стены — как у обычной плиты.
+ * @returns {{ L:number, B:number, uPost:number, uIn:number, uOut:number }} мм от грани стены
+ */
+export function sidePlate(base, postH) {
+  const span = anchorSpan(base);
+  const uIn = postH + ANCHOR_EDGE;
+  const uOut = uIn + span;
+  return { L: uOut + ANCHOR_EDGE, B: base.plate, uPost: postH / 2, uIn, uOut };
+}
+
 /** Разнос анкеров по осям, мм. */
 export const anchorSpan = (base) => Math.max(40, base.plate - 2 * ANCHOR_EDGE);
 
