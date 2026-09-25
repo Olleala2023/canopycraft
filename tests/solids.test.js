@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, levels } from '../src/core/model.js';
 import { analyse } from '../src/core/analysis.js';
-import { buildSolids } from '../src/ui/solids.js';
+import { buildSolids, selectionBox, SELECT_PAD, toScene } from '../src/ui/solids.js';
 
 /**
  * 3D-вид строится из тех же чисел, что и расчёт. Детали должны стыковаться
@@ -82,4 +82,29 @@ test('3D: у каждой детали, кроме кровли, есть что
     assert.ok(e.sel?.type, `${e.label}: клик ничего не выберет`);
     assert.ok(Number.isFinite(e.U), `${e.label}: нет U — нечем красить`);
   }
+});
+
+test('3D: рамка выбранной детали отступает на одно и то же расстояние, какой бы длинной деталь ни была', () => {
+  const solids = buildSolids(analyse(defaultModel()));
+  for (const kind of ['batten', 'rafter', 'post', 'purlin']) {
+    const e = solids.find((x) => x.kind === kind);
+    const len = Math.hypot(...e.to.map((v, i) => v - e.from[i]));
+    const box = selectionBox(e);
+    // раньше рамка была деталью × 1,04: у рейки 6 м — по 120 мм за торцами
+    close(box.len - len, 2 * SELECT_PAD, `${e.label}: рамка длиннее детали не на 2 × ${SELECT_PAD} мм`);
+    close(box.w - e.w, 2 * SELECT_PAD, `${e.label}: рамка шире детали не на 2 × ${SELECT_PAD} мм`);
+    close(box.h - e.h, 2 * SELECT_PAD, `${e.label}: рамка выше детали не на 2 × ${SELECT_PAD} мм`);
+  }
+});
+
+test('3D не зеркальный: у зрителя во дворе, лицом к дому, x растёт вправо — как на плане', () => {
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const sub = (a, b) => a.map((v, i) => v - b[i]);
+  // из двора (y = 5000 по расчёту) к стене (y = 0) — куда смотрит зритель, в сцене
+  const forward = sub(toScene([0, 0, 0]), toScene([0, 5000, 0]));
+  const up = toScene([0, 0, 1]);
+  const sign = (v) => v.map((c) => Math.sign(c) + 0); // + 0: −0 и 0 для deepEqual разные
+  const right = sign(cross(forward, up));
+  // сцена three.js — правая тройка: «вправо» зрителя = взгляд × вверх
+  assert.deepEqual(right, sign(toScene([1, 0, 0])), 'x = 0 оказался справа — 3D зеркален плану и фасаду');
 });

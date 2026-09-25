@@ -5,4 +5,4 @@
  * Совпадение с package.json и верхней записью CHANGELOG.md проверяет
  * tests/version.test.js. Когда поднимать — см. «Версия» в CLAUDE.md.
  */
-export const VERSION = '0.10.0';
+export const VERSION = '0.10.1';

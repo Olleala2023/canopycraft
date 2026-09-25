@@ -19,7 +19,7 @@ import {
   LineSegments, LineBasicMaterial, Color, Group, PlaneGeometry,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildSolids, buildContext } from './solids.js';
+import { buildSolids, buildContext, selectionBox, toScene } from './solids.js';
 
 const MM = 1 / 1000; // сцена в метрах: камере удобнее
 
@@ -29,14 +29,14 @@ function token(name) {
 }
 const uToken = (U) => (!Number.isFinite(U) || U > 1 ? '--u-bad' : U > 0.85 ? '--u-warn' : U > 0.5 ? '--u-ok' : '--u-low');
 
-/** Брусок между двумя точками: ось from→to, сечение w × h, h вдоль up. */
+/** Брусок между двумя точками: ось from→to, сечение w × h, h вдоль up. Координаты — расчёта. */
 function bar(e, material) {
-  const from = new Vector3(...e.from).multiplyScalar(MM);
-  const to = new Vector3(...e.to).multiplyScalar(MM);
+  const from = new Vector3(...toScene(e.from)).multiplyScalar(MM);
+  const to = new Vector3(...toScene(e.to)).multiplyScalar(MM);
   const axis = to.clone().sub(from);
   const len = axis.length();
   axis.normalize();
-  const up = new Vector3(...e.up);
+  const up = new Vector3(...toScene(e.up));
   up.sub(axis.clone().multiplyScalar(up.dot(axis))).normalize(); // up перпендикулярно оси
   // правая тройка (side, axis, up): side × axis = up, иначе поворот зеркальный
   const side = new Vector3().crossVectors(axis, up).normalize();
@@ -71,7 +71,7 @@ export function create3D(host, { onPick }) {
 
   scene.add(new AmbientLight(0xffffff, 1.6));
   const sun = new DirectionalLight(0xffffff, 1.8);
-  sun.position.set(-6, 9, 12);
+  sun.position.set(-6, -9, 12); // со стороны двора (y сцены — к дому)
   scene.add(sun);
 
   const parts = new Group();
@@ -100,10 +100,12 @@ export function create3D(host, { onPick }) {
   /** Камера на навес целиком: сбоку-спереди и сверху, как смотрят с участка. */
   function frame(res) {
     const { B, L, a } = res.model.geom;
-    const cx = (B / 2) * MM, cy = ((L + a) / 2) * MM, cz = 1.4;
+    const [cx, cy] = toScene([(B / 2) * MM, ((L + a) / 2) * MM, 0]);
+    const cz = 1.4;
     const r = Math.max(B, L + a) * MM;
     controls.target.set(cx, cy, cz);
-    camera.position.set(cx - r * 0.55, cy + r * 1.35, cz + r * 0.8);
+    // во дворе — дальше от стены, то есть по −y сцены; чуть левее середины
+    camera.position.set(cx - r * 0.55, cy - r * 1.35, cz + r * 0.8);
     camera.lookAt(controls.target);
     controls.update();
   }
@@ -142,7 +144,8 @@ export function create3D(host, { onPick }) {
     const ground = new Mesh(new PlaneGeometry(ctx.ground.size * MM, ctx.ground.size * MM),
       new MeshBasicMaterial({ color: token('--sunk'), transparent: true, opacity: 0.82, depthWrite: false }));
     ground.renderOrder = 1; // поверх фундаментов: они под землёй и видны сквозь неё приглушённо
-    ground.position.set(ctx.ground.center[0] * MM, ctx.ground.center[1] * MM, -0.001);
+    const [gx, gy] = toScene([ctx.ground.center[0], ctx.ground.center[1], 0]);
+  ground.position.set(gx * MM, gy * MM, -0.001);
     parts.add(ground);
 
     const materials = new Map();
@@ -161,11 +164,14 @@ export function create3D(host, { onPick }) {
         const chosen = e.sel && sel && e.sel.type === sel.type
           && (e.sel.index === undefined || e.sel.index === sel.index)
           && (e.sel.side === undefined || e.sel.side === (sel.side ?? 'outer'));
-        const edges = new LineSegments(new EdgesGeometry(mesh.geometry),
+        // у выбранной — рамка с постоянным отступом (selectionBox), а не растянутая копия
+        const box = chosen ? selectionBox(e) : null;
+        const shape = box ? new BoxGeometry(box.w * MM, box.len * MM, box.h * MM) : mesh.geometry;
+        const edges = new LineSegments(new EdgesGeometry(shape),
           new LineBasicMaterial({ color: chosen ? ink : rule, transparent: !chosen, opacity: chosen ? 1 : 0.35 }));
+        if (box) shape.dispose(); // рёбра уже построены, сам брусок рамки не нужен
         edges.quaternion.copy(mesh.quaternion);
         edges.position.copy(mesh.position);
-        if (chosen) edges.scale.setScalar(1.04);
         parts.add(edges);
         pickable.push(mesh);
       }

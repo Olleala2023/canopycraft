@@ -594,6 +594,10 @@ async function main() {
       if (!(await ev("!!document.querySelector('#canvas canvas')"))) fail(`нет сцены: ${await ev("document.getElementById('canvas').textContent.slice(0, 80)")}`);
       const painted = await ev("document.getElementById('canvas').view3d?.painted() ?? 0");
       if (painted < 0.2) fail(`сцена почти пустая: закрашено ${Math.round(painted * 100)} % кадра`);
+      // не зеркально: со двора первый столб (x = 0) левее последнего, как на плане
+      const ends = await ev(`(() => { const v = document.getElementById('canvas').view3d;
+        return [v.screenOf({ type: 'post', index: 0 }), v.screenOf({ type: 'post', index: 3 })]; })()`);
+      if (!(ends[0] && ends[1] && ends[0].x < ends[1].x)) fail(`3D зеркален плану: столб 1 на x=${Math.round(ends[0]?.x)}, столб 4 на x=${Math.round(ends[1]?.x)}`);
       // клик по второму наружному столбу — инспектор показывает его
       const at = await ev("document.getElementById('canvas').view3d.screenOf({ type: 'post', index: 1 })");
       if (!at) fail('столба нет в сцене');
