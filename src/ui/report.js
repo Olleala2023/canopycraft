@@ -102,6 +102,13 @@ export function reportHtml(res, url) {
     <table>
       <tr><td>Горизонтальный распор на стеновой ряд</td><td>${kN(res.bracing.toWall)} кН: скат ${f2(res.thrust.roof / 1000)} + наружная кромка ${f2(res.thrust.fascia / 1000)} + верх наружного ряда ${kN(res.bracing.holdX)}. Сила тяжести распора не даёт — все опоры вертикальные.</td></tr>
       <tr><td>Одна шпилька</td><td>растяжение ${f2(worstWallPost.bolts.Nbolt / 1000)} кН, срез ${f2(worstWallPost.bolts.Vbolt / 1000)} кН</td></tr>
+      <tr><td>Фундамент столба у стены</td><td>${(() => {
+        const b = res.bases.wall;
+        if (!b.beside) return `блок ${b.side}×${b.side}×${b.depth} мм по оси столба, как у наружных`;
+        return `отдельный блок ${b.side}×${b.side}×${b.depth} мм рядом с фундаментом дома, за прокладкой ${b.gap} мм; центр блока в ${Math.round(b.offset)} мм от оси столба. `
+          + `Столб на плите-столике ${b.plate.L}×${b.plate.B}×${b.base.t} мм у её края, ${b.base.n} × М${b.base.d} за столбом, на анкер ${f2(b.Na / 1000)} кН. `
+          + 'Шпильки в стену — на овальных отверстиях по вертикали: отрыв держит только вес блока.';
+      })()}</td></tr>
       <tr><td>Нагрузка на наружный столб</td><td>вниз ${f2(res.foundation.maxDown / 1000)} кН, отрыв ${f2(res.foundation.uplift / 1000)} кН</td></tr>
       <tr><td>Фундамент против отрыва</td><td>удержать ${f2(res.foundation.requiredHold)} кН — это ${Math.round(res.foundation.requiredMassKg)} кг бетона на столб, куб со стороной ≈ ${Math.round(res.foundation.cubeSide)} мм</td></tr>
       <tr><td>Касательные силы пучения</td><td>${(() => {

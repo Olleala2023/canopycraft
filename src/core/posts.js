@@ -7,7 +7,7 @@ import { section } from './sections.js';
 import { propsFor } from './materials.js';
 import { GAMMA_F } from './loads.js';
 import { solveBeam } from './beam.js';
-import { levels, boltHeights } from './model.js';
+import { levels, boltHeights, wallBeside } from './model.js';
 import {
   timberCombined, steelStability, steelBeamColumn, steelSlenderness, steelLocalBuckling, worstOf,
   phiBuckling, steelBeamColumn2, qFic, braceTension, braceSlenderness, boltPlateBearing,
@@ -140,8 +140,12 @@ export function analysePostRow(model, cfg, purlin, ctx, extra) {
       });
       const forces = diagram.reactions.slice(1).map((x) => Math.abs(x.R));
       const Nbolt = Math.max(0, ...forces);
-      const Vbolt = Math.max(Math.max(0, Nup), (extra.alongWall ?? 0) / n) / Math.max(1, cfg.boltCount);
-      bolts = { Nbolt, Vbolt, count: cfg.boltCount, heights: zs, forces };
+      // у блока рядом с лентой дома шпильки стоят в овальных отверстиях: столб
+      // ходит по вертикали вместе со своим блоком и отрыв в шпильки не отдаёт —
+      // им остаётся только сила вдоль стены
+      const slotted = wallBeside(model);
+      const Vbolt = Math.max(slotted ? 0 : Math.max(0, Nup), (extra.alongWall ?? 0) / n) / Math.max(1, cfg.boltCount);
+      bolts = { Nbolt, Vbolt, count: cfg.boltCount, heights: zs, forces, slotted };
       Htie = Hpost;
       Hbase = Hpost;
       Mbase = Math.abs(diagram.M[0]);

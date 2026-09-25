@@ -170,22 +170,30 @@ export function billOfMaterials(result) {
     }
   }
 
-  const nAllPosts = m.posts.xs.length + m.wallPosts.xs.length;
-  const pb = result.bases.outer.base;
-  if (pb.kind === 'plate') {
-    const plateMassOne = pb.plate * pb.plate * pb.t * 7.85e-6;
-    const anchors = pb.n * nAllPosts;
+  // плиты и анкеры баз — по рядам: у стены при блоке рядом с лентой своя плита-«столик»
+  const plateRows = [[result.bases.outer, m.posts.xs.length], [result.bases.wall, m.wallPosts.xs.length]];
+  const baseItems = new Map();
+  const addBase = (name, count, note, massOne) => {
+    const it = baseItems.get(name) ?? { name, count: 0, notes: [], mass: 0, cost: 0 };
+    it.count += count;
+    if (!it.notes.includes(note)) it.notes.push(note);
+    it.mass += count * massOne;
+    it.cost += count * massOne * pr.steelKg;
+    baseItems.set(name, it);
+  };
+  for (const [b, count] of plateRows) {
+    const pb = b.base;
+    if (pb.kind !== 'plate' || !count) continue;
+    const L = b.beside ? b.plate.L : pb.plate, W = b.beside ? b.plate.B : pb.plate;
+    addBase(`Плита базы ${L}×${W}×${pb.t} мм`, count,
+      b.beside ? 'столик у стены: столб у края, анкеры за ним' : 'приваривается на нижний торец столба',
+      L * W * pb.t * 7.85e-6);
     const anchorMassOne = (Math.PI / 4) * pb.d ** 2 * (pb.hef + 120) * 7.85e-6 * 1.5;
-    fasteners.push({
-      name: `Плита базы ${pb.plate}×${pb.plate}×${pb.t} мм`, count: nAllPosts,
-      note: 'приваривается на нижний торец столба', mass: nAllPosts * plateMassOne,
-      cost: nAllPosts * plateMassOne * pr.steelKg,
-    });
-    fasteners.push({
-      name: `Анкер М${pb.d}, заделка ${pb.hef} мм`, count: anchors,
-      note: `${pb.n} шт на столб, разнос ${result.bases.outer.span} мм`,
-      mass: anchors * anchorMassOne, cost: anchors * anchorMassOne * pr.steelKg,
-    });
+    addBase(`Анкер М${pb.d}, заделка ${pb.hef} мм`, pb.n * count,
+      `${pb.n} шт на столб, разнос ${b.span} мм`, anchorMassOne);
+  }
+  for (const it of baseItems.values()) {
+    fasteners.push({ name: it.name, count: it.count, note: it.notes.join('; '), mass: it.mass, cost: it.cost });
   }
 
   const sum = (f) => items.filter(f).reduce((a, i) => a + (i.mass ?? 0), 0);

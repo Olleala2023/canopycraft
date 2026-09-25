@@ -552,6 +552,7 @@ function nodeBeamTie(t, box, clip) {
 
 /** База столба: плита с анкерами либо заделка в бетон. */
 function nodeBase(b, box, clip) {
+  if (b.beside) return nodeBaseBeside(b, box, clip);
   const p = inner(box);
   const isPlate = b.base.kind === 'plate';
   const deep = isPlate ? b.base.hef + 80 : b.base.embed;
@@ -588,6 +589,62 @@ function nodeBase(b, box, clip) {
     s.push(`<text x="${p.x}" y="${p.y + p.h}" font-size="9" font-family="${mono}" fill="var(--u-bad)">блок ${Math.round(b.mass)} кг · нужно ${Math.round(b.uplift / 0.9 / 9.80665)} кг</text>`);
   }
   s.push(`<text x="${cx + mm(b.post.b / 2) + 6}" y="${postTop + 12}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${esc(b.post.label)}</text>`);
+  s.push('</g>');
+  return s.join('');
+}
+
+/**
+ * База столба у стены с блоком рядом с фундаментом дома — разрез поперёк
+ * стены. Слева дом: стена и лента под ней; дальше прокладка, блок, на нём
+ * плита-«столик» со столбом у края и анкерами за столбом. Все размеры —
+ * из расчёта: зазор, сторона и глубина блока, длина плиты, ряды анкеров.
+ */
+function nodeBaseBeside(b, box, clip) {
+  const p = inner(box);
+  const pl = b.plate;
+  const house = 140; // мм стены и ленты слева — только чтобы было видно, к чему примыкает блок
+  const postShow = 200;
+  const wide = house + b.gap + b.side + 60;
+  // блок глубже, чем помещается в рамку, — показан с обрывом, глубина подписана
+  const deep = Math.min(b.depth, Math.max(b.base.hef + 120, 380));
+  const sc = Math.min(p.w / (wide + 40), p.h / (deep + postShow + 40));
+  const mm = (v) => v * sc;
+  const face = p.x + mm(house) + 14; // грань стены
+  const U = (u) => face + mm(u);
+  const ground = p.y + mm(postShow) + 14;
+  const s = [`<g clip-path="url(#${clip})">`];
+
+  // дом: стена над землёй и лента под ней — до низа рамки
+  s.push(`<rect x="${U(-house)}" y="${p.y}" width="${mm(house)}" height="${p.h}" fill="var(--sunk)" stroke="var(--ink-2)"/>`);
+  s.push(`<text x="${U(-house) + 3}" y="${p.y + 11}" font-size="8.5" font-family="${mono}" fill="var(--ink-3)">стена</text>`);
+  s.push(`<text x="${U(-house) + 3}" y="${ground + 14}" font-size="8.5" font-family="${mono}" fill="var(--ink-3)">лента</text>`);
+  // прокладка и блок
+  s.push(`<rect x="${U(0)}" y="${ground}" width="${Math.max(2, mm(b.gap))}" height="${mm(deep)}" fill="var(--accent-soft)" stroke="var(--accent-2)" stroke-width=".8"/>`);
+  s.push(`<rect x="${U(b.gap)}" y="${ground}" width="${mm(b.side)}" height="${mm(deep)}" fill="url(#nodeHatch)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  s.push(`<line x1="${U(-house)}" y1="${ground}" x2="${U(b.gap + b.side) + 20}" y2="${ground}" stroke="var(--ink)" stroke-width="1.6"/>`);
+  // плита, столб у её края, анкеры за столбом
+  s.push(`<rect x="${U(0)}" y="${ground - Math.max(3, mm(b.base.t))}" width="${mm(pl.L)}" height="${Math.max(3, mm(b.base.t))}" fill="var(--accent-soft)" stroke="var(--accent-2)" stroke-width="1.2"/>`);
+  s.push(`<rect x="${U(0)}" y="${p.y}" width="${mm(b.post.h)}" height="${ground - Math.max(3, mm(b.base.t)) - p.y}" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>`);
+  for (const u of [pl.uIn, pl.uOut]) {
+    s.push(`<line x1="${U(u)}" y1="${ground - mm(b.base.t) - 6}" x2="${U(u)}" y2="${ground + mm(b.base.hef)}" stroke="var(--u-bad)" stroke-width="2.2"/>`);
+  }
+  // шпилька в стену на овальном отверстии — столб ходит вверх-вниз вместе с блоком
+  const yBolt = p.y + mm(postShow) * 0.3;
+  s.push(`<line x1="${U(-house)}" y1="${yBolt}" x2="${U(b.post.h) + 8}" y2="${yBolt}" stroke="var(--ink)" stroke-width="1.6"/>`);
+  s.push(`<rect x="${U(b.post.h) - 1}" y="${yBolt - 9}" width="5" height="18" rx="2.5" fill="none" stroke="var(--ink)" stroke-width="1.2"/>`);
+  s.push(`<text x="${U(b.post.h) + 10}" y="${yBolt + 3}" font-size="8.5" font-family="${mono}" fill="var(--ink-2)">овал ↕</text>`);
+  // размеры: зазор, сторона блока, смещение центра, глубина
+  s.push(dimH(U(0), U(b.gap + b.side), ground + mm(deep) + 18, `зазор ${b.gap} + блок ${b.side}`));
+  s.push(dimH(U(b.post.h / 2), U(b.gap + b.side / 2), ground - 26, `e = ${Math.round(b.offset)}`));
+  if (deep < b.depth) {
+    const yb = ground + mm(deep);
+    const x0 = U(b.gap) - 4, x1 = U(b.gap + b.side) + 4, n = 6, stepX = (x1 - x0) / n;
+    const zig = Array.from({ length: n + 1 }, (_, i) => `${x0 + i * stepX},${yb + (i % 2 ? -4 : 4)}`).join(' ');
+    s.push(`<polyline points="${zig}" fill="none" stroke="var(--ink)" stroke-width="1.2"/>`);
+  }
+  s.push(`<text x="${U(b.gap + b.side) + 8}" y="${ground + mm(deep) - 4}" font-size="9" font-family="${mono}" fill="var(--ink-2)">глубина ${b.depth}</text>`);
+  s.push(`<text x="${U(pl.L) + 6}" y="${ground - 6}" font-size="8.5" font-family="${mono}" fill="var(--ink-3)">плита ${pl.L}×${pl.B}×${b.base.t}</text>`);
+  s.push(`<text x="${U(b.post.h) + 6}" y="${p.y + 11}" font-size="9" font-family="${mono}" fill="var(--ink-3)">${esc(b.post.label)}</text>`);
   s.push('</g>');
   return s.join('');
 }
@@ -829,7 +886,9 @@ export function drawNodes(res, sel) {
       row.beam.U, (c) => nodeBeamTie(row.beam, boxes[1], c)));
 
     s.push(detail(boxes[2], 'base', `3.${r + 1} БАЗА · ${row.label.toUpperCase()}`,
-      row.base.base.kind === 'plate'
+      row.base.beside
+        ? `столик ${row.base.plate.L}×${row.base.plate.B}, ${row.base.base.n} × М${row.base.base.d}, блок у ленты`
+        : row.base.base.kind === 'plate'
         ? `плита ${row.base.base.plate}×${row.base.base.plate}, ${row.base.base.n} × М${row.base.base.d}`
         : `заделка ${row.base.base.embed} мм, подошва ${row.base.side} мм`,
       row.base.U, (c) => nodeBase(row.base, boxes[2], c)));

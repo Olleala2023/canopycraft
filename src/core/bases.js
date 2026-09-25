@@ -4,15 +4,17 @@
 
 import { GAMMA_F } from './loads.js';
 import {
-  worstOf, boltShear, boltTension, concreteBearing, plateBending, anchorCone,
-  embedDepth, anchorMass, foundationFrost, frostHeave,
+  worstOf, boltShear, boltTension, concreteBearing, plateBending, anchorCone, anchorConeEdge,
+  edgeBearing, sidePlateBending, embedDepth, anchorMass, foundationFrost, frostHeave,
 } from './checks.js';
 import {
   BOLT_RT, BOLT_AN, postBase, anchorSpan, minEmbed, CONCRETE,
   CONCRETE_DENSITY, frostDepth, heaveTau, HEAVE_STATES, HEAVE_SURFACES, HEAVE_GAMMA_C,
   HEAVE_GAMMA_N, skinFriction, FRICTION_LAYER, FRICTION_GAMMA_RF, upliftGammaC,
+  WALL_GAP, sidePlate,
 } from './fasteners.js';
 import { G0 } from './common.js';
+import { wallBeside } from './model.js';
 
 /* ─────────────────────── БАЗА СТОЛБА ─────────────────────── */
 
@@ -28,8 +30,12 @@ import { G0 } from './common.js';
  * Строго говоря, это разные сочетания, но вместе они дают верхнюю оценку
  * растяжения в анкере — в запас.
  */
-function analysePostBase(model, cfg, posts, ctx) {
-  const base = postBase(model.postBase.id);
+function analysePostBase(model, cfg, posts, ctx, { beside = false } = {}) {
+  const chosen = postBase(model.postBase.id);
+  // блок у ленты дома: столб стоит у края блока, забетонировать его туда нельзя —
+  // у стены тогда плита на анкерах того типа, что по умолчанию
+  const forcedPlate = beside && chosen.kind === 'embed';
+  const base = forcedPlate ? postBase(DEFAULT_WALL_PLATE) : chosen;
   const post = posts.reduce((a, p) => (p.Nup > a.Nup || (p.Nup === a.Nup && p.Mbase > a.Mbase) ? p : a));
   const sec = post.sec;
   const mat = post.mat;
@@ -73,7 +79,10 @@ function analysePostBase(model, cfg, posts, ctx) {
   // ниже промерзания. Замена грунта в пазухах на непучинистый (п. 6.8.12)
   // снимает саму причину — тогда проверка не применяется
   const measure = model.postBase.antiHeave ?? 'none';
-  const heave = heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure });
+  // у блока рядом с лентой одна грань — на прокладке, грунта там нет:
+  // ни пучения, ни трения по ней
+  const faces = beside ? 3 : 4;
+  const heave = heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure, faces });
   block.heave = heave;
   const frostCheck = () => [
     ...(frostApplies
@@ -83,7 +92,15 @@ function analysePostBase(model, cfg, posts, ctx) {
     ...(heave.applies ? [heave.check] : []),
   ];
 
-  if (base.kind === 'embed') {
+  if (beside) {
+    detail = { ...block, ...sidePlateChecks(model, base, sec, mat, conc, { N, uplift, H }, checks) };
+    checks.push(anchorMass(uplift, mass, `блок ${side}×${side}×${depth} мм ≈ ${mass.toFixed(0)} кг — шпильки на овальных отверстиях отрыв не держат`));
+    checks.push(...frostCheck());
+    // центр блока смещён от оси столба наружу: блок стоит за прокладкой
+    detail.gap = WALL_GAP;
+    detail.offset = WALL_GAP + side / 2 - sec.h / 2;
+    detail.forcedPlate = forcedPlate;
+  } else if (base.kind === 'embed') {
     if (needsFixity) {
       checks.push(embedDepth(base.embed, minEmbed(sec.h),
         `сечение ${sec.label}, схема с защемлением внизу`));
@@ -120,8 +137,67 @@ function analysePostBase(model, cfg, posts, ctx) {
   const sized = worstOf(checks.filter((c) => c !== heave.check));
   return {
     base, post: sec, N, uplift, H, M, needsFixity, concrete: model.opts.concreteClass ?? 'B20',
-    x: post.x, ...detail, ...worstOf(checks), Usized: sized.U,
+    beside, x: post.x, ...detail, ...worstOf(checks), Usized: sized.U,
   };
+}
+
+/** Плита у стены, если выбран забетонированный столб, — её забетонировать нельзя. */
+const DEFAULT_WALL_PLATE = 'plate4m12';
+
+/**
+ * Плита-«столик» под столбом у стены (см. sidePlate): столб у края плиты, край
+ * блока — за зазором WALL_GAP, анкеры двумя рядами за столбом.
+ *
+ * Координата u — от грани стены наружу. Сжатие N приходит в u_ст = h/2, а бетон
+ * начинается только с u = зазор, поэтому плита — рычаг: у края блока бетон
+ * мнётся (прямоугольная эпюра R_b шириной Y), дальний ряд анкеров растянут.
+ * Равновесие моментов относительно дальнего ряда:
+ *   R_b·B·Y·(d − Y/2) = N·(u_о − u_ст), d = u_о − зазор,
+ *   T = R_b·B·Y − N.
+ * Отрыв: столб тянет плиту вверх у края, ближний ряд держит, дальний край
+ * упирается в бетон — по правилу рычага T_б = N_отр·(u_о − u_ст)/(u_о − u_б).
+ * Изгиб плиты — в сечении по грани столба от сил справа от неё.
+ */
+function sidePlateChecks(model, base, sec, mat, conc, { N, uplift, H }, checks) {
+  const g = WALL_GAP;
+  const pl = sidePlate(base, sec.h);
+  const { B, uPost, uIn, uOut } = pl;
+  const perRow = base.n / 2;
+  const d = uOut - g;
+  const arm = uOut - uPost;
+  const sigmaNeed = (2 * N * arm) / (B * d * d);
+  const disc = d * d - (2 * N * arm) / (conc.Rb * B);
+  const Y = disc >= 0 ? d - Math.sqrt(disc) : d;
+  const C = conc.Rb * B * Y;
+  const T = Math.max(0, C - N);
+  // отрыв: ближний ряд держит, дальний край — точка опоры
+  const Tin = (uplift * (uOut - uPost)) / (uOut - uIn);
+  const Fout = Tin - uplift;
+  const NaComp = T / perRow;
+  const NaUp = Tin / perRow;
+  const Na = Math.max(NaComp, NaUp);
+  // изгиб плиты по грани столба: сжатие — анкер снаружи вниз, отпор бетона за гранью вверх
+  const x0 = Math.max(g, sec.h);
+  const bearOut = Math.max(0, g + Y - x0);
+  const Mcomp = Math.abs(T * (uOut - sec.h) - conc.Rb * B * bearOut * (x0 - sec.h + bearOut / 2));
+  const Mup = Math.abs(Fout * (uOut - sec.h) - Tin * (uIn - sec.h));
+  const Mplate = Math.max(Mcomp, Mup);
+  const sigmaPlate = (6 * Mplate) / (B * base.t * base.t);
+  const edge = uIn - g; // от ближнего ряда анкеров до грани блока
+  const kN = (v) => (v / 1000).toFixed(2).replace('.', ',');
+  const concName = model.opts.concreteClass ?? 'B20';
+
+  checks.push(edgeBearing(sigmaNeed, conc.Rb,
+    `столб в ${Math.round(uPost)} мм от стены, край блока в ${g} мм, дальний ряд анкеров в ${Math.round(uOut)} мм; бетон ${concName}`));
+  checks.push(sidePlateBending(sigmaPlate, mat.Ry,
+    `плита ${pl.L}×${B}×${base.t} мм, M = ${(Mplate / 1e6).toFixed(2).replace('.', ',')} кН·м у грани столба`));
+  checks.push(boltTension(Na, BOLT_RT[base.grade], BOLT_AN[base.d],
+    `${base.n} × М${base.d}, по ${perRow} в ряду: ${NaComp >= NaUp ? `дальний ряд при сжатии ${kN(T)} кН` : `ближний ряд при отрыве ${kN(Tin)} кН`}`));
+  checks.push(anchorConeEdge(Na, base.hef, edge, conc.Rbt,
+    `заделка ${base.hef} мм, до грани блока ${Math.round(edge)} мм, бетон ${concName}`));
+  checks.push(boltShear(H / base.n, base.d, base.grade));
+
+  return { plate: pl, span: uOut - uIn, Na, NaComp, NaUp, T, Tin, Y, sigmaNeed, sigmaPlate, Mplate, edge, c: uOut - sec.h };
 }
 
 /**
@@ -141,7 +217,7 @@ function analysePostBase(model, cfg, posts, ctx) {
  * γc,g из п. 7.1.11 — коэффициент надёжности свайного фундамента — не
  * применяется: в (6.35) уже есть свой γ_n.
  */
-function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure }) {
+function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, measure, faces = 4 }) {
   if (!frostApplies) return { applies: false, reason: frost.set ? 'nonHeaving' : 'noFrost' };
   if (measure === 'replace') return { applies: false, reason: 'replaced', measure };
   const post = posts.reduce((a, p) => (p.Nperm < a.Nperm ? p : a));
@@ -150,7 +226,7 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
   const cat1 = !!model.site.geoCat1;
   const tauTable = heaveTau(stateId, frost.dfn);
   const tau = tauTable * surface.k * (cat1 ? 0.9 : 1);           // кПа
-  const perimeter = 4 * side;                                     // мм
+  const perimeter = faces * side;                                 // мм, грани в грунте
   const hFrozen = Math.min(frost.df, depth);
   const hThawed = Math.max(0, depth - frost.df);
   const A = (perimeter * hFrozen) / 1e6;                          // м²
@@ -188,6 +264,6 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
 export function analysePostBases(model, posts, wallPosts, ctx) {
   return {
     outer: analysePostBase(model, model.posts, posts, ctx),
-    wall: analysePostBase(model, model.wallPosts, wallPosts, ctx),
+    wall: analysePostBase(model, model.wallPosts, wallPosts, ctx, { beside: wallBeside(model) }),
   };
 }

@@ -162,6 +162,17 @@ export const CONTROLS = [
       { id: 'B3.5', label: 'B3,5 (D600) — R 1,3 МПа' },
       { id: 'B5.0', label: 'B5,0 (D700) — R 1,7 МПа' }] },
   { k: 'wallPosts.wallThickness', label: 'Толщина стены', help: 'wall.html#count', helpTitle: 'толщина стены', type: 'range', min: 200, max: 500, step: 25, unit: 'мм' },
+  { k: 'wallPosts.footing', label: 'Фундамент столба у стены', help: 'wall.html#footing', helpTitle: 'фундамент столба у стены', type: 'select',
+    options: () => [
+      { id: 'beside', label: 'блок рядом с фундаментом дома, за прокладкой' },
+      { id: 'axis', label: 'блок по оси столба, как у наружных' }],
+    live: (r) => {
+      const b = r?.bases?.wall;
+      if (!b) return '';
+      if (!b.beside) return 'блок наполовину уходит под стену — годится, только если фундамента дома там нет';
+      return `центр блока в ${Math.round(b.offset)} мм от оси столба, зазор ${b.gap} мм · плита ${b.plate.L}×${b.plate.B} мм`
+        + (b.forcedPlate ? ' — вплотную к стене столб не забетонировать, у стены плита на анкерах' : '');
+    } },
   { k: 'opts.postEccentricity', label: 'Эксцентриситет опирания на столб', help: 'wall.html#ecc', helpTitle: 'эксцентриситет опирания', type: 'range', min: 0, max: 120, step: 5, unit: 'мм' },
 
   { group: 'Площадка', side: 'right' },
