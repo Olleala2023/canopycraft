@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultModel, levels } from '../src/core/model.js';
 import { analyse } from '../src/core/analysis.js';
-import { buildSolids } from '../src/ui/solids.js';
+import { buildSolids, selectionBox, SELECT_PAD } from '../src/ui/solids.js';
 
 /**
  * 3D-вид строится из тех же чисел, что и расчёт. Детали должны стыковаться
@@ -81,5 +81,18 @@ test('3D: у каждой детали, кроме кровли, есть что
     if (e.ghost) continue;
     assert.ok(e.sel?.type, `${e.label}: клик ничего не выберет`);
     assert.ok(Number.isFinite(e.U), `${e.label}: нет U — нечем красить`);
+  }
+});
+
+test('3D: рамка выбранной детали отступает на одно и то же расстояние, какой бы длинной деталь ни была', () => {
+  const solids = buildSolids(analyse(defaultModel()));
+  for (const kind of ['batten', 'rafter', 'post', 'purlin']) {
+    const e = solids.find((x) => x.kind === kind);
+    const len = Math.hypot(...e.to.map((v, i) => v - e.from[i]));
+    const box = selectionBox(e);
+    // раньше рамка была деталью × 1,04: у рейки 6 м — по 120 мм за торцами
+    close(box.len - len, 2 * SELECT_PAD, `${e.label}: рамка длиннее детали не на 2 × ${SELECT_PAD} мм`);
+    close(box.w - e.w, 2 * SELECT_PAD, `${e.label}: рамка шире детали не на 2 × ${SELECT_PAD} мм`);
+    close(box.h - e.h, 2 * SELECT_PAD, `${e.label}: рамка выше детали не на 2 × ${SELECT_PAD} мм`);
   }
 });

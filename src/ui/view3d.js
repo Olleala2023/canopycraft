@@ -19,7 +19,7 @@ import {
   LineSegments, LineBasicMaterial, Color, Group, PlaneGeometry,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildSolids, buildContext } from './solids.js';
+import { buildSolids, buildContext, selectionBox } from './solids.js';
 
 const MM = 1 / 1000; // сцена в метрах: камере удобнее
 
@@ -161,11 +161,14 @@ export function create3D(host, { onPick }) {
         const chosen = e.sel && sel && e.sel.type === sel.type
           && (e.sel.index === undefined || e.sel.index === sel.index)
           && (e.sel.side === undefined || e.sel.side === (sel.side ?? 'outer'));
-        const edges = new LineSegments(new EdgesGeometry(mesh.geometry),
+        // у выбранной — рамка с постоянным отступом (selectionBox), а не растянутая копия
+        const box = chosen ? selectionBox(e) : null;
+        const shape = box ? new BoxGeometry(box.w * MM, box.len * MM, box.h * MM) : mesh.geometry;
+        const edges = new LineSegments(new EdgesGeometry(shape),
           new LineBasicMaterial({ color: chosen ? ink : rule, transparent: !chosen, opacity: chosen ? 1 : 0.35 }));
+        if (box) shape.dispose(); // рёбра уже построены, сам брусок рамки не нужен
         edges.quaternion.copy(mesh.quaternion);
         edges.position.copy(mesh.position);
-        if (chosen) edges.scale.setScalar(1.04);
         parts.add(edges);
         pickable.push(mesh);
       }

@@ -21,6 +21,20 @@ import { houseWall, openingsOf } from '../core/analysis.js';
 const OPENING_T = 20; // мм, толщина щита проёма на стене — только для рисунка
 const CROSS_INSET = 150; // мм, как в расчёте креста (posts.js): диагональ не до самой базы
 
+/** Рамка выбранной детали отступает от неё на столько, мм, — одинаково с каждой стороны. */
+export const SELECT_PAD = 5;
+
+/**
+ * Размеры рамки выбранной детали: брусок плюс SELECT_PAD с каждой стороны.
+ * Отступ постоянный, а не в долях: рамка «в 1,04 раза» у рейки 6 м выходила
+ * на 120 мм за каждый торец и выглядела так, будто деталь не на месте.
+ * @returns {{ w:number, h:number, len:number }} мм
+ */
+export function selectionBox(e) {
+  const len = Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1], e.to[2] - e.from[2]);
+  return { w: e.w + 2 * SELECT_PAD, h: e.h + 2 * SELECT_PAD, len: len + 2 * SELECT_PAD };
+}
+
 /**
  * @returns {{ kind:string, label:string, sel:object|null, U:number|null,
  *   from:number[], to:number[], w:number, h:number, up:number[], ghost?:boolean }[]}
