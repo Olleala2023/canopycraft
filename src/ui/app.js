@@ -17,6 +17,7 @@ import { initAudio } from './audio.js';
 import { initTip, tipButton } from './tip.js';
 import { createHistory } from './history.js';
 import { create3D } from './view3d.js';
+import { drawFacade } from './facade.js';
 import { openingsRows, openingsShape, applyOpeningInput, newOpening } from './openings.js';
 
 $('app-version').textContent = `v${VERSION}`;
@@ -759,19 +760,20 @@ function renderCanvas(res) {
     return;
   }
   if (view3d) { view3d.dispose(); view3d = null; $('canvas').view3d = null; }
-  const DRAW = { plan: drawPlan, section: drawSection, diagrams: drawDiagrams, nodes: drawNodes };
+  const DRAW = { plan: drawPlan, wall: drawFacade, section: drawSection, diagrams: drawDiagrams, nodes: drawNodes };
   const out = (DRAW[state.view] ?? drawPlan)(res, state.sel);
   $('canvas').innerHTML = out.svg;
   state.meta = out.meta;
   wrapForZoom();
-  if (state.view === 'plan') wirePlan();
+  // фасад привязан по x так же, как план: столбы у стены тянутся и там
+  if (state.view === 'plan' || state.view === 'wall') wirePlan();
   if (state.view === 'nodes') wireNodes();
 }
 
 /* ─────────────────── масштаб и панорама ─────────────────── */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const zoom = { plan: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 }, nodes: { k: 1, tx: 0, ty: 0 } };
+const zoom = { plan: { k: 1, tx: 0, ty: 0 }, wall: { k: 1, tx: 0, ty: 0 }, section: { k: 1, tx: 0, ty: 0 }, diagrams: { k: 1, tx: 0, ty: 0 }, nodes: { k: 1, tx: 0, ty: 0 } };
 const zv = () => zoom[state.view];
 
 function svgEl() { return $('canvas').querySelector('svg'); }
@@ -1091,6 +1093,8 @@ function render(hint) {
   pill.style.borderColor = uColor(res.maxU);
   $('hint').textContent = state.view === '3d'
     ? 'Тянуть — вращать · колесо или щипок — ближе и дальше · правой кнопкой или двумя пальцами — сдвиг · клик по детали открывает её проверки справа · ⌂ — вернуть вид · цвет — коэффициент U'
+    : state.view === 'wall'
+    ? 'Стена дома со двора: окна, двери, столбы у стены со шпильками и обвязка · столбы тянутся мышью, как на плане, Shift — точнее · цепочка снизу — привязки от угла до откосов и осей столбов · проёмы задаются в блоке «Стена дома»'
     : state.view === 'nodes'
     ? 'Чертежи собраны по числам расчёта: крепежей столько, сколько посчитано, шаги и размеры расчётные · клик по детали открывает её проверки справа · меняйте исполнение узлов в блоке «Элементы»'
     : hintText;
@@ -1123,7 +1127,7 @@ $('btn-redo').addEventListener('click', redoStep);
 
 /* ─────────────────── события шапки ─────────────────── */
 
-const TABS = [['tab-plan', 'plan'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams'], ['tab-nodes', 'nodes'], ['tab-3d', '3d']];
+const TABS = [['tab-plan', 'plan'], ['tab-wall', 'wall'], ['tab-section', 'section'], ['tab-diagrams', 'diagrams'], ['tab-nodes', 'nodes'], ['tab-3d', '3d']];
 for (const [id, view] of TABS) {
   $(id).addEventListener('click', () => {
     state.view = view;

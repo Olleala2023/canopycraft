@@ -1,7 +1,8 @@
 /** Отрисовка: план, разрез, эпюры. Чистые функции — строка SVG + метрика для попадания курсора. */
 import { levels, boltHeights } from '../core/model.js';
 import { section } from '../core/sections.js';
-import { openingsOf, houseClashes } from '../core/analysis.js';
+import { openingsOf, houseClashes, wallMarks } from '../core/analysis.js';
+import { dimChain } from './dims.js';
 
 export const uColor = (U) =>
   U > 1 ? 'var(--u-bad)' : U > 0.85 ? 'var(--u-warn)' : U > 0.5 ? 'var(--u-ok)' : 'var(--u-low)';
@@ -29,7 +30,9 @@ function dimV(y1, y2, x, text, color = 'var(--ink-3)') {
 
 export function drawPlan(res, sel) {
   const m = res.model, g = m.geom;
-  const pad = { l: 60, r: 34, t: 44, b: 68 };
+  // есть проёмы — над стеной цепочка привязок: оси столбов и откосы
+  const chain = openingsOf(m).some((o) => o.x1 > 0 && o.x0 < g.B);
+  const pad = { l: 60, r: 34, t: chain ? 76 : 44, b: 68 };
   const sc = Math.min(780 / g.B, 360 / (g.L + g.a));
   const W = g.B * sc, H = (g.L + g.a) * sc;
   const vw = W + pad.l + pad.r, vh = H + pad.t + pad.b;
@@ -47,7 +50,8 @@ export function drawPlan(res, sel) {
 
   }
   s.push(`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(g.B)}" y2="${Y(0)}" stroke="var(--ink)" stroke-width="5"/>`);
-  s.push(`<text x="${X(0)}" y="${Y(0) - 12}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · газоблок ${m.wallPosts.wallThickness} мм, столбы на сквозных шпильках М${m.wallPosts.boltDiameter}</text>`);
+  if (chain) s.push(dimChain(wallMarks(m, { from: 0, to: g.B }), X, Y(0) - 16));
+  s.push(`<text x="${X(0)}" y="${Y(0) - (chain ? 46 : 12)}" font-size="10" font-family="${mono}" fill="var(--ink-2)" letter-spacing="1.3">СТЕНА ДОМА · газоблок ${m.wallPosts.wallThickness} мм, столбы на сквозных шпильках М${m.wallPosts.boltDiameter}</text>`);
   // окна и двери дома — разрывы в линии стены: видно, куда столб у стены не ставить.
   // Проём, на который встал столб, — красный
   const clashed = new Set(houseClashes(m).filter((c) => c.kind === 'post').map((c) => c.opening.index));

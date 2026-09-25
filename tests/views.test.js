@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { defaultModel, spread } from '../src/core/model.js';
 import { analyse } from '../src/core/analysis.js';
 import { drawPlan, drawSection, drawDiagrams, drawNodes } from '../src/ui/views.js';
+import { drawFacade } from '../src/ui/facade.js';
 
 const VIEWS = [
   ['план', drawPlan, 'План навеса'],
   ['разрез', drawSection, 'Разрез навеса'],
   ['эпюры', drawDiagrams, 'Эпюры'],
   ['узлы', drawNodes, 'Узловые чертежи'],
+  ['фасад стены', drawFacade, 'Фасад стены дома'],
 ];
 
 test('каждый вид рисуется и подписан своим именем', () => {
