@@ -444,7 +444,7 @@ function renderInspector(res) {
     kv.push(['Нужно против отрыва', `${Math.round(el.needMass)} кг`]);
     if (el.heave?.applies) {
       kv.push(['Пучение: тянет', `${kN(el.heave.pull)} кН — τ_fh ${Math.round(el.heave.tau)} кПа на ${el.heave.A.toFixed(2).replace('.', ',')} м²`]);
-      kv.push(['Пучение: держат', `${kN(el.heave.F)} кН — постоянная ${kN(el.heave.Nperm)} и блок ${kN(el.heave.blockWeight)}`]);
+      kv.push(['Пучение: держат', `${kN(el.heave.hold)} кН — постоянная ${kN(el.heave.Nperm)}, блок ${kN(el.heave.blockWeight)}${el.heave.Frf > 0 ? `, трение о талый грунт ${kN(el.heave.Frf)} × (γc/γn)` : ''}`]);
     } else if (el.heave?.reason === 'replaced') {
       kv.push(['Пучение', 'пазухи засыпаны непучинистым грунтом — не проверяется']);
     }
