@@ -57,6 +57,24 @@ test('столб у стены: пучение тянет блок у ленты
   close(beside.Frf / Math.max(1e-9, axis.Frf), axis.Frf ? 3 / 4 : 0, 1e-9, 'трения по грани на прокладке нет');
 });
 
+test('пучение проходит за счёт глубокого заложения и трения о талый грунт', () => {
+  const m = defaultModel();
+  m.site.frostDepth = 700;
+  m.site.soilState = 'low';
+  m.site.soil = 'clay';
+  m.postBase.surface = 'formwork';
+  m.postBase.footing = 700;
+  m.postBase.depth = 15000;
+  const h = analyse(m).bases.outer.heave;
+  assert.ok(h.applies, 'проверка пучения должна применяться');
+  assert.ok(h.check.U <= 1, `проверка должна проходить, но U = ${h.check.U.toFixed(2)}`);
+  assert.ok(h.Frf > 0, 'трение о талый грунт должно быть');
+  assert.ok(h.hold > h.F, `полная удерживающая сила ${h.hold.toFixed(0)} > постоянной ${h.F.toFixed(0)}`);
+  assert.ok(Math.abs(h.hold - (h.F + h.gcgn * h.Frf)) < 1e-6, 'hold = F + (γc/γn) × Frf');
+  assert.ok(Math.abs(h.check.U - h.pull / h.hold) < 1e-6, 'U считается через полную удерживающую силу');
+});
+
+
 test('столб у стены: забетонировать вплотную к стене нельзя — плита на анкерах', () => {
   const m = defaultModel();
   m.postBase.id = 'embed800';

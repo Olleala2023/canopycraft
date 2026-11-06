@@ -247,6 +247,7 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
   }
   const Frf = layers.reduce((a, l) => a + l.R * l.A * 1000, 0);    // Н
   const gcgn = HEAVE_GAMMA_C / HEAVE_GAMMA_N;
+  const hold = F + gcgn * Frf;
   const f2 = (v) => (v / 1000).toFixed(1).replace('.', ',');
   const check = frostHeave(pull, F, Frf, gcgn,
     `τ_fh = ${Math.round(tauTable)}${surface.k !== 1 ? ` × ${String(surface.k).replace('.', ',')}` : ''}${cat1 ? ' × 0,9' : ''} = ${Math.round(tau)} кПа на ${A.toFixed(2).replace('.', ',')} м² — тянет ${f2(pull)} кН; `
@@ -256,8 +257,8 @@ function heaveCheck(model, posts, { side, depth, mass, frost, frostApplies, meas
       : ', ниже промерзания блок не заходит — трения нет'));
   return {
     applies: true, measure, check, stateId, surface, cat1, tauTable, tau, perimeter, hFrozen, hThawed,
-    A, Abelow, pull, F, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gammaRf, gammaC, gcgn, x: post.x,
-    ratio: pull / Math.max(1, F + gcgn * Frf),
+    A, Abelow, pull, F, hold, Nperm: post.Nperm, blockWeight, Frf, layers, IL, gammaRf, gammaC, gcgn, x: post.x,
+    ratio: pull / Math.max(1, hold),
   };
 }
 
